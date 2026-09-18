@@ -3,8 +3,16 @@ package com.lumi.player.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +33,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,11 +43,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,9 +63,18 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 
+/** The settings tabs, one per settings group. */
+private enum class SettingsTab(val label: String) {
+    PLAY_MODE("Play mode"),
+    TAGS("Tags"),
+    CONTENT("Content"),
+    LINK("Link"),
+}
+
 /**
- * Parent-facing settings: play mode, tag registration, content registration
- * (audio / video / url), and tag-to-content linking.
+ * Parent-facing settings, organized into tabs: play mode, NFC tag
+ * registration, content registration (audio / video / url), and
+ * tag-to-content linking.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,12 +93,12 @@ fun SettingsScreen(
     val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
 
-    var tagLabel by remember { mutableStateOf("") }
     var urlText by remember { mutableStateOf("") }
     var showAddType by remember { mutableStateOf(false) }
     var showAddUrl by remember { mutableStateOf(false) }
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(SettingsTab.LINK.ordinal) }
 
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -101,155 +124,43 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(padding),
         ) {
-            // ---------- play mode ----------
-            SectionCard("Play mode") {
-                ModeRow(
-                    title = "Continuous",
-                    detail = "Keeps playing until you tap a different tag.",
-                    selected = playMode == PlayMode.CONTINUOUS,
-                    onSelect = { viewModel.setPlayMode(PlayMode.CONTINUOUS) },
-                )
-                ModeRow(
-                    title = "Proximity",
-                    detail = "Plays while the tag stays near; stops when it's removed.",
-                    selected = playMode == PlayMode.PROXIMITY,
-                    onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
-                )
-            }
-
-            // ---------- tags ----------
-            SectionCard("NFC tags") {
-                OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Register a tag")
-                }
-                if (tags.isEmpty()) {
-                    Text(
-                        text = "No tags yet. Tap a tag on the back of the phone to register it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                tags.forEach { tag ->
-                    SettingRow(
-                        leading = "🏷️",
-                        title = tag.name.ifEmpty { "Tag" },
-                        detail = tag.uid,
-                        trailing = {
-                            IconButton(onClick = { deleteTag = tag }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete tag")
-                            }
-                        },
+            ScrollableTabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                SettingsTab.entries.forEachIndexed { index, tab ->
+                    Tab(
+                        selected = index == selectedTab,
+                        onClick = { selectedTab = index },
+                        text = { Text(tab.label) },
                     )
                 }
             }
-
-            // ---------- entries ----------
-            SectionCard("Content") {
-                OutlinedButton(onClick = { showAddType = true }) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Add content")
-                }
-                if (entries.isEmpty()) {
-                    Text(
-                        text = "Nothing here yet. Add a song, or a video or link to use later.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                entries.forEach { entry ->
-                    SettingRow(
-                        leading = emojiFor(entry.type),
-                        title = entry.label,
-                        detail = detailFor(entry.type, entry.payload),
-                        trailing = {
-                            IconButton(onClick = { deleteEntry = entry }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete")
-                            }
-                        },
-                    )
-                }
-            }
-
-            // ---------- linking ----------
-            SectionCard("Tag to content") {
-                if (tags.isEmpty()) {
-                    Text(
-                        text = "Register a tag first, then link content to it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        tags.forEach { tag ->
-                            FilterChip(
-                                selected = tag.id == effectiveSelectedId,
-                                onClick = { viewModel.selectTag(tag.id) },
-                                label = {
-                                    Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
-                                },
-                            )
+            AnimatedContent(
+                targetState = selectedTab,
+                modifier = Modifier.fillMaxSize(),
+                label = "settings-tab",
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(200))
+                },
+            ) { index ->
+                val tab = SettingsTab.entries[index]
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    when (tab) {
+                        SettingsTab.PLAY_MODE -> PlayModeSection(viewModel, playMode)
+                        SettingsTab.TAGS -> TagsSection(viewModel, tags) { deleteTag = it }
+                        SettingsTab.CONTENT -> ContentSection(viewModel, entries, onAddContent = { showAddType = true }) {
+                            deleteEntry = it
                         }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    val effectiveId = effectiveSelectedId
-                    if (effectiveId == null) {
-                        Text(
-                            text = "Pick a tag above.",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    } else {
-                        if (linked.isEmpty()) {
-                            Text(
-                                text = "This tag plays nothing yet.",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        linked.forEachIndexed { index, entry ->
-                            SettingRow(
-                                leading = emojiFor(entry.type),
-                                title = entry.label,
-                                trailing = {
-                                    IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveId, index, -1) },
-                                        enabled = index > 0,
-                                    ) {
-                                        Text("↑")
-                                    }
-                                    IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveId, index, 1) },
-                                        enabled = index < linked.size - 1,
-                                    ) {
-                                        Text("↓")
-                                    }
-                                    IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Remove")
-                                    }
-                                },
-                            )
-                        }
-                        if (entries.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                entries.forEach { entry ->
-                                    OutlinedButton(
-                                        onClick = { viewModel.addLinked(effectiveId, entry.id) },
-                                    ) {
-                                        Text("+ ${entry.label}")
-                                    }
-                                }
-                            }
-                        }
+                        SettingsTab.LINK -> LinkSection(viewModel, tags, entries, effectiveSelectedId, linked)
                     }
                 }
             }
@@ -374,6 +285,198 @@ fun SettingsScreen(
     }
 }
 
+// ---------- sections (one per tab) ----------
+
+/** Play-mode tab: pick continuous or proximity behaviour. */
+@Composable
+private fun PlayModeSection(
+    viewModel: LumiViewModel,
+    playMode: PlayMode,
+) {
+    SectionCard("Play mode") {
+        ModeRow(
+            title = "Continuous",
+            detail = "Keeps playing until you tap a different tag.",
+            selected = playMode == PlayMode.CONTINUOUS,
+            onSelect = { viewModel.setPlayMode(PlayMode.CONTINUOUS) },
+        )
+        ModeRow(
+            title = "Proximity",
+            detail = "Plays while the tag stays near; stops when it's removed.",
+            selected = playMode == PlayMode.PROXIMITY,
+            onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
+        )
+    }
+}
+
+/** Tags tab: register and manage NFC tags. */
+@Composable
+private fun TagsSection(
+    viewModel: LumiViewModel,
+    tags: List<TagEntity>,
+    onTagDeleted: (TagEntity) -> Unit,
+) {
+    SectionCard("NFC tags") {
+        OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Register a tag")
+        }
+        if (tags.isEmpty()) {
+            Text(
+                text = "No tags yet. Tap a tag on the back of the phone to register it.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        tags.forEach { tag ->
+            SettingRow(
+                leading = "🏷️",
+                title = tag.name.ifEmpty { "Tag" },
+                detail = tag.uid,
+                trailing = {
+                    IconButton(onClick = { onTagDeleted(tag) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete tag")
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** Content tab: register and manage audio / video / url entries. */
+@Composable
+private fun ContentSection(
+    viewModel: LumiViewModel,
+    entries: List<EntryEntity>,
+    onAddContent: () -> Unit,
+    onEntryDeleted: (EntryEntity) -> Unit,
+) {
+    SectionCard("Content") {
+        OutlinedButton(onClick = onAddContent) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Add content")
+        }
+        if (entries.isEmpty()) {
+            Text(
+                text = "Nothing here yet. Add a song, or a video or link to use later.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        entries.forEach { entry ->
+            SettingRow(
+                leading = emojiFor(entry.type),
+                title = entry.label,
+                detail = detailFor(entry.type, entry.payload),
+                trailing = {
+                    IconButton(onClick = { onEntryDeleted(entry) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete")
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Link tab: pick a tag, then order and edit the content it plays. The tag
+ * chips scroll horizontally and the "add content" buttons flow, so neither
+ * list gets clipped no matter how many tags or entries exist.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LinkSection(
+    viewModel: LumiViewModel,
+    tags: List<TagEntity>,
+    entries: List<EntryEntity>,
+    effectiveSelectedId: Long?,
+    linked: List<EntryEntity>,
+) {
+    SectionCard("Tag to content") {
+        if (tags.isEmpty()) {
+            Text(
+                text = "Register a tag first, then link content to it.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                tags.forEach { tag ->
+                    FilterChip(
+                        selected = tag.id == effectiveSelectedId,
+                        onClick = { viewModel.selectTag(tag.id) },
+                        label = {
+                            Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            val effectiveId = effectiveSelectedId
+            if (effectiveId == null) {
+                Text(
+                    text = "Pick a tag above.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                if (linked.isEmpty()) {
+                    Text(
+                        text = "This tag plays nothing yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                linked.forEachIndexed { index, entry ->
+                    SettingRow(
+                        leading = emojiFor(entry.type),
+                        title = entry.label,
+                        trailing = {
+                            IconButton(
+                                onClick = { viewModel.moveLinked(effectiveId, index, -1) },
+                                enabled = index > 0,
+                            ) {
+                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
+                            }
+                            IconButton(
+                                onClick = { viewModel.moveLinked(effectiveId, index, 1) },
+                                enabled = index < linked.size - 1,
+                            ) {
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
+                            }
+                            IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove")
+                            }
+                        },
+                    )
+                }
+                if (entries.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Add to this tag:",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        entries.forEach { entry ->
+                            OutlinedButton(
+                                onClick = { viewModel.addLinked(effectiveId, entry.id) },
+                            ) {
+                                Text("+ ${entry.label}")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun onFilePicked(
     viewModel: LumiViewModel,
     context: android.content.Context,
@@ -425,8 +528,16 @@ private fun TagNameDialog(
 /** Card with a bold section title and its content. */
 @Composable
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             content()
         }
