@@ -3,11 +3,6 @@ package com.lumi.player.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,8 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -48,10 +41,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,18 +54,10 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 
-/** The settings tabs, one per settings group. */
-private enum class SettingsTab(val label: String) {
-    PLAY_MODE("Play mode"),
-    TAGS("Tags"),
-    CONTENT("Content"),
-    LINK("Link"),
-}
-
 /**
- * Parent-facing settings, organized into tabs: play mode, NFC tag
- * registration, content registration (audio / video / url), and
- * tag-to-content linking.
+ * Parent-facing settings, laid out as a single scrollable menu with one
+ * section per settings group: play mode, NFC tag registration, content
+ * registration (audio / video / url), and tag-to-content linking.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,7 +81,6 @@ fun SettingsScreen(
     var showAddUrl by remember { mutableStateOf(false) }
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
-    var selectedTab by rememberSaveable { mutableIntStateOf(SettingsTab.LINK.ordinal) }
 
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -124,46 +106,17 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                SettingsTab.entries.forEachIndexed { index, tab ->
-                    Tab(
-                        selected = index == selectedTab,
-                        onClick = { selectedTab = index },
-                        text = { Text(tab.label) },
-                    )
-                }
+            PlayModeSection(viewModel, playMode)
+            TagsSection(viewModel, tags) { deleteTag = it }
+            ContentSection(viewModel, entries, onAddContent = { showAddType = true }) {
+                deleteEntry = it
             }
-            AnimatedContent(
-                targetState = selectedTab,
-                modifier = Modifier.fillMaxSize(),
-                label = "settings-tab",
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(200))
-                },
-            ) { index ->
-                val tab = SettingsTab.entries[index]
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    when (tab) {
-                        SettingsTab.PLAY_MODE -> PlayModeSection(viewModel, playMode)
-                        SettingsTab.TAGS -> TagsSection(viewModel, tags) { deleteTag = it }
-                        SettingsTab.CONTENT -> ContentSection(viewModel, entries, onAddContent = { showAddType = true }) {
-                            deleteEntry = it
-                        }
-                        SettingsTab.LINK -> LinkSection(viewModel, tags, entries, effectiveSelectedId, linked)
-                    }
-                }
-            }
+            LinkSection(viewModel, tags, entries, effectiveSelectedId, linked)
         }
     }
 
@@ -285,9 +238,9 @@ fun SettingsScreen(
     }
 }
 
-// ---------- sections (one per tab) ----------
+// ---------- sections (one per settings group) ----------
 
-/** Play-mode tab: pick continuous or proximity behaviour. */
+/** Play mode: pick continuous or proximity behaviour. */
 @Composable
 private fun PlayModeSection(
     viewModel: LumiViewModel,
@@ -309,7 +262,7 @@ private fun PlayModeSection(
     }
 }
 
-/** Tags tab: register and manage NFC tags. */
+/** NFC tags: register and manage tags. */
 @Composable
 private fun TagsSection(
     viewModel: LumiViewModel,
@@ -343,7 +296,7 @@ private fun TagsSection(
     }
 }
 
-/** Content tab: register and manage audio / video / url entries. */
+/** Content: register and manage audio / video / url entries. */
 @Composable
 private fun ContentSection(
     viewModel: LumiViewModel,
@@ -379,9 +332,9 @@ private fun ContentSection(
 }
 
 /**
- * Link tab: pick a tag, then order and edit the content it plays. The tag
- * chips scroll horizontally and the "add content" buttons flow, so neither
- * list gets clipped no matter how many tags or entries exist.
+ * Tag to content: pick a tag, then order and edit the content it plays. The
+ * tag chips scroll horizontally and the "add content" buttons flow, so
+ * neither list gets clipped no matter how many tags or entries exist.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -570,8 +523,8 @@ private fun ModeRow(
 private fun SettingRow(
     leading: String,
     title: String,
-    detail: String? = null,
     modifier: Modifier = Modifier,
+    detail: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
