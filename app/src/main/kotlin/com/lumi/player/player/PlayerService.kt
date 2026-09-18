@@ -146,7 +146,6 @@ class PlayerService : Service(), Player.Listener {
         }
         when (EntryType.fromStorage(spec.type)) {
             EntryType.AUDIO -> {
-                consecutiveErrors = 0
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
                 p.playWhenReady = true
                 p.prepare()
@@ -265,7 +264,10 @@ class PlayerService : Service(), Player.Listener {
                     else -> PlaybackStatus.PLAYING
                 }
                 PlayerStateHolder.update { it.copy(status = status) }
-                if (status == PlaybackStatus.PLAYING) armPositionSaver()
+                if (status == PlaybackStatus.PLAYING) {
+                    consecutiveErrors = 0
+                    armPositionSaver()
+                }
                 refreshNotification()
             }
         }
@@ -277,7 +279,10 @@ class PlayerService : Service(), Player.Listener {
             PlayerStateHolder.update {
                 it.copy(status = if (playWhenReady) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED)
             }
-            if (playWhenReady) armPositionSaver()
+            if (playWhenReady) {
+                consecutiveErrors = 0
+                armPositionSaver()
+            }
             refreshNotification()
         }
     }
