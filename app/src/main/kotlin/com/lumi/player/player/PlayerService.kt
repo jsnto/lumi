@@ -162,7 +162,7 @@ class PlayerService : Service(), Player.Listener {
 
     /** Idempotent: safe to run on every re-report of a tag still in range. */
     private fun resumePlayback() {
-        if (queue.isEmpty()) return
+        if (queue.isEmpty()) return stopPlayback()
         player?.playWhenReady = true
     }
 
@@ -206,8 +206,10 @@ class PlayerService : Service(), Player.Listener {
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
         val p = player ?: return
-        if (!playWhenReady && p.playbackState == Player.STATE_READY) {
-            PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
+        if (p.playbackState == Player.STATE_READY) {
+            PlayerStateHolder.update {
+                it.copy(status = if (playWhenReady) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED)
+            }
             refreshNotification()
         }
     }
