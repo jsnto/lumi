@@ -18,7 +18,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -33,15 +32,19 @@ import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.TimeUnit
 
 /**
- * Behavioral coverage for the always-listening NFC reader mode on the main
- * page. Drives the real [MainActivity] under Robolectric with the radio on
- * and no registration in flight, asserts reader mode is the active receive
- * path, then fires the registered reader callback with synthetic tags to
- * verify a registered tag read starts/switches playback, overrides a user
- * pause, and that the mode-specific tag-loss semantics hold (proximity
- * stops on absence, continuous keeps playing). Also pins the
- * registration session: foreground dispatch while registering, reader mode
- * restored afterwards, and reader mode surviving pause/resume.
+ * Behavioral coverage for the always-listening NFC receive path on the main
+ * page. Drives the real [MainActivity] under Robolectric with the radio on,
+ * asserts foreground dispatch (the same self PendingIntent path the
+ * tag-registration flow uses) is the active receive mechanism, then delivers
+ * tag intents the way the system's foreground dispatch would
+ * ([ActivityController.newIntent] -> [MainActivity.onNewIntent] ->
+ * [MainActivity.handleNfcIntent]) to verify a registered tag read
+ * starts/switches playback, overrides a user pause, and that the
+ * mode-specific tag-loss semantics hold (proximity stops on absence,
+ * continuous keeps playing). Also pins that a tag capture during a
+ * registration session ends the session while leaving the receive path live,
+ * that the receive path survives pause/resume, and that a consumed tag
+ * intent is not reprocessed on a later resume.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -50,7 +53,7 @@ import java.util.concurrent.TimeUnit
     shadows = [ShadowNfcAdapterForTest::class],
 )
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class NfcReaderModeUiTest {
+class NfcAlwaysListeningUiTest {
 
     @get:Rule
     val compose = androidx.compose.ui.test.junit4.createEmptyComposeRule()
@@ -106,11 +109,14 @@ class NfcReaderModeUiTest {
         ) as Tag
     }
 
-    /** Fires the registered reader callback, as the NFC stack would. */
-    private fun fireTag(uid: String) {
-        val callback = NfcTestState.readerCallback
-        assertNotNull("reader mode must be enabled for the test to fire a tag", callback)
-        callback!!.onTagDiscovered(tagWithUid(uid))
+    /**
+     * Delivers a tag to the resumed activity the way the NFC stack's
+     * foreground dispatch would: an intent carrying EXTRA_TAG to the
+     * activity itself, arriving as an onNewIntent.
+     */
+    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
+        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
+        compose.waitForIdle()
     }
 
     /**
@@ -160,21 +166,11 @@ class NfcReaderModeUiTest {
     // ---- main page is always listening ----
 
     @Test
-    fun mainPage_readerModeIsTheActiveReceivePath_whenNotRegistering() {
+    fun mainPage_foregroundDispatchIsTheActiveReceivePath_whenNotRegistering() {
         setupDb()
         startMainActivity()
         assertTrue(
-            "reader mode must be enabled on the idle main page (not registering)",
-            NfcTestState.readerModeEnabled,
-        )
-        assertNotNull("the reader callback must be registered", NfcTestState.readerCallback)
-        assertEquals(
-            "any tag type must be readable (NDEF check skipped)",
-            NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
-            NfcTestState.readerFlags,
-        )
-        assertFalse(
-            "foreground dispatch is only for registration and must not be active",
+            "foreground dispatch must be enabled on the idle main page",
             NfcTestState.foregroundDispatchEnabled,
         )
     }
@@ -184,8 +180,8 @@ class NfcReaderModeUiTest {
     @Test
     fun mainPage_readOfRegisteredTag_startsPlayback() {
         setupDb()
-        startMainActivity()
-        fireTag(UID_A)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a tag read must start the player service", intent)
         assertEquals(PlayerService.ACTION_START, intent!!.action)
@@ -200,12 +196,12 @@ class NfcReaderModeUiTest {
     @Test
     fun mainPage_readOfDifferentRegisteredTag_switchesPlayback() {
         setupDb(tagA = true, tagB = true)
-        startMainActivity()
-        fireTag(UID_A)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
         val first = nextServiceIntent()
         assertEquals(PlayerService.ACTION_START, first!!.action)
         assertEquals(UID_A, first.getStringExtra(PlayerService.EXTRA_TAG_UID))
-        fireTag(UID_B)
+        sendTag(controller, UID_B)
         val second = nextServiceIntent()
         assertNotNull("a different registered tag must switch playback", second)
         assertEquals(PlayerService.ACTION_START, second!!.action)
@@ -217,8 +213,8 @@ class NfcReaderModeUiTest {
         setupDb()
         // The tag's list is already playing but the user paused it.
         PlayerStateHolder.update { PlayerUiState().copy(status = PlaybackStatus.PAUSED, activeTagUid = UID_A) }
-        startMainActivity()
-        fireTag(UID_A)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a re-read of the paused active tag must command the service", intent)
         assertEquals(
@@ -236,13 +232,18 @@ class NfcReaderModeUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        startMainActivity()
-        fireTag(UID_A) // presence refreshed; the tag is in range
-        // The tag leaves range: reader reports stop. The presence watcher
-        // must derive tag loss and stop playback.
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // in-range re-read of the active tag is
+        // ignored by the policy (no restart) but refreshes the presence
+        // record; the tag is still physically in range.
+        // The tag leaves range: reports stop. The presence watcher must
+        // derive tag loss and stop playback.
         ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
         val intent = nextServiceIntent(1_000)
-        assertNotNull("proximity mode must stop playback when the active tag leaves range", intent)
+        assertNotNull(
+            "proximity mode must stop playback when the active tag leaves range",
+            intent,
+        )
         assertEquals(PlayerService.ACTION_STOP, intent!!.action)
         // Robolectric tracks the foreground-service start but does not run
         // the service body; drive the stop command the way the system would
@@ -262,64 +263,56 @@ class NfcReaderModeUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        startMainActivity()
-        fireTag(UID_A)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // in-range re-read of the active tag:
+        // presence refreshed, no restart command expected
         // The tag leaves range in continuous mode: nothing may stop playback.
         ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
-        val intent = shadowOf(app() as Application).nextStartedService
         assertNull(
             "continuous mode must keep playing after the tag leaves range (no stop command)",
-            intent,
+            shadowOf(app() as Application).nextStartedService,
         )
         assertEquals(PlaybackStatus.PLAYING, PlayerStateHolder.state.value.status)
     }
 
-    // ---- registration flow leaves the main page listening again ----
+    // ---- registration flow: capture ends the session, receive path stays live ----
 
     @Test
-    fun registrationSession_usesForegroundDispatch_thenRestoresReaderMode() {
+    fun registrationSession_capturesPresentedTag_andStaysListening() {
         setupDb()
-        val activity = startMainActivity().get()
-        val viewModel = viewModelOf(activity)
-        assertTrue("starts in reader mode", NfcTestState.readerModeEnabled)
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
+        assertTrue("starts with foreground dispatch live", NfcTestState.foregroundDispatchEnabled)
 
         viewModel.startTagRegistration()
-        idleUntil({ NfcTestState.foregroundDispatchEnabled })
-        assertTrue("registering must switch to foreground dispatch", NfcTestState.foregroundDispatchEnabled)
-        assertFalse("reader mode must be off while registering", NfcTestState.readerModeEnabled)
+        assertTrue("dispatch must stay live while registering", NfcTestState.foregroundDispatchEnabled)
 
-        // A tag is presented while registering. On a device this arrives via
-        // the foreground-dispatch intent (handleNfcIntent); here we drive the
-        // same view-model entry point that path calls with the tag's UID.
-        viewModel.onTagDetected(UID_A)
-        idleUntil({
-            NfcTestState.readerModeEnabled && !NfcTestState.foregroundDispatchEnabled
-        })
+        // A tag is presented while registering; it arrives via the
+        // foreground-dispatch intent exactly like a main-page read.
+        sendTag(controller, UID_A)
+        idleUntil({ !viewModel.registering.value })
         compose.waitForIdle()
         assertFalse("a captured tag must end the registration", viewModel.registering.value)
         assertEquals(UID_A, viewModel.capturedUid.value)
-        assertTrue("reader mode must be restored after registration", NfcTestState.readerModeEnabled)
-        assertFalse(
-            "foreground dispatch must not linger after registration",
+        assertTrue(
+            "the receive path must stay live after the registration session",
             NfcTestState.foregroundDispatchEnabled,
         )
     }
 
     @Test
-    fun readerModeIsDisabledOnPause_andReenabledOnResume() {
+    fun nfcReceiveIsDisabledOnPause_andReenabledOnResume() {
         setupDb()
         val controller = startMainActivity()
-        assertTrue("reader mode is live while the main page is resumed", NfcTestState.readerModeEnabled)
+        assertTrue("foreground dispatch is live while the main page is resumed", NfcTestState.foregroundDispatchEnabled)
         controller.pause()
-        assertFalse("reader mode must be disabled while paused", NfcTestState.readerModeEnabled)
+        assertFalse("the receive path must be disabled while paused", NfcTestState.foregroundDispatchEnabled)
         controller.resume()
         compose.waitForIdle()
-        assertTrue("reader mode must be live again after resume", NfcTestState.readerModeEnabled)
-        assertFalse(
-            "no foreground dispatch may leak in after resume",
-            NfcTestState.foregroundDispatchEnabled,
-        )
+        assertTrue("the receive path must be live again after resume", NfcTestState.foregroundDispatchEnabled)
     }
+
+    // ---- intent handling ----
 
     @Test
     fun mainPage_coldStartTagIntent_startsPlayback() {
@@ -339,6 +332,26 @@ class NfcReaderModeUiTest {
         assertEquals(PlayerService.ACTION_START, intent!!.action)
         assertEquals(UID_A, intent.getStringExtra(PlayerService.EXTRA_TAG_UID))
         controller.destroy()
+    }
+
+    @Test
+    fun consumedTagIntent_isNotReprocessedOnLaterResume() {
+        // A tag intent must be consumed when handled: backgrounding and
+        // reopening the app must not re-deliver the stale tag (which would
+        // resume a user pause that NFC reading alone should override).
+        setupDb()
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val first = nextServiceIntent()
+        assertEquals(PlayerService.ACTION_START, first!!.action)
+        controller.pause()
+        controller.resume()
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        assertNull(
+            "a consumed tag intent must not start playback again on resume",
+            shadowOf(app() as Application).nextStartedService,
+        )
     }
 
     companion object {

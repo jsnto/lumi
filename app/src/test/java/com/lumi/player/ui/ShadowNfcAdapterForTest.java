@@ -5,7 +5,6 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.nfc.NfcAdapter;
-import android.os.Bundle;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 
@@ -27,10 +26,10 @@ public class ShadowNfcAdapterForTest {
     return NfcTestState.radioEnabled;
   }
 
-  // Local shadows replace the framework shadow, so the foreground-dispatch /
-  // reader-mode APIs [MainActivity] uses need explicit implementations. They
-  // record the wiring state in NfcTestState so UI tests can assert which NFC
-  // receive path the activity is on and fire the registered reader callback.
+  // Local shadows replace the framework shadow, so the foreground-dispatch
+  // API [MainActivity] uses needs an explicit implementation. It records the
+  // wiring state in NfcTestState so UI tests can assert the always-listening
+  // receive path is active.
   @Implementation
   protected void enableForegroundDispatch(
       Activity activity, PendingIntent intent, IntentFilter[] filters, String[][] techLists) {
@@ -40,18 +39,5 @@ public class ShadowNfcAdapterForTest {
   @Implementation
   protected void disableForegroundDispatch(Activity activity) {
     NfcTestState.foregroundDispatchEnabled = false;
-  }
-
-  @Implementation
-  protected void enableReaderMode(
-      Activity activity, NfcAdapter.ReaderCallback callback, int flags, Bundle extras) {
-    NfcTestState.readerCallback = callback;
-    NfcTestState.readerFlags = flags;
-    NfcTestState.readerModeEnabled = true;
-  }
-
-  @Implementation
-  protected void disableReaderMode(Activity activity) {
-    NfcTestState.readerModeEnabled = false;
   }
 }
