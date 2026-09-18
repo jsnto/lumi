@@ -111,6 +111,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 launch {
+                    // A tag becoming active (start or switch) is the point
+                    // where its uid is observable: the policy switch happens
+                    // asynchronously inside the view model after a Room
+                    // query, so seed the presence record here rather than in
+                    // handleTagDetected. Foreground dispatch may deliver a
+                    // stationary tag only once, so the activating read can
+                    // be its only report - without this seed the watcher
+                    // would have nothing to time out and proximity mode
+                    // would never stop.
+                    viewModel.tagActivated.collectLatest { uid ->
+                        lastSeenAt = SystemClock.elapsedRealtime()
+                        lastSeenUid = uid
+                    }
+                }
+                launch {
                     PlayerStateHolder.state.collectLatest { state ->
                         if (state.status == com.lumi.player.player.PlaybackStatus.IDLE) {
                             viewModel.onPlaybackStopped()
@@ -213,15 +228,12 @@ class MainActivity : ComponentActivity() {
 
     private fun handleTagDetected(uid: String) {
         if (uid.isEmpty()) return
-        // The presence record is refreshed by a read of the tag already
-        // playing and by a read while nothing is playing (that read starts
-        // playback). The latter matters because foreground dispatch may
-        // deliver a stationary tag only once: the activating read can be
-        // the only report ever seen, so without it the watcher would have
-        // no record to time out and proximity mode would never stop.
-        // A read of some OTHER tag while one is playing must not touch the
-        // record, or it would mask the active tag's removal.
-        if (viewModel.activeTagUid == null || uid == viewModel.activeTagUid) {
+        // The presence record is seeded when a tag BECOMES active (see the
+        // viewModel.tagActivated collector) and refreshed by a re-read of
+        // the tag already playing. A read of some OTHER tag while one is
+        // playing must not touch the record, or it would mask the active
+        // tag's removal.
+        if (uid == viewModel.activeTagUid) {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
         }

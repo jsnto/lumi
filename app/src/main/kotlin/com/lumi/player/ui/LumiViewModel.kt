@@ -69,6 +69,17 @@ class LumiViewModel(
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val uiEvents: SharedFlow<String> = _uiEvents
 
+    /**
+     * Emitted when a tag read makes a tag the ACTIVE one - starting playback
+     * from idle or switching from another tag's list. The activity seeds its
+     * proximity presence record here because this is the point where the new
+     * active uid is observable: the policy switch happens asynchronously in
+     * [onTagDetected] after a Room query, so the activity cannot know from
+     * the raw read alone which tag became active.
+     */
+    private val _tagActivated = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val tagActivated: SharedFlow<String> = _tagActivated
+
     // ---- link editor: selected tag + its live entry list ----
 
     private val _selectedTagId = MutableStateFlow<Long?>(null)
@@ -124,6 +135,9 @@ class LumiViewModel(
             val tag = repository.tagByUid(uid) ?: return@launch
             when (policy.onTagDetected(uid, paused)) {
                 NfcAction.StartPlayback -> {
+                    // This read made [uid] the active tag (start or switch);
+                    // let the activity seed its presence record with it.
+                    _tagActivated.tryEmit(uid)
                     val entries = repository.entriesForTag(tag.id)
                     if (entries.isEmpty()) {
                         event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
