@@ -108,8 +108,8 @@ class LumiViewModel(
     // ---- NFC events from the activity ----
 
     /**
-     * A tag was detected (foreground-dispatch tap in continuous mode, or
-     * reader-mode enter event in proximity mode / registration capture).
+     * A tag was detected (reader-mode read in either play mode, a tap
+     * delivered by intent on cold start, or a registration capture).
      */
     fun onTagDetected(uid: String) {
         if (_registering.value) {
@@ -118,10 +118,11 @@ class LumiViewModel(
             _registering.value = false
             return
         }
-        if (policy.activeTagUid == uid) return
+        val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
+        if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
             val tag = repository.tagByUid(uid) ?: return@launch
-            when (policy.onTagDetected(uid)) {
+            when (policy.onTagDetected(uid, paused)) {
                 NfcAction.StartPlayback -> {
                     val entries = repository.entriesForTag(tag.id)
                     if (entries.isEmpty()) {
@@ -131,7 +132,11 @@ class LumiViewModel(
                     }
                 }
 
-                NfcAction.Ignore -> Unit // re-tap of the tag already playing
+                // Re-read of the tag already playing while the user had
+                // paused it: reading overrides the pause.
+                NfcAction.Resume -> command(PlayerService.ACTION_TOGGLE)
+
+                NfcAction.Ignore -> Unit
                 NfcAction.StopPlayback -> Unit
             }
         }

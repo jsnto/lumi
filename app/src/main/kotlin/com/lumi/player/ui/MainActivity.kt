@@ -33,12 +33,14 @@ import kotlinx.coroutines.launch
 /**
  * Hosts the Compose UI and drives NFC.
  *
- * NFC strategy per play mode:
- * - CONTINUOUS: foreground dispatch. Every tap delivers the tag UID; the
- *   view model decides whether to start or ignore it.
- * - PROXIMITY: reader mode. The reader re-reports the tag while it stays in
- *   range, so "tag lost" is derived from a short absence of reports
- *   (presence timeout), which stops playback when the tag is removed.
+ * NFC strategy per play mode — in both modes NFC is always listening:
+ * - Both modes: reader mode passively reads any tag in range, so a read
+ *   starts/switches playback without a tap and overrides play/pause.
+ * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
+ *   is never reported.
+ * - PROXIMITY: the reader re-reports the tag while it stays in range, so
+ *   "tag lost" is derived from a short absence of reports (presence
+ *   timeout), which stops playback when the tag is removed.
  * - Tag registration: temporarily foreground dispatch while the capture
  *   dialog is showing, so any tag type can be registered.
  */
@@ -118,7 +120,8 @@ class MainActivity : ComponentActivity() {
     private var currentMode: PlayMode = PlayMode.CONTINUOUS
 
     // Proximity-mode presence tracking. Reader mode re-reports the tag while
-    // it stays in range; if reports stop, the tag left the reader.
+    // it stays in range; if reports stop, the tag left the reader. Only
+    // proximity mode watches for tag loss; continuous keeps playing.
     private val presenceHandler = Handler(Looper.getMainLooper())
     private var lastSeenUid: String? = null
     @Volatile private var lastSeenAt: Long = 0L
@@ -187,18 +190,22 @@ class MainActivity : ComponentActivity() {
         lastSeenUid = null
         if (!nfc.isEnabled) return
         when {
-            viewModel.registering.value -> nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
-            currentMode == PlayMode.PROXIMITY -> {
+            viewModel.registering.value ->
+                nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
+            else -> {
+                // Always listening: reader mode passively reads any tag in
+                // range, so a read starts/switches playback in both modes.
                 nfc.enableReaderMode(
                     this,
                     nfcReaderCallback,
                     NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
                     null,
                 )
-                presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
+                // Only proximity derives "tag lost" from a presence timeout.
+                if (currentMode == PlayMode.PROXIMITY) {
+                    presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
+                }
             }
-
-            else -> nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
         }
     }
 
