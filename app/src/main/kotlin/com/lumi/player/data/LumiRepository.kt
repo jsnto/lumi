@@ -1,5 +1,6 @@
 package com.lumi.player.data
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -10,7 +11,9 @@ import kotlinx.coroutines.flow.map
  * Single access point for the local store. All persistence is on-device;
  * there is no server.
  */
-class LumiRepository(private val dao: LumiDao) {
+class LumiRepository(private val db: LumiDatabase) {
+
+    private val dao: LumiDao get() = db.dao()
 
     // ---- observation ----
 
@@ -75,12 +78,18 @@ class LumiRepository(private val dao: LumiDao) {
         return links.mapNotNull { link -> dao.entryById(link.entryId) }
     }
 
-    /** Replaces the tag's ordered content list with the given entry ids, atomically. */
-    suspend fun setTagEntries(tagId: Long, entryIds: List<Long>) {
-        val links = entryIds.mapIndexed { index, entryId ->
-            TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index)
+    /** Reads and replaces the tag's ordered content list in one Room transaction. */
+    suspend fun updateTagEntries(tagId: Long, transform: (List<Long>) -> List<Long>): List<Long> {
+        return db.withTransaction {
+            val next = transform(entriesForTag(tagId).map { it.id })
+            dao.replaceLinksForTag(
+                tagId,
+                next.mapIndexed { index, entryId ->
+                    TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index)
+                },
+            )
+            next
         }
-        dao.replaceLinksForTag(tagId, links)
     }
 
     // ---- settings ----

@@ -9,5 +9,5 @@ class LumiApp : Application() {
 
     val database: LumiDatabase by lazy { LumiDatabase.create(this) }
 
-    val repository: LumiRepository by lazy { LumiRepository(database.dao()) }
+    val repository: LumiRepository by lazy { LumiRepository(database) }
 }

@@ -234,28 +234,30 @@ class LumiViewModel(
 
     fun addLinked(tagId: Long, entryId: Long) {
         viewModelScope.launch {
-            val current = repository.entriesForTag(tagId).map { it.id }
-            repository.setTagEntries(tagId, current + entryId)
+            repository.updateTagEntries(tagId) { current -> current + entryId }
         }
     }
 
     fun removeLinked(tagId: Long, entryId: Long) {
         viewModelScope.launch {
-            val current = repository.entriesForTag(tagId).map { it.id }
-            repository.setTagEntries(tagId, current.filter { it != entryId })
+            repository.updateTagEntries(tagId) { current -> current.filter { it != entryId } }
         }
     }
 
     fun moveLinked(tagId: Long, index: Int, by: Int) {
         viewModelScope.launch {
-            val current = repository.entriesForTag(tagId).map { it.id }
-            val target = index + by
-            if (index !in current.indices || target !in current.indices) return@launch
-            val moved = current[index]
-            val next = current.toMutableList()
-            next.removeAt(index)
-            next.add(target, moved)
-            repository.setTagEntries(tagId, next)
+            repository.updateTagEntries(tagId) { current ->
+                val target = index + by
+                if (index !in current.indices || target !in current.indices) {
+                    current
+                } else {
+                    val moved = current[index]
+                    current.toMutableList().apply {
+                        removeAt(index)
+                        add(target, moved)
+                    }
+                }
+            }
         }
     }
 
