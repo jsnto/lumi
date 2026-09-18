@@ -134,7 +134,7 @@ class LumiViewModel(
 
                 // Re-read of the tag already playing while the user had
                 // paused it: reading overrides the pause.
-                NfcAction.Resume -> command(PlayerService.ACTION_TOGGLE)
+                NfcAction.Resume -> command(PlayerService.ACTION_RESUME)
 
                 NfcAction.Ignore -> Unit
                 NfcAction.StopPlayback -> Unit

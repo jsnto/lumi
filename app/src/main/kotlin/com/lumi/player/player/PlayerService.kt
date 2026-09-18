@@ -62,6 +62,7 @@ class PlayerService : Service(), Player.Listener {
             }
 
             ACTION_TOGGLE -> togglePlayPause()
+            ACTION_RESUME -> resumePlayback()
             ACTION_NEXT -> {
                 if (queue.isEmpty()) {
                     stopSelf()
@@ -157,6 +158,12 @@ class PlayerService : Service(), Player.Listener {
             PlaybackStatus.IDLE -> Unit
             else -> p.playWhenReady = !p.playWhenReady
         }
+    }
+
+    /** Idempotent: safe to run on every re-report of a tag still in range. */
+    private fun resumePlayback() {
+        if (queue.isEmpty()) return
+        player?.playWhenReady = true
     }
 
     private fun stopPlayback() {
@@ -280,6 +287,7 @@ class PlayerService : Service(), Player.Listener {
 
         const val ACTION_START = "com.lumi.player.action.START"
         const val ACTION_TOGGLE = "com.lumi.player.action.TOGGLE"
+        const val ACTION_RESUME = "com.lumi.player.action.RESUME"
         const val ACTION_NEXT = "com.lumi.player.action.NEXT"
         const val ACTION_STOP = "com.lumi.player.action.STOP"
         const val EXTRA_ENTRIES = "com.lumi.player.extra.ENTRIES"
