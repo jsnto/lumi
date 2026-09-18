@@ -28,26 +28,30 @@ public class ShadowNfcAdapterForTest {
   }
 
   // Local shadows replace the framework shadow, so the foreground-dispatch /
-  // reader-mode APIs [MainActivity] uses need explicit no-op implementations.
+  // reader-mode APIs [MainActivity] uses need explicit implementations. They
+  // record the wiring state in NfcTestState so UI tests can assert which NFC
+  // receive path the activity is on and fire the registered reader callback.
   @Implementation
   protected void enableForegroundDispatch(
       Activity activity, PendingIntent intent, IntentFilter[] filters, String[][] techLists) {
-    // no-op in tests
+    NfcTestState.foregroundDispatchEnabled = true;
   }
 
   @Implementation
   protected void disableForegroundDispatch(Activity activity) {
-    // no-op in tests
+    NfcTestState.foregroundDispatchEnabled = false;
   }
 
   @Implementation
   protected void enableReaderMode(
       Activity activity, NfcAdapter.ReaderCallback callback, int flags, Bundle extras) {
-    // no-op in tests
+    NfcTestState.readerCallback = callback;
+    NfcTestState.readerFlags = flags;
+    NfcTestState.readerModeEnabled = true;
   }
 
   @Implementation
   protected void disableReaderMode(Activity activity) {
-    // no-op in tests
+    NfcTestState.readerModeEnabled = false;
   }
 }
