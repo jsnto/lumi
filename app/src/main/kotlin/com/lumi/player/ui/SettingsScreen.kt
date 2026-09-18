@@ -1,0 +1,493 @@
+package com.lumi.player.ui
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.lumi.player.data.EntryEntity
+import com.lumi.player.data.EntryType
+import com.lumi.player.data.PlayMode
+import com.lumi.player.data.TagEntity
+
+/**
+ * Parent-facing settings: play mode, tag registration, content registration
+ * (audio / video / url), and tag-to-content linking.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    viewModel: LumiViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+
+    val tags by viewModel.observeTags().collectAsState(emptyList())
+    val entries by viewModel.observeEntries().collectAsState(emptyList())
+    val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
+    val registering by viewModel.registering.collectAsState(false)
+    val capturedUid by viewModel.capturedUid.collectAsState(null)
+    val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
+    val linked by viewModel.linkedEntries.collectAsState(emptyList())
+
+    var tagLabel by remember { mutableStateOf("") }
+    var urlText by remember { mutableStateOf("") }
+    var showAddType by remember { mutableStateOf(false) }
+    var showAddUrl by remember { mutableStateOf(false) }
+    var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
+    var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
+
+    val audioPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.AUDIO) }
+
+    val videoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.VIDEO) }
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // ---------- play mode ----------
+            SectionCard("Play mode") {
+                ModeRow(
+                    title = "Continuous",
+                    detail = "Keeps playing until you tap a different tag.",
+                    selected = playMode == PlayMode.CONTINUOUS,
+                    onSelect = { viewModel.setPlayMode(PlayMode.CONTINUOUS) },
+                )
+                ModeRow(
+                    title = "Proximity",
+                    detail = "Plays while the tag stays near; stops when it's removed.",
+                    selected = playMode == PlayMode.PROXIMITY,
+                    onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
+                )
+            }
+
+            // ---------- tags ----------
+            SectionCard("NFC tags") {
+                OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Register a tag")
+                }
+                if (tags.isEmpty()) {
+                    Text(
+                        text = "No tags yet. Tap a tag on the back of the phone to register it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                tags.forEach { tag ->
+                    SettingRow(
+                        leading = "🏷️",
+                        title = tag.name.ifEmpty { "Tag" },
+                        detail = tag.uid,
+                        trailing = {
+                            IconButton(onClick = { deleteTag = tag }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete tag")
+                            }
+                        },
+                    )
+                }
+            }
+
+            // ---------- entries ----------
+            SectionCard("Content") {
+                OutlinedButton(onClick = { showAddType = true }) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add content")
+                }
+                if (entries.isEmpty()) {
+                    Text(
+                        text = "Nothing here yet. Add a song, or a video or link to use later.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                entries.forEach { entry ->
+                    SettingRow(
+                        leading = emojiFor(entry.type),
+                        title = entry.label,
+                        detail = detailFor(entry.type, entry.payload),
+                        trailing = {
+                            IconButton(onClick = { deleteEntry = entry }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete")
+                            }
+                        },
+                    )
+                }
+            }
+
+            // ---------- linking ----------
+            SectionCard("Tag to content") {
+                if (tags.isEmpty()) {
+                    Text(
+                        text = "Register a tag first, then link content to it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        tags.forEach { tag ->
+                            FilterChip(
+                                selected = tag.id == effectiveSelectedId,
+                                onClick = { viewModel.selectTag(tag.id) },
+                                label = {
+                                    Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
+                                },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    val effectiveId = effectiveSelectedId
+                    if (effectiveId == null) {
+                        Text(
+                            text = "Pick a tag above.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        if (linked.isEmpty()) {
+                            Text(
+                                text = "This tag plays nothing yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        linked.forEachIndexed { index, entry ->
+                            SettingRow(
+                                leading = emojiFor(entry.type),
+                                title = entry.label,
+                                trailing = {
+                                    IconButton(
+                                        onClick = { viewModel.moveLinked(effectiveId, index, -1) },
+                                        enabled = index > 0,
+                                    ) {
+                                        Text("↑")
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.moveLinked(effectiveId, index, 1) },
+                                        enabled = index < linked.size - 1,
+                                    ) {
+                                        Text("↓")
+                                    }
+                                    IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove")
+                                    }
+                                },
+                            )
+                        }
+                        if (entries.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                entries.forEach { entry ->
+                                    OutlinedButton(
+                                        onClick = { viewModel.addLinked(effectiveId, entry.id) },
+                                    ) {
+                                        Text("+ ${entry.label}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- dialogs ----------
+
+    if (registering) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelTagRegistration() },
+            title = { Text("Register a tag") },
+            text = { Text("Hold the back of the phone against any NFC tag…") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cancelTagRegistration() }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (capturedUid != null) {
+        TagNameDialog(
+            uid = capturedUid ?: "",
+            onDismiss = { viewModel.discardCaptured() },
+            onSave = { name -> viewModel.confirmTagName(name) },
+        )
+    }
+
+    if (showAddType) {
+        AlertDialog(
+            onDismissRequest = { showAddType = false },
+            title = { Text("Add content") },
+            text = {
+                Column {
+                    Text("Audio")
+                    Text("Plays right away.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Video")
+                    Text("Saved now, plays in a future version.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Link / URL")
+                    Text("Saved now, opens in a future version.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        showAddType = false
+                        audioPicker.launch(arrayOf("audio/*"))
+                    }) { Text("Audio") }
+                    TextButton(onClick = {
+                        showAddType = false
+                        videoPicker.launch(arrayOf("video/*"))
+                    }) { Text("Video") }
+                    TextButton(onClick = {
+                        showAddType = false
+                        showAddUrl = true
+                    }) { Text("Link") }
+                }
+            },
+        )
+    }
+
+    if (showAddUrl) {
+        AlertDialog(
+            onDismissRequest = { showAddUrl = false },
+            title = { Text("Add a link") },
+            text = {
+                OutlinedTextField(
+                    value = urlText,
+                    onValueChange = { urlText = it },
+                    label = { Text("https://…") },
+                    keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.addUrlEntry(urlText)
+                    urlText = ""
+                    showAddUrl = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddUrl = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    deleteTag?.let { tag ->
+        AlertDialog(
+            onDismissRequest = { deleteTag = null },
+            title = { Text("Remove tag?") },
+            text = { Text("“${tag.name.ifEmpty { tag.uid }}” and its links will be removed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.removeTag(tag)
+                    deleteTag = null
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTag = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    deleteEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { deleteEntry = null },
+            title = { Text("Remove content?") },
+            text = { Text("“${entry.label}” will be removed from the app and from every tag.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.removeEntry(entry)
+                    deleteEntry = null
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteEntry = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+private fun onFilePicked(
+    viewModel: LumiViewModel,
+    context: android.content.Context,
+    uri: Uri,
+    type: EntryType,
+) {
+    val name = context.contentResolver
+        .query(uri, arrayOf("_display_name"), null, null, null)
+        ?.use { cursor ->
+            val index = cursor.getColumnIndex("_display_name")
+            if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
+        }
+    viewModel.addFileEntry(uri, type, name)
+}
+
+/** Dialog asking for an optional friendly name for a freshly captured tag. */
+@Composable
+private fun TagNameDialog(
+    uid: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tag captured") },
+        text = {
+            Column {
+                Text("ID: $uid", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name) }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+/** Card with a bold section title and its content. */
+@Composable
+private fun SectionCard(title: String, content: @Composable () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            content()
+        }
+    }
+}
+
+/** A selectable play-mode row. */
+@Composable
+private fun ModeRow(
+    title: String,
+    detail: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onSelect,
+        label = {
+            Column {
+                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                Text(detail, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** A settings row: emoji, title, optional detail, trailing actions. */
+@Composable
+private fun SettingRow(
+    leading: String,
+    title: String,
+    detail: String? = null,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(leading, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+            if (detail != null) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
+        }
+        trailing?.invoke()
+    }
+}
+
+private fun emojiFor(type: String): String = when (EntryType.fromStorage(type)) {
+    EntryType.AUDIO -> "🎵"
+    EntryType.VIDEO -> "🎬"
+    EntryType.URL -> "🔗"
+}
+
+private fun detailFor(type: String, payload: String): String =
+    when (EntryType.fromStorage(type)) {
+        EntryType.AUDIO -> "music file"
+        EntryType.VIDEO -> "video file · coming soon"
+        EntryType.URL -> "link · coming soon"
+    }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Friendly placeholder launcher icon: a sunny "record" face. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF8A50"
+        android:pathData="M54,8a46,46 0 1,1 -0.01,0z" />
+    <path
+        android:fillColor="#FFF3E0"
+        android:pathData="M54,26a28,28 0 1,1 -0.01,0z" />
+    <path
+        android:fillColor="#FF8A50"
+        android:pathData="M54,46a8,8 0 1,1 -0.01,0z" />
+</vector>

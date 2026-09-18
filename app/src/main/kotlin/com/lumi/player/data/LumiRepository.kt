@@ -1,0 +1,94 @@
+package com.lumi.player.data
+
+import androidx.room.withTransaction
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+
+/**
+ * Single access point for the local store. All persistence is on-device;
+ * there is no server.
+ */
+class LumiRepository(private val db: LumiDatabase) {
+
+    private val dao: LumiDao get() = db.dao()
+
+    // ---- observation ----
+
+    fun observeTags(): Flow<List<TagEntity>> = dao.observeTags()
+
+    fun observeEntries(): Flow<List<EntryEntity>> = dao.observeEntries()
+
+    fun observePlayMode(): Flow<PlayMode> =
+        dao.observeSettings().map { rows ->
+            rows.firstOrNull { it.key == SettingsEntity.PLAY_MODE }
+                ?.let { PlayMode.fromStorage(it.value) }
+                ?: PlayMode.CONTINUOUS
+        }
+
+    /** Ordered content list for a tag, updated live as links or entries change. */
+    fun observeEntriesForTag(tagId: Long): Flow<List<EntryEntity>> =
+        dao.observeLinksForTag(tagId).combine(dao.observeEntries()) { links, entries ->
+            links.mapNotNull { link -> entries.firstOrNull { it.id == link.entryId } }
+        }
+
+    // ---- tags ----
+
+    /**
+     * Registers a tag. Returns the stored tag, or null when the UID is
+     * already registered or the UID is empty.
+     */
+    suspend fun addTag(uid: String, name: String): TagEntity? {
+        val cleanUid = uid.trim()
+        if (cleanUid.isEmpty()) return null
+        if (dao.tagByUid(cleanUid) != null) return null
+        dao.insertTag(TagEntity(uid = cleanUid, name = name.trim()))
+        return dao.tagByUid(cleanUid)
+    }
+
+    suspend fun tagByUid(uid: String): TagEntity? = dao.tagByUid(uid.trim())
+
+    suspend fun deleteTag(tag: TagEntity) = dao.deleteTag(tag)
+
+    // ---- entries ----
+
+    suspend fun addEntry(type: EntryType, label: String, payload: String): EntryEntity {
+        val id = dao.insertEntry(
+            EntryEntity(
+                type = type.storageValue,
+                label = label.trim().ifEmpty { "Untitled" },
+                payload = payload,
+            )
+        )
+        return checkNotNull(dao.entryById(id))
+    }
+
+    suspend fun deleteEntry(entry: EntryEntity) = dao.deleteEntry(entry)
+
+    // ---- links ----
+
+    suspend fun entriesForTag(tagId: Long): List<EntryEntity> {
+        val links = dao.linksForTag(tagId)
+        return links.mapNotNull { link -> dao.entryById(link.entryId) }
+    }
+
+    /** Reads and replaces the tag's ordered content list in one Room transaction. */
+    suspend fun updateTagEntries(tagId: Long, transform: (List<Long>) -> List<Long>): List<Long> {
+        return db.withTransaction {
+            val next = transform(entriesForTag(tagId).map { it.id })
+            dao.replaceLinksForTag(
+                tagId,
+                next.mapIndexed { index, entryId ->
+                    TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index)
+                },
+            )
+            next
+        }
+    }
+
+    // ---- settings ----
+
+    suspend fun setPlayMode(mode: PlayMode) {
+        dao.upsertSetting(SettingsEntity(SettingsEntity.PLAY_MODE, mode.storageValue))
+    }
+}
