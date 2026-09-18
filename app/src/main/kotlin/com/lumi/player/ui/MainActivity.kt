@@ -133,13 +133,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Re-check NFC availability and, if it is unusable, raise the prompt. */
+    /**
+     * Re-check NFC availability and keep the prompt in sync: raised while the
+     * radio is unusable (and so dismissed after, e.g. enabling the radio),
+     * cleared once it is usable again.
+     */
     private fun refreshNfcState() {
         nfcMissing = nfc == null
         nfcDisabled = !nfcMissing && !nfc!!.isEnabled
-        if (nfcMissing || nfcDisabled) {
-            showNfcPrompt = true
-        }
+        showNfcPrompt = nfcMissing || nfcDisabled
     }
 
     /** Opens the system NFC settings, falling back to the settings home. */
