@@ -45,7 +45,8 @@ storage or the registration UI.
 - Room for the local database (tags, entries, ordered tag→entry links, settings)
 - Media3/ExoPlayer in a foreground media service for background playback
 - NFC via foreground dispatch (continuous mode, tag registration) and reader
-  mode (proximity mode, which also reports tag removal)
+  mode (proximity mode, where tag removal is derived from a presence timeout;
+  see `MainActivity`)
 
 ## Permissions
 
