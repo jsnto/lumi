@@ -1,13 +1,19 @@
 package com.lumi.player.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.EaseInOutCubic
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,8 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -26,10 +30,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.data.EntryType
@@ -47,6 +53,7 @@ fun PlayerScreen(
     modifier: Modifier = Modifier,
 ) {
     val playState by PlayerStateHolder.state.collectAsState()
+    val scheme = MaterialTheme.colorScheme
 
     val type = playState.currentType?.let { EntryType.fromStorage(it) }
     val isComingSoon = playState.status == PlaybackStatus.COMING_SOON
@@ -58,9 +65,9 @@ fun PlayerScreen(
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        Color(0xFFFFF3E0),
-                        Color(0xFFFFE0B2),
-                        Color(0xFFFFCC80),
+                        scheme.background,
+                        scheme.primaryContainer.copy(alpha = 0.55f),
+                        scheme.primaryContainer,
                     ),
                 )
             )
@@ -91,23 +98,30 @@ fun PlayerScreen(
 
         Spacer(Modifier.size(28.dp))
 
-        Text(
-            text = playState.currentLabel
+        AnimatedContent(
+            targetState = playState.currentLabel
                 ?: if (idle) "Tap a tag to start!" else "Ready",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF3E2723),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-            maxLines = 2,
-        )
+            label = "lumi-label",
+            transitionSpec = {
+                fadeIn(animationSpec = tween(250)) togetherWith fadeOut(animationSpec = tween(250))
+            },
+        ) { label ->
+            Text(
+                text = label,
+                style = MaterialTheme.typography.headlineMedium,
+                color = scheme.onBackground,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 2,
+            )
+        }
 
         if (isComingSoon) {
             Spacer(Modifier.size(12.dp))
             Text(
                 text = "Coming soon — skipping ahead…",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color(0xFF6D4C41),
+                color = scheme.onSurfaceVariant,
             )
         } else if (type != null) {
             Spacer(Modifier.size(12.dp))
@@ -118,7 +132,7 @@ fun PlayerScreen(
                     EntryType.URL -> "link"
                 },
                 style = MaterialTheme.typography.titleMedium,
-                color = Color(0xFF6D4C41),
+                color = scheme.onSurfaceVariant,
             )
         }
 
@@ -183,6 +197,7 @@ fun PlayingVisual(
         Box(
             modifier = Modifier
                 .size(200.dp)
+                .shadow(20.dp, shape = CircleShape, clip = false)
                 .background(color, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
@@ -197,12 +212,13 @@ private fun BigControlButton(
     label: String,
     onClick: () -> Unit,
 ) {
-    androidx.compose.material3.FilledTonalButton(
+    FilledTonalButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
             .width(240.dp)
-            .height(72.dp),
+            .height(72.dp)
+            .shadow(12.dp, shape = RoundedCornerShape(36.dp), clip = false),
         shape = RoundedCornerShape(36.dp),
     ) {
         Text(

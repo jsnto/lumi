@@ -10,11 +10,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -46,6 +49,14 @@ class MainActivity : ComponentActivity() {
     private var nfc: NfcAdapter? = null
     private var nfcConfigured = false
 
+    // NFC availability for the UI prompt. [nfcMissing] = no NFC hardware;
+    // [nfcDisabled] = hardware present but the radio is off. [showNfcPrompt]
+    // is transient: raised on resume / when a tag read is requested, cleared
+    // when the user chooses to dismiss it.
+    private var nfcMissing by mutableStateOf(false)
+    private var nfcDisabled by mutableStateOf(false)
+    private var showNfcPrompt by mutableStateOf(false)
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -55,17 +66,32 @@ class MainActivity : ComponentActivity() {
         nfc = NfcAdapter.getDefaultAdapter(this)
 
         requestNotificationPermissionIfNeeded()
+        refreshNfcState()
 
         setContent {
             LumiTheme {
-                LumiRoot(viewModel)
+                LumiRoot(
+                    viewModel = viewModel,
+                    nfcMissing = nfcMissing,
+                    nfcDisabled = nfcDisabled,
+                    showNfcPrompt = showNfcPrompt,
+                    onEnableNfc = ::launchNfcSettings,
+                    onDismissNfcPrompt = { showNfcPrompt = false },
+                )
             }
         }
 
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    viewModel.registering.collectLatest { reconfigureNfc() }
+                    viewModel.registering.collectLatest { registering ->
+                        reconfigureNfc()
+                        // Reading a tag is impossible with the radio off; tell
+                        // the user instead of failing silently.
+                        if (registering && (nfcMissing || nfc?.isEnabled == false)) {
+                            showNfcPrompt = true
+                        }
+                    }
                 }
                 launch {
                     viewModel.playMode.collectLatest { mode ->
@@ -104,6 +130,30 @@ class MainActivity : ComponentActivity() {
                 lastSeenUid = null
             }
             presenceHandler.postDelayed(this, PRESENCE_CHECK_MS)
+        }
+    }
+
+    /**
+     * Re-check NFC availability and keep the prompt in sync: raised while the
+     * radio is unusable (and so dismissed after, e.g. enabling the radio),
+     * cleared once it is usable again.
+     */
+    private fun refreshNfcState() {
+        nfcMissing = nfc == null
+        nfcDisabled = !nfcMissing && !nfc!!.isEnabled
+        showNfcPrompt = nfcMissing || nfcDisabled
+    }
+
+    /** Opens the system NFC settings, falling back to the settings home. */
+    private fun launchNfcSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (e2: Exception) {
+                Toast.makeText(this, "Could not open NFC settings", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -177,6 +227,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         nfcConfigured = true
         reconfigureNfc()
+        refreshNfcState()
         // A tag tapped while the app was starting arrives with the resume.
         handleNfcIntent(intent)
     }
