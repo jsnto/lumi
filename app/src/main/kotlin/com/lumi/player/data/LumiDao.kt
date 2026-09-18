@@ -1,6 +1,7 @@
 package com.lumi.player.data
 
 import androidx.room.Dao
+import androidx.room.Transaction
 import androidx.room.Insert
 import androidx.room.Delete
 import androidx.room.OnConflictStrategy
@@ -51,6 +52,13 @@ interface LumiDao {
 
     @Insert
     suspend fun insertLink(link: TagLinkEntity)
+
+    /** Atomically replaces a tag's ordered link list in a single transaction. */
+    @Transaction
+    suspend fun replaceLinksForTag(tagId: Long, links: List<TagLinkEntity>) {
+        clearLinksForTag(tagId)
+        links.forEach { insertLink(it) }
+    }
 
     // ---- settings ----
 

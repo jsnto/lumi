@@ -220,12 +220,10 @@ class PlayerService : Service(), Player.Listener {
 
     private fun startForegroundWithNotification() {
         val notification = buildNotification()
-        val type = when {
-            android.os.Build.VERSION.SDK_INT >= 34 ->
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            android.os.Build.VERSION.SDK_INT >= 29 ->
-                2 // ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA (renamed in Android 15)
-            else -> 0
+        val type = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        } else {
+            0
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
     }

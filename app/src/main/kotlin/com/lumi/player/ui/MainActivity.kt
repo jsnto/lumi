@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
 
     private val app: LumiApp get() = application as LumiApp
     private lateinit var viewModel: LumiViewModel
-    private lateinit var nfc: NfcAdapter
+    private var nfc: NfcAdapter? = null
     private var nfcConfigured = false
 
     private val notificationPermission =
@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
 
     private fun reconfigureNfc() {
         if (!nfcConfigured) return
+        val nfc = nfc ?: return
         nfc.disableForegroundDispatch(this)
         nfc.disableReaderMode(this)
         presenceHandler.removeCallbacks(presenceWatcher)
@@ -179,8 +180,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         if (nfcConfigured) {
-            nfc.disableReaderMode(this)
-            nfc.disableForegroundDispatch(this)
+            nfc?.let {
+                it.disableReaderMode(this)
+                it.disableForegroundDispatch(this)
+            }
         }
         presenceHandler.removeCallbacks(presenceWatcher)
         super.onPause()

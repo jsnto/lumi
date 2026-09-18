@@ -75,12 +75,12 @@ class LumiRepository(private val dao: LumiDao) {
         return links.mapNotNull { link -> dao.entryById(link.entryId) }
     }
 
-    /** Replaces the tag's ordered content list with the given entry ids. */
+    /** Replaces the tag's ordered content list with the given entry ids, atomically. */
     suspend fun setTagEntries(tagId: Long, entryIds: List<Long>) {
-        dao.clearLinksForTag(tagId)
-        entryIds.forEachIndexed { index, entryId ->
-            dao.insertLink(TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index))
+        val links = entryIds.mapIndexed { index, entryId ->
+            TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index)
         }
+        dao.replaceLinksForTag(tagId, links)
     }
 
     // ---- settings ----

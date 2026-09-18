@@ -103,6 +103,7 @@ class LumiViewModel(
             _registering.value = false
             return
         }
+        if (policy.activeTagUid == uid) return
         viewModelScope.launch {
             val tag = repository.tagByUid(uid) ?: return@launch
             when (policy.onTagDetected(uid)) {
