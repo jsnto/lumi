@@ -23,9 +23,7 @@ Both modes are selectable in Settings and are remembered on the device.
   loops the tag's list) until you tap a *different* tag, which switches to
   that tag's list. Re-tapping the same tag does not restart.
 - **Proximity** — playback continues only while the tag stays in the phone's
-  NFC range; remove the tag and playback stops. (Uses the NDEF reader, so the
-  tag must be an NDEF tag — the NTAG/FM11-family tags you can buy at any
-  store.)
+  NFC range; remove the tag and playback stops.
 
 ## Content types
 

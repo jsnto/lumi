@@ -154,9 +154,12 @@ class MainActivity : ComponentActivity() {
 
     private val nfcReaderCallback = object : NfcAdapter.ReaderCallback {
         override fun onTagDiscovered(tag: Tag) {
-            lastSeenAt = SystemClock.elapsedRealtime()
-            lastSeenUid = tag.id.toHex()
-            handleTagDetected(lastSeenUid!!)
+            val uid = tag.id.toHex()
+            if (uid == viewModel.activeTagUid) {
+                lastSeenAt = SystemClock.elapsedRealtime()
+                lastSeenUid = uid
+            }
+            handleTagDetected(uid)
         }
     }
 
@@ -196,7 +199,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent?) {
-        if (intent?.action == NfcAdapter.ACTION_TAG_DISCOVERED) {
+        if (intent?.hasExtra(NfcAdapter.EXTRA_TAG) == true) {
             @Suppress("DEPRECATION") // getParcelableExtra(Class) is API 33+; min is 26.
             val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
             handleTagDetected(tag.id.toHex())

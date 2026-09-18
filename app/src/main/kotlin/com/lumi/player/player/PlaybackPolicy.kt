@@ -45,6 +45,10 @@ class PlaybackPolicy(private val mode: PlayMode) {
             NfcAction.Ignore
         }
 
+    fun seedActiveTagUid(uid: String?) {
+        activeTagUid = uid
+    }
+
     /** The service stopped on its own (user pressed stop, app closed, ...). */
     fun onPlaybackStopped() {
         activeTagUid = null

@@ -1,10 +1,8 @@
 package com.lumi.player.data
 
 import androidx.room.withTransaction
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 
 /**
@@ -33,10 +31,6 @@ class LumiRepository(private val db: LumiDatabase) {
         dao.observeLinksForTag(tagId).combine(dao.observeEntries()) { links, entries ->
             links.mapNotNull { link -> entries.firstOrNull { it.id == link.entryId } }
         }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun observeEntriesForTag(tagIdFlow: Flow<Long>): Flow<List<EntryEntity>> =
-        tagIdFlow.flatMapLatest { observeEntriesForTag(it) }
 
     // ---- tags ----
 

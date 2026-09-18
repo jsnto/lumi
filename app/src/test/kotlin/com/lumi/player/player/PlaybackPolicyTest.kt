@@ -81,4 +81,17 @@ class PlaybackPolicyTest {
         // The same tag can start again after a manual stop.
         assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidA))
     }
+
+    @Test
+    fun seededActiveTagIsTreatedAsPlaying() {
+        val policy = PlaybackPolicy(PlayMode.CONTINUOUS)
+        policy.seedActiveTagUid(uidA)
+        assertEquals(uidA, policy.activeTagUid)
+        // A re-tap of the carried tag (e.g. after a recreated view model)
+        // must not restart playback.
+        assertEquals(NfcAction.Ignore, policy.onTagDetected(uidA))
+        assertEquals(NfcAction.StopPlayback, policy.onTagLost(uidA))
+        assertFalse(policy.active)
+        assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidA))
+    }
 }

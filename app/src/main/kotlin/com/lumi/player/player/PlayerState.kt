@@ -19,6 +19,7 @@ data class PlayerUiState(
     val currentLabel: String? = null,
     val currentType: String? = null,
     val queueSize: Int = 0,
+    val activeTagUid: String? = null,
 ) {
     val isPlaying: Boolean
         get() = status == PlaybackStatus.PLAYING

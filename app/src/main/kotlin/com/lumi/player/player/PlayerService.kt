@@ -36,6 +36,7 @@ class PlayerService : Service(), Player.Listener {
     private var position: Int = 0
     /** Consecutive load/playback errors; guards against looping on a bad file. */
     private var consecutiveErrors: Int = 0
+    private var comingSoon: Boolean = false
     private val main = Handler(Looper.getMainLooper())
     private val comingSoonTicker = Runnable { advance() }
 
@@ -52,10 +53,11 @@ class PlayerService : Service(), Player.Listener {
                 @Suppress("DEPRECATION") // getParcelableArrayListExtra(Class) needs API 33; min is 26.
                 val entries = intent.getParcelableArrayListExtra<EntrySpec>(EXTRA_ENTRIES)
                     ?: emptyList()
+                val uid = intent.getStringExtra(EXTRA_TAG_UID)
                 if (entries.isEmpty()) {
                     stopPlayback()
                 } else {
-                    startQueue(entries)
+                    startQueue(entries, uid)
                 }
             }
 
@@ -84,11 +86,12 @@ class PlayerService : Service(), Player.Listener {
 
     // ---- queue handling ----
 
-    private fun startQueue(entries: List<EntrySpec>) {
+    private fun startQueue(entries: List<EntrySpec>, uid: String?) {
         queue = entries
         position = 0
         consecutiveErrors = 0
         startForegroundWithNotification()
+        PlayerStateHolder.update { it.copy(activeTagUid = uid) }
         ensurePlayer()
         loadCurrent()
     }
@@ -112,6 +115,7 @@ class PlayerService : Service(), Player.Listener {
         }
         when (EntryType.fromStorage(spec.type)) {
             EntryType.AUDIO -> {
+                comingSoon = false
                 main.removeCallbacks(comingSoonTicker)
                 consecutiveErrors = 0
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
@@ -121,6 +125,7 @@ class PlayerService : Service(), Player.Listener {
 
             // VIDEO and URL: representable in v1, action deferred.
             else -> {
+                comingSoon = true
                 p.stop()
                 p.clearMediaItems()
                 PlayerStateHolder.update { it.copy(status = PlaybackStatus.COMING_SOON) }
@@ -156,10 +161,16 @@ class PlayerService : Service(), Player.Listener {
 
     private fun stopPlayback() {
         main.removeCallbacks(comingSoonTicker)
+        comingSoon = false
         player?.pause()
         player?.clearMediaItems()
         PlayerStateHolder.update {
-            it.copy(status = PlaybackStatus.IDLE, currentLabel = null, currentType = null)
+            it.copy(
+                status = PlaybackStatus.IDLE,
+                currentLabel = null,
+                currentType = null,
+                activeTagUid = null,
+            )
         }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -173,6 +184,7 @@ class PlayerService : Service(), Player.Listener {
             Player.STATE_ENDED -> advance()
             else -> {
                 val status = when {
+                    comingSoon -> PlaybackStatus.COMING_SOON
                     p.isPlaying -> PlaybackStatus.PLAYING
                     p.playbackState == Player.STATE_READY && !p.playWhenReady ->
                         PlaybackStatus.PAUSED
@@ -271,5 +283,6 @@ class PlayerService : Service(), Player.Listener {
         const val ACTION_NEXT = "com.lumi.player.action.NEXT"
         const val ACTION_STOP = "com.lumi.player.action.STOP"
         const val EXTRA_ENTRIES = "com.lumi.player.extra.ENTRIES"
+        const val EXTRA_TAG_UID = "com.lumi.player.extra.TAG_UID"
     }
 }

@@ -16,7 +16,9 @@ import com.lumi.player.data.LumiRepository
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
+import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
+import com.lumi.player.player.PlayerStateHolder
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,11 +89,18 @@ class LumiViewModel(
             if (id == null) flowOf(emptyList()) else repository.observeEntriesForTag(id)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /** UID of the tag whose list is currently playing, if any. */
+    val activeTagUid: String? get() = policy.activeTagUid
+
     init {
-        // Rebuild the policy when the mode changes (fresh active-tag state).
         viewModelScope.launch {
             playMode.collect { mode ->
-                policy = PlaybackPolicy(mode)
+                policy = PlaybackPolicy(mode).also { p ->
+                    val carried = PlayerStateHolder.state.value
+                    if (carried.status != PlaybackStatus.IDLE) {
+                        p.seedActiveTagUid(carried.activeTagUid)
+                    }
+                }
             }
         }
     }
@@ -118,7 +127,7 @@ class LumiViewModel(
                     if (entries.isEmpty()) {
                         event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
                     } else {
-                        startPlayer(entries.map { it.toSpec() })
+                        startPlayer(entries.map { it.toSpec() }, uid)
                     }
                 }
 
@@ -142,10 +151,11 @@ class LumiViewModel(
 
     // ---- player commands ----
 
-    private fun startPlayer(specs: List<EntrySpec>) {
+    private fun startPlayer(specs: List<EntrySpec>, uid: String) {
         val intent = Intent(context, PlayerService::class.java).apply {
             action = PlayerService.ACTION_START
             putExtra(PlayerService.EXTRA_ENTRIES, ArrayList(specs))
+            putExtra(PlayerService.EXTRA_TAG_UID, uid)
         }
         ContextCompat.startForegroundService(context, intent)
     }
