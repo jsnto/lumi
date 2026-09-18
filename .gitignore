@@ -9,3 +9,4 @@ captures/
 build/
 app/build/
 .kotlin/
+dist/
