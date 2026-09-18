@@ -258,6 +258,44 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_freshTagPresented_thenRemoved_thenBack_stopsAndRestarts() {
+        // The bug this pins: foreground dispatch may deliver a stationary
+        // tag only once, and the activating read used to be the only one
+        // that never seeded the presence record, so the watcher had
+        // nothing to time out and proximity mode never stopped.
+        setupDb(mode = PlayMode.PROXIMITY)
+        val controller = startMainActivity()
+        // Nothing is playing yet; the tag's first delivery starts playback
+        // and must seed the presence record.
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // The tag leaves range after its single report: no further reports
+        // arrive. The presence watcher must derive tag loss and stop.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val stop = nextServiceIntent(1_000)
+        assertNotNull(
+            "proximity mode must stop when the only reported tag leaves range",
+            stop,
+        )
+        assertEquals(PlayerService.ACTION_STOP, stop!!.action)
+        // Settle the state the way the stopped service would, then bring the
+        // tag back: a fresh delivery must start playback again.
+        val service = Robolectric.buildService(
+            PlayerService::class.java,
+            Intent().setAction(PlayerService.ACTION_STOP),
+        ).create()
+        service.startCommand(0, 1)
+        assertEquals(PlaybackStatus.IDLE, PlayerStateHolder.state.value.status)
+        service.destroy()
+        sendTag(controller, UID_A)
+        val restart = nextServiceIntent()
+        assertNotNull("bringing the tag back must start playback again", restart)
+        assertEquals(PlayerService.ACTION_START, restart!!.action)
+    }
+
+    @Test
     fun proximityMode_unrelatedTagRead_doesNotMaskActiveTagRemoval() {
         // Presence record regression: only the ACTIVE registered tag's reads
         // refresh the presence record. Tag A (registered) is playing in

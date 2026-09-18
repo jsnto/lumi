@@ -213,10 +213,15 @@ class MainActivity : ComponentActivity() {
 
     private fun handleTagDetected(uid: String) {
         if (uid.isEmpty()) return
-        // Only the active registered tag's reads refresh the presence
-        // record; a read of any other tag must not clobber the record or
-        // mask the active tag's removal.
-        if (uid == viewModel.activeTagUid) {
+        // The presence record is refreshed by a read of the tag already
+        // playing and by a read while nothing is playing (that read starts
+        // playback). The latter matters because foreground dispatch may
+        // deliver a stationary tag only once: the activating read can be
+        // the only report ever seen, so without it the watcher would have
+        // no record to time out and proximity mode would never stop.
+        // A read of some OTHER tag while one is playing must not touch the
+        // record, or it would mask the active tag's removal.
+        if (viewModel.activeTagUid == null || uid == viewModel.activeTagUid) {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
         }
