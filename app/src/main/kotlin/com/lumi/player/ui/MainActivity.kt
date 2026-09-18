@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -232,6 +233,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Keep the screen on for the activity's lifetime so NFC reads and
+        // playback are never interrupted by the screen locking, sleeping, or
+        // going dark while the app is open.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         nfcConfigured = true
         reconfigureNfc()
         refreshNfcState()
@@ -247,6 +252,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         presenceHandler.removeCallbacks(presenceWatcher)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
     }
 
