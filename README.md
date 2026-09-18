@@ -15,6 +15,9 @@ server or account — everything is stored locally on the device.
    looks up the tag's content list and starts playing, with a big friendly
    animated visual showing what is up.
 
+If the NFC radio is off (or the device has no NFC hardware), lumi shows a
+prompt with a shortcut to the NFC settings screen.
+
 ## Play modes
 
 Both modes are selectable in Settings and are remembered on the device.

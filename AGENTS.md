@@ -16,7 +16,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Entry types are extensible: `data/EntryType.kt` (audio implemented; video/url are representable but their action is an intentional "coming soon" placeholder — see `PlayerService` COMING_SOON handling). New types should keep `fromStorage`'s fallback behavior.
 - Audio files are picked via SAF; read grants are persisted per file (`LumiViewModel.addFileEntry`). No storage permissions are used.
 - Compose: `Modifier.shadow` imports from `androidx.compose.ui.draw` (it ships in the `ui` artifact, not `foundation`); an `androidx.compose.foundation.shadow` import does not resolve.
-- NFC prompt: `MainActivity.refreshNfcState` raises `showNfcPrompt` on resume and when registration starts with the radio off; the dialog (with an `ACTION_NFC_SETTINGS` button) is rendered in `LumiRoot` so it overlays any screen. Don't move the prompt into `SettingsScreen` — the player screen also needs it.
+- NFC prompt: `MainActivity.refreshNfcState` keeps `showNfcPrompt` in sync with NFC availability — raised on resume / when registration starts with the radio missing or off, and cleared once it is usable again (e.g. after the user enables the radio and returns); the dialog (with an `ACTION_NFC_SETTINGS` button) is rendered in `LumiRoot` so it overlays any screen. Don't move the prompt into `SettingsScreen` — the player screen also needs it.
 
 ## Maintaining this file
 
