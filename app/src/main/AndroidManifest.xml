@@ -31,10 +31,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Read NFC tags tapped while the app is starting: the
-                 TECH_DISCOVERED filter requires its tech-list meta-data or
-                 the framework never matches it. Tags presented while the
-                 main page is open arrive via reader mode instead. -->
+            <!-- Only matters for tags tapped while the app is closed or
+                 starting: while the main page is open, tags arrive via the
+                 activity's always-listening foreground dispatch instead.
+                 The TECH_DISCOVERED filter requires its tech-list meta-data
+                 or the framework never matches it. -->
             <intent-filter>
                 <action android:name="android.nfc.action.TECH_DISCOVERED" />
             </intent-filter>

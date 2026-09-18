@@ -35,15 +35,23 @@ import kotlinx.coroutines.launch
  * Hosts the Compose UI and drives NFC.
  *
  * NFC strategy per play mode — in both modes NFC is always listening:
- * - Both modes: reader mode passively reads any tag in range, so a read
+ * - Both modes: foreground dispatch delivers any tag in range to the
+ *   activity (a self PendingIntent arriving via [onNewIntent]), so a read
  *   starts/switches playback without a tap and overrides play/pause.
+ *   Foreground dispatch is the single receive path: it is the mechanism the
+ *   tag-registration flow proved on real devices, whereas the reader-mode
+ *   [NfcAdapter.ReaderCallback] (onTagDiscovered) never fired on a device
+ *   where foreground dispatch worked.
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
- * - PROXIMITY: the reader re-reports the tag while it stays in range, so
- *   "tag lost" is derived from a short absence of reports (presence
- *   timeout), which stops playback when the tag is removed.
- * - Tag registration: temporarily foreground dispatch while the capture
- *   dialog is showing, so any tag type can be registered.
+ * - PROXIMITY: "tag lost" is derived, conservatively, from a short absence
+ *   of reports (presence timeout) on the active tag. Foreground dispatch may
+ *   deliver a stationary tag only once per presentation, so "no further
+ *   reports" is the only removal signal available — a held-still tag may
+ *   trigger the timeout early; verifying stop-on-removal timing on a real
+ *   device is the first on-device validation item.
+ * - Tag registration: the same foreground dispatch, with the view model in
+ *   capture mode, so any tag type can be registered.
  */
 class MainActivity : ComponentActivity() {
 
@@ -120,9 +128,12 @@ class MainActivity : ComponentActivity() {
 
     private var currentMode: PlayMode = PlayMode.CONTINUOUS
 
-    // Proximity-mode presence tracking. Reader mode re-reports the tag while
-    // it stays in range; if reports stop, the tag left the reader. Only
-    // proximity mode watches for tag loss; continuous keeps playing.
+    // Proximity-mode presence tracking. Under foreground dispatch a
+    // stationary tag may be delivered only once, so the presence record is
+    // the only proxy for "still in range"; a short absence of reports is
+    // treated as removal. Only the ACTIVE tag's reads touch the record, so
+    // an unrelated tag read can never mask the active tag's removal.
+    // Only proximity mode watches for tag loss; continuous keeps playing.
     private val presenceHandler = Handler(Looper.getMainLooper())
     private var lastSeenUid: String? = null
     @Volatile private var lastSeenAt: Long = 0L
@@ -186,43 +197,29 @@ class MainActivity : ComponentActivity() {
         if (!nfcConfigured) return
         val nfc = nfc ?: return
         nfc.disableForegroundDispatch(this)
-        nfc.disableReaderMode(this)
         presenceHandler.removeCallbacks(presenceWatcher)
         lastSeenUid = null
         if (!nfc.isEnabled) return
-        when {
-            viewModel.registering.value ->
-                nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
-            else -> {
-                // Always listening: reader mode passively reads any tag in
-                // range, so a read starts/switches playback in both modes.
-                nfc.enableReaderMode(
-                    this,
-                    nfcReaderCallback,
-                    NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
-                    null,
-                )
-                // Only proximity derives "tag lost" from a presence timeout.
-                if (currentMode == PlayMode.PROXIMITY) {
-                    presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
-                }
-            }
-        }
-    }
-
-    private val nfcReaderCallback = object : NfcAdapter.ReaderCallback {
-        override fun onTagDiscovered(tag: Tag) {
-            val uid = tag.id.toHex()
-            if (uid == viewModel.activeTagUid) {
-                lastSeenAt = SystemClock.elapsedRealtime()
-                lastSeenUid = uid
-            }
-            handleTagDetected(uid)
+        // Always listening: foreground dispatch delivers any tag in range to
+        // this activity while it is in the foreground, for both main-page
+        // reads and registration captures. This is the receive path proven
+        // on a real device (reader mode's onTagDiscovered did not fire there).
+        nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
+        // Only proximity derives "tag lost" from a presence timeout.
+        if (currentMode == PlayMode.PROXIMITY) {
+            presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
         }
     }
 
     private fun handleTagDetected(uid: String) {
         if (uid.isEmpty()) return
+        // Only the active registered tag's reads refresh the presence
+        // record; a read of any other tag must not clobber the record or
+        // mask the active tag's removal.
+        if (uid == viewModel.activeTagUid) {
+            lastSeenAt = SystemClock.elapsedRealtime()
+            lastSeenUid = uid
+        }
         viewModel.onTagDetected(uid)
     }
 
@@ -246,10 +243,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         if (nfcConfigured) {
-            nfc?.let {
-                it.disableReaderMode(this)
-                it.disableForegroundDispatch(this)
-            }
+            nfc?.disableForegroundDispatch(this)
         }
         presenceHandler.removeCallbacks(presenceWatcher)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -266,6 +260,10 @@ class MainActivity : ComponentActivity() {
         if (intent?.hasExtra(NfcAdapter.EXTRA_TAG) == true) {
             @Suppress("DEPRECATION") // getParcelableExtra(Class) is API 33+; min is 26.
             val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
+            // Consume the tag so a stale tag intent is not reprocessed on a
+            // later resume (e.g. after the app is backgrounded and reopened);
+            // a fresh tag presentation always delivers a fresh intent.
+            intent.removeExtra(NfcAdapter.EXTRA_TAG)
             handleTagDetected(tag.id.toHex())
         }
     }
