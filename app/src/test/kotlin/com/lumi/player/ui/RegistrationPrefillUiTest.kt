@@ -2,13 +2,16 @@ package com.lumi.player.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -26,8 +29,9 @@ import org.robolectric.shadows.ShadowLooper
  * integration: a captured tag that carries the app's lumi payload
  * pre-fills the name field and pre-selects its play mode, and a writable
  * tag offers the optional "Save and write to tag" step while a non-
- * writable (or unformatted) tag only offers plain save. Saving with a
- * preselected mode applies that mode to the app.
+ * writable (or unformatted) tag only offers plain save. The mode only
+ * records what mode the tag was registered with (form pre-fill on
+ * re-read); saving a tag never changes the app's play mode.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -98,18 +102,24 @@ class RegistrationPrefillUiTest {
         // A writable tag offers the optional write step.
         compose.onNodeWithText("Save and write to tag").assertIsDisplayed()
 
-        // Saving with the preselected mode applies it to the app.
+        // Saving must NOT change the app's play mode, even though the tag's
+        // preselected mode (PROXIMITY) differs from the app's (CONTINUOUS).
         compose.onNodeWithText("Save and write to tag").performClick()
         compose.waitForIdle()
-        idleUntil({ playModeOf(viewModel) == PlayMode.PROXIMITY })
-        assertEquals("The dialog's preselected mode must become the app mode", PlayMode.PROXIMITY, playModeOf(viewModel))
+        idleUntil({ savedTagName(UID) != null })
+        assertEquals(
+            "saving must not change the app play mode",
+            PlayMode.CONTINUOUS,
+            playModeOf(viewModel),
+        )
         assertEquals("The saved tag must carry the pre-filled name", "Hallway", savedTagName(UID))
     }
 
     @Test
-    fun registration_tagWithLumiPayload_prefersTagModeOverAppMode() {
-        // App is in CONTINUOUS; the tag says PROXITY. Saving without
-        // changing the dialog must keep the tag's mode.
+    fun registration_savingTagMode_doesNotChangeAppPlayMode() {
+        // App is in CONTINUOUS; the tag says PROXIMITY. Saving with the
+        // preselected mode records it on the tag payload only - the app's
+        // play mode must stay CONTINUOUS.
         val viewModel = openSettingsAndCapture(
             data = LumiTagData("Porch", PlayMode.PROXIMITY),
             writable = false,
@@ -118,8 +128,43 @@ class RegistrationPrefillUiTest {
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ playModeOf(viewModel) == PlayMode.PROXIMITY })
-        assertEquals(PlayMode.PROXIMITY, playModeOf(viewModel))
+        idleUntil({ savedTagName(UID) != null })
+        assertEquals(
+            "saving a tag must not switch the app play mode",
+            PlayMode.CONTINUOUS,
+            playModeOf(viewModel),
+        )
+        assertEquals("The tag must be saved under the pre-filled name", "Porch", savedTagName(UID))
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun registration_nameInput_isClampedToTagPayloadLimit() {
+        // The dialog's name field clamps to MAX_NAME_LENGTH, so the name
+        // saved to the DB and the name written to the tag can never
+        // diverge by truncation.
+        // Pre-fill the field so the editable node can be selected by its
+        // (merged-tree) text, then overwrite it with an oversized name.
+        val viewModel = openSettingsAndCapture(
+            data = LumiTagData("Prefill", PlayMode.CONTINUOUS),
+            writable = false,
+        )
+        compose.onNodeWithText("Tag captured").assertIsDisplayed()
+        compose.onNodeWithText("Prefill")
+            .performTextInput("x".repeat(LumiTagNdef.MAX_NAME_LENGTH + 10))
+        compose.waitForIdle()
+        // The field holds at most MAX_NAME_LENGTH chars, never the raw input.
+        compose.onNodeWithText("x".repeat(LumiTagNdef.MAX_NAME_LENGTH)).assertExists()
+        compose.onNodeWithText("x".repeat(LumiTagNdef.MAX_NAME_LENGTH + 10))
+            .assertDoesNotExist()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        assertEquals(
+            "the saved name must be clamped, not the raw 60-char input",
+            "x".repeat(LumiTagNdef.MAX_NAME_LENGTH),
+            savedTagName(UID),
+        )
     }
 
     @Test
@@ -129,9 +174,9 @@ class RegistrationPrefillUiTest {
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ playModeOf(viewModel) == PlayMode.CONTINUOUS })
+        idleUntil({ savedTagName(UID) != null })
         assertEquals(
-            "skipping the write and the mode must leave the app mode untouched",
+            "saving a plain tag must leave the app mode untouched",
             PlayMode.CONTINUOUS,
             playModeOf(viewModel),
         )

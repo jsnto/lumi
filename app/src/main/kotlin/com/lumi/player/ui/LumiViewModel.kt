@@ -283,10 +283,11 @@ class LumiViewModel(
     }
 
     /**
-     * Saves the captured tag under [name], applies [mode] as the app's play
-     * mode, and - when [writeToTag] and the tag is still reachable - writes
-     * the name + mode back to the tag so re-registering it later prefills
-     * the form.
+     * Saves the captured tag under [name] and - when [writeToTag] and the
+     * tag is still reachable - writes the name + mode back to the tag so
+     * re-registering it later prefills the form. The mode only records what
+     * the tag was registered with (and prefills the form on re-read); it
+     * does NOT change the app's play mode.
      */
     fun confirmTagName(name: String, mode: PlayMode, writeToTag: Boolean) {
         val uid = _capturedUid.value ?: return
@@ -295,7 +296,6 @@ class LumiViewModel(
         _capturedTagData.value = null
         _capturedTagWritable.value = false
         capturedTag = null
-        if (mode != playMode.value) setPlayMode(mode)
         viewModelScope.launch {
             val saved = repository.addTag(uid, name)
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
