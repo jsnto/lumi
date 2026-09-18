@@ -8,9 +8,8 @@ server or account — everything is stored locally on the device.
 ## How it works
 
 1. In **Settings**, register an NFC tag (hold the back of the phone against
-   the tag), register content (pick an audio file from the device, or add a
-   video/link entry for future use), and link a tag to one or more entries in
-   the order you want them played.
+   the tag), register content (pick an audio file from the device), and link
+   a tag to one or more entries in the order you want them played.
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual
@@ -41,15 +40,13 @@ resumes playback — an NFC read overrides play/pause.
 
 A tag links to an ordered list of entries. Each entry has a type:
 
-| Type  | v1 status                                                        |
-|-------|------------------------------------------------------------------|
-| Audio | Fully supported — plays in the background with a notification.   |
-| Video | Representable and registrable now; playback is a "coming soon" placeholder. |
-| URL   | Representable and registrable now (e.g. a YouTube link); opening is a "coming soon" placeholder. |
+| Type       | v1 status                                                              |
+|------------|------------------------------------------------------------------------|
+| Audio      | Fully supported — plays in the background with a notification.         |
+| Video / URL | Kept in the data model so existing rows still parse, but not offered in the UI; playback skips them. |
 
-The data model stores `type` + `payload` (file URI for audio/video, URL for
-links), so adding the video/URL actions later does not require reworking
-storage or the registration UI.
+The data model stores `type` + `payload` (file URI for audio), so re-adding
+the video/URL actions later does not require reworking storage.
 
 ## Tech
 
@@ -67,7 +64,7 @@ storage or the registration UI.
 - **POST_NOTIFICATIONS** — asked on first launch (Android 13+); playback
   notification shown when granted.
 - **Foreground service (media)** — keeps audio playing in the background.
-- No storage permissions: audio/video files are picked with the system
+- No storage permissions: audio files are picked with the system
   document picker (SAF), and the read grant is persisted per file.
 
 ## Building

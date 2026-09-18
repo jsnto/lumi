@@ -45,7 +45,7 @@ import com.lumi.player.player.PlayerStateHolder
 
 /**
  * Child-friendly front screen: one big friendly visual that represents the
- * current entry (audio / video / url), what it is, and a single big button.
+ * current entry, what it is, and a single big button.
  */
 @Composable
 fun PlayerScreen(
@@ -56,7 +56,6 @@ fun PlayerScreen(
     val scheme = MaterialTheme.colorScheme
 
     val type = playState.currentType?.let { EntryType.fromStorage(it) }
-    val isComingSoon = playState.status == PlaybackStatus.COMING_SOON
     val idle = playState.status == PlaybackStatus.IDLE
 
     Column(
@@ -77,7 +76,7 @@ fun PlayerScreen(
         Spacer(Modifier.weight(1f))
 
         PlayingVisual(
-            active = playState.isPlaying || isComingSoon,
+            active = playState.isPlaying,
             color = when (type) {
                 EntryType.AUDIO -> Color(0xFFFF8A65)
                 EntryType.VIDEO -> Color(0xFF9575CD)
@@ -116,14 +115,7 @@ fun PlayerScreen(
             )
         }
 
-        if (isComingSoon) {
-            Spacer(Modifier.size(12.dp))
-            Text(
-                text = "Coming soon — skipping ahead…",
-                style = MaterialTheme.typography.titleMedium,
-                color = scheme.onSurfaceVariant,
-            )
-        } else if (type != null) {
+        if (type != null) {
             Spacer(Modifier.size(12.dp))
             Text(
                 text = when (type) {
@@ -143,15 +135,12 @@ fun PlayerScreen(
             label = when (playState.status) {
                 PlaybackStatus.PLAYING -> "Pause"
                 PlaybackStatus.PAUSED -> "Play"
-                PlaybackStatus.COMING_SOON -> "Skip"
                 PlaybackStatus.IDLE -> "Stop"
             },
             onClick = {
                 val action = when (playState.status) {
                     PlaybackStatus.PLAYING, PlaybackStatus.PAUSED ->
                         PlayerService.ACTION_TOGGLE
-                    PlaybackStatus.COMING_SOON ->
-                        PlayerService.ACTION_NEXT
                     PlaybackStatus.IDLE ->
                         PlayerService.ACTION_STOP
                 }

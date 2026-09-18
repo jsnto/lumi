@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
 /** Coarse playback status shown on the front screen. */
-enum class PlaybackStatus { IDLE, PLAYING, PAUSED, COMING_SOON }
+enum class PlaybackStatus { IDLE, PLAYING, PAUSED }
 
 /**
  * UI-facing state for what is currently playing. The [PlayerService] updates

@@ -3,10 +3,9 @@ package com.lumi.player.data
 /**
  * The kind of content a tag entry points at.
  *
- * v1 fully implements [AUDIO]. [VIDEO] and [URL] are representable and
- * registrable today so the data model, storage, and registration UI already
- * accommodate them; their actions (play video / open URL) are deferred and
- * shown as a "coming soon" placeholder.
+ * v1 fully implements [AUDIO]. [VIDEO] and [URL] are kept representable so
+ * existing rows in the database still parse, but the UI only registers and
+ * plays [AUDIO] entries; their actions are not wired up until re-added.
  *
  * New entry types should be added here; [fromStorage] keeps the app running
  * if an unknown type appears in the database.

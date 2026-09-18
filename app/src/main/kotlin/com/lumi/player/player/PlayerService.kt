@@ -34,9 +34,8 @@ import androidx.media3.exoplayer.ExoPlayer
  * Foreground service that plays a tag's content list with ExoPlayer and keeps
  * a notification with pause / next / stop controls.
  *
- * v1 plays AUDIO entries; VIDEO and URL entries are represented (the front
- * screen shows them) but their action is a "coming soon" placeholder, so the
- * service shows a COMING_SOON state and auto-advances after a short pause.
+ * v1 plays AUDIO entries; non-audio entries that exist in the database
+ * (video / url) are skipped over.
  */
 class PlayerService : Service(), Player.Listener {
 
@@ -55,14 +54,12 @@ class PlayerService : Service(), Player.Listener {
     private var position: Int = 0
     /** Consecutive load/playback errors; guards against looping on a bad file. */
     private var consecutiveErrors: Int = 0
-    private var comingSoon: Boolean = false
     /** Remembered position to seek to once the first media item is ready. */
     private var pendingSeekMs: Long = 0
     private var scope: CoroutineScope? = null
     private val main = Handler(Looper.getMainLooper())
     /** Saves the active tag's position while actively playing. */
     private val positionSaver = PositionSaver(main, this)
-    private val comingSoonTicker = Runnable { advance() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -95,7 +92,6 @@ class PlayerService : Service(), Player.Listener {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                main.removeCallbacks(comingSoonTicker)
                 advance()
             }
 
@@ -106,7 +102,6 @@ class PlayerService : Service(), Player.Listener {
     }
 
     override fun onDestroy() {
-        main.removeCallbacks(comingSoonTicker)
         main.removeCallbacks(positionSaver)
         scope?.cancel()
         player?.release()
@@ -151,23 +146,20 @@ class PlayerService : Service(), Player.Listener {
         }
         when (EntryType.fromStorage(spec.type)) {
             EntryType.AUDIO -> {
-                comingSoon = false
-                main.removeCallbacks(comingSoonTicker)
-                consecutiveErrors = 0
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
                 p.playWhenReady = true
                 p.prepare()
                 armPositionSaver()
             }
 
-            // VIDEO and URL: representable in v1, action deferred.
+            // Video / url entries are not playable in v1: skip them.
             else -> {
-                comingSoon = true
-                p.stop()
-                p.clearMediaItems()
-                PlayerStateHolder.update { it.copy(status = PlaybackStatus.COMING_SOON) }
-                main.removeCallbacks(comingSoonTicker)
-                main.postDelayed(comingSoonTicker, COMING_SOON_DELAY_MS)
+                Log.i(TAG, "skipping non-audio entry: ${spec.label}")
+                if (queue.any { EntryType.fromStorage(it.type) == EntryType.AUDIO }) {
+                    advance()
+                } else {
+                    stopPlayback()
+                }
             }
         }
     }
@@ -186,11 +178,6 @@ class PlayerService : Service(), Player.Listener {
         }
         val p = player ?: return
         when (PlayerStateHolder.state.value.status) {
-            PlaybackStatus.COMING_SOON -> {
-                main.removeCallbacks(comingSoonTicker)
-                advance()
-            }
-
             PlaybackStatus.IDLE -> Unit
             else -> {
                 val play = !p.playWhenReady
@@ -207,11 +194,9 @@ class PlayerService : Service(), Player.Listener {
     }
 
     private fun stopPlayback() {
-        main.removeCallbacks(comingSoonTicker)
         main.removeCallbacks(positionSaver)
         pendingSeekMs = 0
         saveCurrentPosition()
-        comingSoon = false
         player?.pause()
         player?.clearMediaItems()
         PlayerStateHolder.update {
@@ -272,7 +257,6 @@ class PlayerService : Service(), Player.Listener {
             else -> {
                 applyPendingSeek(p)
                 val status = when {
-                    comingSoon -> PlaybackStatus.COMING_SOON
                     p.isPlaying -> PlaybackStatus.PLAYING
                     p.playbackState == Player.STATE_READY && !p.playWhenReady ->
                         PlaybackStatus.PAUSED
@@ -280,7 +264,10 @@ class PlayerService : Service(), Player.Listener {
                     else -> PlaybackStatus.PLAYING
                 }
                 PlayerStateHolder.update { it.copy(status = status) }
-                if (status == PlaybackStatus.PLAYING) armPositionSaver()
+                if (status == PlaybackStatus.PLAYING) {
+                    consecutiveErrors = 0
+                    armPositionSaver()
+                }
                 refreshNotification()
             }
         }
@@ -292,7 +279,10 @@ class PlayerService : Service(), Player.Listener {
             PlayerStateHolder.update {
                 it.copy(status = if (playWhenReady) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED)
             }
-            if (playWhenReady) armPositionSaver()
+            if (playWhenReady) {
+                consecutiveErrors = 0
+                armPositionSaver()
+            }
             refreshNotification()
         }
     }
@@ -357,7 +347,7 @@ class PlayerService : Service(), Player.Listener {
         val isPlaying = s.isPlaying
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_lumi)
-            .setContentTitle(if (s.status == PlaybackStatus.COMING_SOON) "lumi" else "lumi is playing")
+            .setContentTitle("lumi is playing")
             .setContentText(s.currentLabel ?: "Tap a tag to start")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -383,7 +373,6 @@ class PlayerService : Service(), Player.Listener {
         private const val TAG = "PlayerService"
         private const val CHANNEL_ID = "lumi_playback"
         private const val NOTIFICATION_ID = 1
-        private const val COMING_SOON_DELAY_MS = 3_000L
         private const val POSITION_SAVE_INTERVAL_MS = 5_000L
 
         const val ACTION_START = "com.lumi.player.action.START"
