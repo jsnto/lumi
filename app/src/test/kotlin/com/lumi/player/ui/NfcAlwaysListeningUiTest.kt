@@ -339,6 +339,43 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_switchedInWhilePlaying_tagRemoved_stopsPlayback() {
+        // Mode-switch seed: tag A is playing in CONTINUOUS mode (its single
+        // activating read was already delivered); the user switches to
+        // PROXIMITY. reconfigureNfc resets the presence record and must
+        // re-seed it from the carried active uid, otherwise the watcher has
+        // no record to time out and A's removal is never detected -
+        // proximity behaves like continuous. Accepted tradeoff: a still-
+        // present stationary tag, already reported once, stops after the
+        // timeout ("no further reports" is the only removal signal).
+        setupDb(mode = PlayMode.CONTINUOUS)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // Settle the state the way the started service would.
+        PlayerStateHolder.update {
+            it.copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val viewModel = viewModelOf(controller.get())
+        viewModel.setPlayMode(PlayMode.PROXIMITY)
+        idleUntil({ viewModel.playMode.value == PlayMode.PROXIMITY })
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        // A leaves range after its single report: the presence watcher,
+        // re-seeded with A on the mode switch, must derive its loss and stop.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val stop = nextServiceIntent(1_000)
+        assertNotNull(
+            "proximity mode switched in while a tag plays must stop when " +
+                "that tag leaves range",
+            stop,
+        )
+        assertEquals(PlayerService.ACTION_STOP, stop!!.action)
+    }
+
+    @Test
     fun proximityMode_unrelatedTagRead_doesNotMaskActiveTagRemoval() {
         // Presence record regression: only the ACTIVE registered tag's reads
         // refresh the presence record. Tag A (registered) is playing in

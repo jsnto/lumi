@@ -222,6 +222,16 @@ class MainActivity : ComponentActivity() {
         nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
         // Only proximity derives "tag lost" from a presence timeout.
         if (currentMode == PlayMode.PROXIMITY) {
+            // A mode switch into proximity (or a resume) resets the record;
+            // if a tag's list was already playing, carry its uid over so the
+            // watcher has something to time out on. Accepted tradeoff: a
+            // still-present stationary tag, already reported once, stops
+            // after the timeout - "no further reports" is the only removal
+            // signal under foreground dispatch.
+            viewModel.activeTagUid?.let { uid ->
+                lastSeenAt = SystemClock.elapsedRealtime()
+                lastSeenUid = uid
+            }
             presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
         }
     }
