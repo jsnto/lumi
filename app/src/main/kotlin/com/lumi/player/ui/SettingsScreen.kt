@@ -67,10 +67,8 @@ fun SettingsScreen(
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val registering by viewModel.registering.collectAsState(false)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
-    val selectedTagId by viewModel.selectedTagId.collectAsState(null)
+    val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
-
-    val effectiveSelectedId = selectedTagId ?: tags.firstOrNull()?.id
 
     var tagLabel by remember { mutableStateOf("") }
     var urlText by remember { mutableStateOf("") }
@@ -201,7 +199,8 @@ fun SettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    if (effectiveSelectedId == null) {
+                    val effectiveId = effectiveSelectedId
+                    if (effectiveId == null) {
                         Text(
                             text = "Pick a tag above.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -219,18 +218,18 @@ fun SettingsScreen(
                                 title = entry.label,
                                 trailing = {
                                     IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveSelectedId, index, -1) },
+                                        onClick = { viewModel.moveLinked(effectiveId, index, -1) },
                                         enabled = index > 0,
                                     ) {
                                         Text("↑")
                                     }
                                     IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveSelectedId, index, 1) },
+                                        onClick = { viewModel.moveLinked(effectiveId, index, 1) },
                                         enabled = index < linked.size - 1,
                                     ) {
                                         Text("↓")
                                     }
-                                    IconButton(onClick = { viewModel.removeLinked(effectiveSelectedId, entry.id) }) {
+                                    IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
                                         Icon(Icons.Default.Close, contentDescription = "Remove")
                                     }
                                 },
@@ -244,7 +243,7 @@ fun SettingsScreen(
                             ) {
                                 entries.forEach { entry ->
                                     OutlinedButton(
-                                        onClick = { viewModel.addLinked(effectiveSelectedId, entry.id) },
+                                        onClick = { viewModel.addLinked(effectiveId, entry.id) },
                                     ) {
                                         Text("+ ${entry.label}")
                                     }

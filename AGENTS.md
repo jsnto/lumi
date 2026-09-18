@@ -12,7 +12,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## Sharp edges
 
 - Proximity mode: `NfcAdapter.ReaderCallback` only reports `onTagDiscovered` (tag re-reports while the tag stays in range); "tag removed" is derived from a presence timeout in `ui/MainActivity.kt` (`PRESENCE_TIMEOUT_MS`). Don't expect an `onTagLost` callback.
-- Android 15 renamed the media foreground-service type to `mediaPlayback` (manifest + `PlayerService.startForegroundWithNotification`); the old `ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA` constant is gone from the SDK-35 stubs.
+- FGS type: the SDK-35 stubs expose only `ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` (value 0x2), so the manifest declares `android:foregroundServiceType="mediaPlayback"` and `PlayerService.startForegroundWithNotification` requests that type. Do not "fix" the manifest to a `media` spelling: `media` is not a valid flag for the SDK-35 AAPT (a dual `media | mediaPlayback` spelling fails the build).
 - Entry types are extensible: `data/EntryType.kt` (audio implemented; video/url are representable but their action is an intentional "coming soon" placeholder — see `PlayerService` COMING_SOON handling). New types should keep `fromStorage`'s fallback behavior.
 - Audio files are picked via SAF; read grants are persisted per file (`LumiViewModel.addFileEntry`). No storage permissions are used.
 

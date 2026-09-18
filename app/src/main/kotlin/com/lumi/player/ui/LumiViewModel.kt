@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -75,9 +76,14 @@ class LumiViewModel(
         _selectedTagId.value = id
     }
 
+    val effectiveSelectedTagId: StateFlow<Long?> =
+        combine(_selectedTagId, repository.observeTags()) { selected, tags ->
+            selected ?: tags.firstOrNull()?.id
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val linkedEntries: StateFlow<List<EntryEntity>> =
-        _selectedTagId.flatMapLatest { id ->
+        effectiveSelectedTagId.flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else repository.observeEntriesForTag(id)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
