@@ -11,7 +11,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Sharp edges
 
-- NFC is always listening: both play modes run `NfcAdapter` reader mode (`MainActivity.reconfigureNfc`); a tag read starts/switches playback without a tap and overrides a user pause (`PlaybackPolicy.onTagDetected(uid, paused)` → `NfcAction.Resume` → `PlayerService.ACTION_TOGGLE`).
+- NFC is always listening: both play modes run `NfcAdapter` reader mode (`MainActivity.reconfigureNfc`); a tag read starts/switches playback without a tap and overrides a user pause (`PlaybackPolicy.onTagDetected(uid, paused)` → `NfcAction.Resume` → `PlayerService.ACTION_RESUME`).
 - Proximity "tag removed" is derived, not reported: `NfcAdapter.ReaderCallback` only reports `onTagDiscovered` (tag re-reports while in range); the presence watcher (`PRESENCE_TIMEOUT_MS` in `ui/MainActivity.kt`) stops playback on absence and is posted only in proximity mode — continuous mode keeps playing after the tag leaves. Don't expect an `onTagLost` callback.
 - FGS type: the SDK-35 stubs expose only `ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` (value 0x2), so the manifest declares `android:foregroundServiceType="mediaPlayback"` and `PlayerService.startForegroundWithNotification` requests that type. Do not "fix" the manifest to a `media` spelling: `media` is not a valid flag for the SDK-35 AAPT (a dual `media | mediaPlayback` spelling fails the build).
 - Entry types are extensible: `data/EntryType.kt` (audio implemented; video/url are representable but their action is an intentional "coming soon" placeholder — see `PlayerService` COMING_SOON handling). New types should keep `fromStorage`'s fallback behavior.
