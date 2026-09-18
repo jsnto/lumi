@@ -16,6 +16,10 @@ server or account — everything is stored locally on the device.
    content list and starts playing, with a big friendly animated visual
    showing what is up.
 
+If a tag has been played before, lumi resumes where that tag left off —
+the last played position is remembered per tag, for the three most
+recently played tags.
+
 If the NFC radio is off (or the device has no NFC hardware), lumi shows a
 prompt with a shortcut to the NFC settings screen.
 
@@ -50,7 +54,8 @@ storage or the registration UI.
 ## Tech
 
 - Kotlin + Jetpack Compose (Material 3), minSdk 26, target/compile SDK 35
-- Room for the local database (tags, entries, ordered tag→entry links, settings)
+- Room for the local database (tags, entries, ordered tag→entry links,
+  settings, remembered playback positions)
 - Media3/ExoPlayer in a foreground media service for background playback
 - NFC via foreground dispatch in both play modes (passive, always-listening
   tag reads), also used while registering a tag. In proximity mode, tag
@@ -94,6 +99,7 @@ incremental build. The host needs no Android SDK or JDK at all.
 
 ## Testing NFC without a device
 
-The play-mode decision logic (`PlaybackPolicy`) and type parsing are pure and
+The play-mode decision logic (`PlaybackPolicy`), the remembered-position
+logic (`data/PlaybackPosition.kt`), and type parsing are pure and
 unit-tested. On a device or emulator with an NFC tag (or a tag emulator app),
 register the tag, link an audio file, and use the two modes.
