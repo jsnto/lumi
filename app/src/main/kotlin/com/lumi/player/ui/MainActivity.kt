@@ -44,9 +44,12 @@ import kotlinx.coroutines.launch
  *   where foreground dispatch worked.
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
- * - PROXIMITY: a tag that leaves the reader range stops being reported, so
- *   "tag lost" is derived from a short absence of reports (presence
- *   timeout), which stops playback when the tag is removed.
+ * - PROXIMITY: "tag lost" is derived, conservatively, from a short absence
+ *   of reports (presence timeout) on the active tag. Foreground dispatch may
+ *   deliver a stationary tag only once per presentation, so "no further
+ *   reports" is the only removal signal available — a held-still tag may
+ *   trigger the timeout early; verifying stop-on-removal timing on a real
+ *   device is the first on-device validation item.
  * - Tag registration: the same foreground dispatch, with the view model in
  *   capture mode, so any tag type can be registered.
  */
@@ -125,8 +128,11 @@ class MainActivity : ComponentActivity() {
 
     private var currentMode: PlayMode = PlayMode.CONTINUOUS
 
-    // Proximity-mode presence tracking. While a tag stays in range the NFC
-    // stack keeps re-reporting it; if reports stop, the tag left the reader.
+    // Proximity-mode presence tracking. Under foreground dispatch a
+    // stationary tag may be delivered only once, so the presence record is
+    // the only proxy for "still in range"; a short absence of reports is
+    // treated as removal. Only the ACTIVE tag's reads touch the record, so
+    // an unrelated tag read can never mask the active tag's removal.
     // Only proximity mode watches for tag loss; continuous keeps playing.
     private val presenceHandler = Handler(Looper.getMainLooper())
     private var lastSeenUid: String? = null
@@ -207,11 +213,13 @@ class MainActivity : ComponentActivity() {
 
     private fun handleTagDetected(uid: String) {
         if (uid.isEmpty()) return
-        // Any tag read refreshes the presence record; the presence watcher
-        // (proximity mode only) turns absence into tag-lost, and the policy
-        // ignores a lost tag that is not the active one.
-        lastSeenAt = SystemClock.elapsedRealtime()
-        lastSeenUid = uid
+        // Only the active registered tag's reads refresh the presence
+        // record; a read of any other tag must not clobber the record or
+        // mask the active tag's removal.
+        if (uid == viewModel.activeTagUid) {
+            lastSeenAt = SystemClock.elapsedRealtime()
+            lastSeenUid = uid
+        }
         viewModel.onTagDetected(uid)
     }
 
