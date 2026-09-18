@@ -258,6 +258,33 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_unrelatedTagRead_doesNotMaskActiveTagRemoval() {
+        // Presence record regression: only the ACTIVE registered tag's reads
+        // refresh the presence record. Tag A (registered) is playing in
+        // proximity mode; the user waves unregistered tag B in range, then
+        // both tags leave. Stop-on-removal must still fire on A's absence:
+        // if B's read clobbered the record, the watcher would report B lost
+        // (ignored by the policy) and A's removal would go undetected, so no
+        // stop command would ever be issued.
+        setupDb(mode = PlayMode.PROXIMITY) // tag A only; UID_B is unregistered
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // seeds the presence record (A is active)
+        sendTag(controller, UID_B) // an unrelated read: must not touch the record
+        // Both tags now leave range: no further reports arrive.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val intent = nextServiceIntent(1_000)
+        assertNotNull(
+            "an unrelated tag read must not mask the active tag's removal: " +
+                "proximity mode must stop playback after the active tag leaves range",
+            intent,
+        )
+        assertEquals(PlayerService.ACTION_STOP, intent!!.action)
+    }
+
+    @Test
     fun continuousMode_tagRemoved_keepsPlaying() {
         setupDb(mode = PlayMode.CONTINUOUS)
         PlayerStateHolder.update {

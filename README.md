@@ -52,10 +52,9 @@ storage or the registration UI.
 - Kotlin + Jetpack Compose (Material 3), minSdk 26, target/compile SDK 35
 - Room for the local database (tags, entries, ordered tag→entry links, settings)
 - Media3/ExoPlayer in a foreground media service for background playback
-- NFC via reader mode in both play modes (passive, always-listening tag
-  reads); foreground dispatch is used only while registering a tag. In
-  proximity mode, tag removal is derived from a presence timeout
-  (see `MainActivity`)
+- NFC via foreground dispatch in both play modes (passive, always-listening
+  tag reads), also used while registering a tag. In proximity mode, tag
+  removal is derived from a presence timeout (see `MainActivity`)
 
 ## Permissions
 

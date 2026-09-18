@@ -3,10 +3,11 @@
     <!--
       Techs the TECH_DISCOVERED intent filter matches. A tag tapped while the
       app is closed/starting arrives via the activity intent (handleNfcIntent)
-      instead of the always-listening reader mode, so the filter must cover
-      every tag type registration and playback may use. The filter is dead
-      without its meta-data (NfcService skips tech-discovered filters that
-      have no nfc_tech_list), which is why this array must stay in sync.
+      instead of the always-listening foreground dispatch, so the filter must
+      cover every tag type registration and playback may use. The filter is
+      dead without this meta-data (the framework skips tech-discovered
+      filters that have no nfc_tech_list), which is why this array must stay
+      in sync.
     -->
     <string-array name="nfc_tech_list">
         <item>NfcA</item>
