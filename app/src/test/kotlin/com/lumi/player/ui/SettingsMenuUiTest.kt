@@ -96,7 +96,7 @@ class SettingsMenuUiTest {
             .assertExists()
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithText("Add content").assertExists()
-        compose.onNodeWithText("Nothing here yet. Add a song, or a video or link to use later.")
+        compose.onNodeWithText("Nothing here yet. Add a song.")
             .assertExists()
         compose.onNodeWithText("Tag to content").assertExists()
         compose.onNodeWithText("Register a tag first, then link content to it.").assertExists()

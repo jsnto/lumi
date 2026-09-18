@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -56,8 +55,8 @@ import com.lumi.player.data.TagEntity
 
 /**
  * Parent-facing settings, laid out as a single scrollable menu with one
- * section per settings group: play mode, NFC tag registration, content
- * registration (audio / video / url), and tag-to-content linking.
+ * section per settings group: play mode, NFC tag registration, audio content
+ * registration, and tag-to-content linking.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,19 +75,12 @@ fun SettingsScreen(
     val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
 
-    var urlText by remember { mutableStateOf("") }
-    var showAddType by remember { mutableStateOf(false) }
-    var showAddUrl by remember { mutableStateOf(false) }
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
 
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.AUDIO) }
-
-    val videoPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.VIDEO) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -113,7 +105,7 @@ fun SettingsScreen(
         ) {
             PlayModeSection(viewModel, playMode)
             TagsSection(viewModel, tags) { deleteTag = it }
-            ContentSection(viewModel, entries, onAddContent = { showAddType = true }) {
+            ContentSection(viewModel, entries, onAddContent = { audioPicker.launch(arrayOf("audio/*")) }) {
                 deleteEntry = it
             }
             LinkSection(viewModel, tags, entries, effectiveSelectedId, linked)
@@ -138,68 +130,6 @@ fun SettingsScreen(
             uid = capturedUid ?: "",
             onDismiss = { viewModel.discardCaptured() },
             onSave = { name -> viewModel.confirmTagName(name) },
-        )
-    }
-
-    if (showAddType) {
-        AlertDialog(
-            onDismissRequest = { showAddType = false },
-            title = { Text("Add content") },
-            text = {
-                Column {
-                    Text("Audio")
-                    Text("Plays right away.", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Video")
-                    Text("Saved now, plays in a future version.", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Link / URL")
-                    Text("Saved now, opens in a future version.", style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        showAddType = false
-                        audioPicker.launch(arrayOf("audio/*"))
-                    }) { Text("Audio") }
-                    TextButton(onClick = {
-                        showAddType = false
-                        videoPicker.launch(arrayOf("video/*"))
-                    }) { Text("Video") }
-                    TextButton(onClick = {
-                        showAddType = false
-                        showAddUrl = true
-                    }) { Text("Link") }
-                }
-            },
-        )
-    }
-
-    if (showAddUrl) {
-        AlertDialog(
-            onDismissRequest = { showAddUrl = false },
-            title = { Text("Add a link") },
-            text = {
-                OutlinedTextField(
-                    value = urlText,
-                    onValueChange = { urlText = it },
-                    label = { Text("https://…") },
-                    keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.addUrlEntry(urlText)
-                    urlText = ""
-                    showAddUrl = false
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddUrl = false }) { Text("Cancel") }
-            },
         )
     }
 
@@ -296,7 +226,7 @@ private fun TagsSection(
     }
 }
 
-/** Content: register and manage audio / video / url entries. */
+/** Content: register and manage audio entries. */
 @Composable
 private fun ContentSection(
     viewModel: LumiViewModel,
@@ -312,7 +242,7 @@ private fun ContentSection(
         }
         if (entries.isEmpty()) {
             Text(
-                text = "Nothing here yet. Add a song, or a video or link to use later.",
+                text = "Nothing here yet. Add a song.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -552,6 +482,6 @@ private fun emojiFor(type: String): String = when (EntryType.fromStorage(type)) 
 private fun detailFor(type: String, payload: String): String =
     when (EntryType.fromStorage(type)) {
         EntryType.AUDIO -> "music file"
-        EntryType.VIDEO -> "video file · coming soon"
-        EntryType.URL -> "link · coming soon"
+        EntryType.VIDEO -> "video file"
+        EntryType.URL -> "link"
     }

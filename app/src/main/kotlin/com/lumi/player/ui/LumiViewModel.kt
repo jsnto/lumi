@@ -260,16 +260,7 @@ class LumiViewModel(
                 return@launch
             }
             repository.addEntry(type, displayName ?: "Untitled", uri.toString())
-            event(if (type == EntryType.AUDIO) "Song added!" else "${type.name} entry added (plays in a future version)")
-        }
-    }
-
-    fun addUrlEntry(url: String) {
-        val clean = url.trim()
-        if (clean.isEmpty()) return
-        viewModelScope.launch {
-            repository.addEntry(EntryType.URL, clean, clean)
-            event("Link added (opens in a future version)")
+            event(if (type == EntryType.AUDIO) "Song added!" else "Content added")
         }
     }
 
