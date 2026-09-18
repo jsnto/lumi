@@ -68,6 +68,22 @@ storage or the registration UI.
 The first build needs the Android SDK; set `sdk.dir` in `local.properties`
 or `ANDROID_HOME`.
 
+### Building the APK with Docker (no Android SDK on the host)
+
+The repo ships a `Dockerfile` with a pinned toolchain (JDK 17, Android
+platform 35, build-tools 35.0.0; Gradle 8.13 via the wrapper) and a wrapper
+script. All it needs on the host is a Docker daemon:
+
+```sh
+./scripts/build-apk-docker.sh   # -> dist/lumi-app-debug.apk
+```
+
+Overrides: `LUMI_DOCKER_IMAGE=<image>` (default `lumi-apk-builder:1`),
+`OUT_DIR=<dir>` (default `dist`). The first run downloads the Android SDK
+(~500 MB) into the image and the Gradle distribution via the wrapper;
+subsequent builds reuse the named `lumi-gradle-cache` volume for a fast
+incremental build. The host needs no Android SDK or JDK at all.
+
 ## Testing NFC without a device
 
 The play-mode decision logic (`PlaybackPolicy`) and type parsing are pure and

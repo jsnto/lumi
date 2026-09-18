@@ -1,0 +1,9 @@
+# Keep the host-specific and generated stuff out of the build context.
+local.properties
+.git
+dist
+app/build
+app/.cxx
+.gradle
+build
+.kotlin
