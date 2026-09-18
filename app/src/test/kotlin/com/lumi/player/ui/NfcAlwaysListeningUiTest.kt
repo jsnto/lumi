@@ -258,6 +258,124 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_freshTagPresented_thenRemoved_thenBack_stopsAndRestarts() {
+        // The bug this pins: foreground dispatch may deliver a stationary
+        // tag only once, and the activating read used to be the only one
+        // that never seeded the presence record, so the watcher had
+        // nothing to time out and proximity mode never stopped.
+        setupDb(mode = PlayMode.PROXIMITY)
+        val controller = startMainActivity()
+        // Nothing is playing yet; the tag's first delivery starts playback
+        // and must seed the presence record.
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // The tag leaves range after its single report: no further reports
+        // arrive. The presence watcher must derive tag loss and stop.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val stop = nextServiceIntent(1_000)
+        assertNotNull(
+            "proximity mode must stop when the only reported tag leaves range",
+            stop,
+        )
+        assertEquals(PlayerService.ACTION_STOP, stop!!.action)
+        // Settle the state the way the stopped service would, then bring the
+        // tag back: a fresh delivery must start playback again.
+        val service = Robolectric.buildService(
+            PlayerService::class.java,
+            Intent().setAction(PlayerService.ACTION_STOP),
+        ).create()
+        service.startCommand(0, 1)
+        assertEquals(PlaybackStatus.IDLE, PlayerStateHolder.state.value.status)
+        service.destroy()
+        sendTag(controller, UID_A)
+        val restart = nextServiceIntent()
+        assertNotNull("bringing the tag back must start playback again", restart)
+        assertEquals(PlayerService.ACTION_START, restart!!.action)
+    }
+
+    @Test
+    fun proximityMode_tagSwitched_thenRemoved_stopsPlayback() {
+        // The tag-switch seed: tag A starts playback; tag B is then presented
+        // and its read SWITCHES playback to B. B's activating read is the
+        // only report the watcher will ever see for B (a stationary tag is
+        // delivered only once), so it must seed the presence record with B.
+        // Before the seed moved to the view model's activation point this
+        // read saw the stale active uid (A) and never seeded the record, so
+        // when B left range the watcher reported A's stale loss (ignored by
+        // the policy) and playback of B's list never stopped - proximity
+        // behaved like continuous.
+        setupDb(mode = PlayMode.PROXIMITY, tagA = true, tagB = true)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        assertEquals(UID_A, start.getStringExtra(PlayerService.EXTRA_TAG_UID))
+        sendTag(controller, UID_B)
+        val switch = nextServiceIntent()
+        assertNotNull("a different registered tag must switch playback", switch)
+        assertEquals(PlayerService.ACTION_START, switch!!.action)
+        assertEquals(UID_B, switch.getStringExtra(PlayerService.EXTRA_TAG_UID))
+        // B now leaves range after its single report: no further reports
+        // arrive. The presence watcher must derive B's loss and stop.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val stop = nextServiceIntent(1_000)
+        assertNotNull(
+            "proximity mode must stop when the tag playback was switched to " +
+                "leaves range, even though its activating read is its only report",
+            stop,
+        )
+        assertEquals(PlayerService.ACTION_STOP, stop!!.action)
+        // Settle the state the way the stopped service would.
+        val service = Robolectric.buildService(
+            PlayerService::class.java,
+            Intent().setAction(PlayerService.ACTION_STOP),
+        ).create()
+        service.startCommand(0, 1)
+        assertEquals(PlaybackStatus.IDLE, PlayerStateHolder.state.value.status)
+        service.destroy()
+    }
+
+    @Test
+    fun proximityMode_switchedInWhilePlaying_tagRemoved_stopsPlayback() {
+        // Mode-switch seed: tag A is playing in CONTINUOUS mode (its single
+        // activating read was already delivered); the user switches to
+        // PROXIMITY. reconfigureNfc resets the presence record and must
+        // re-seed it from the carried active uid, otherwise the watcher has
+        // no record to time out and A's removal is never detected -
+        // proximity behaves like continuous. Accepted tradeoff: a still-
+        // present stationary tag, already reported once, stops after the
+        // timeout ("no further reports" is the only removal signal).
+        setupDb(mode = PlayMode.CONTINUOUS)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // Settle the state the way the started service would.
+        PlayerStateHolder.update {
+            it.copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val viewModel = viewModelOf(controller.get())
+        viewModel.setPlayMode(PlayMode.PROXIMITY)
+        idleUntil({ viewModel.playMode.value == PlayMode.PROXIMITY })
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        // A leaves range after its single report: the presence watcher,
+        // re-seeded with A on the mode switch, must derive its loss and stop.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val stop = nextServiceIntent(1_000)
+        assertNotNull(
+            "proximity mode switched in while a tag plays must stop when " +
+                "that tag leaves range",
+            stop,
+        )
+        assertEquals(PlayerService.ACTION_STOP, stop!!.action)
+    }
+
+    @Test
     fun proximityMode_unrelatedTagRead_doesNotMaskActiveTagRemoval() {
         // Presence record regression: only the ACTIVE registered tag's reads
         // refresh the presence record. Tag A (registered) is playing in

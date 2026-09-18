@@ -111,6 +111,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 launch {
+                    // A tag becoming active (start or switch) is the point
+                    // where its uid is observable: the policy switch happens
+                    // asynchronously inside the view model after a Room
+                    // query, so seed the presence record here rather than in
+                    // handleTagDetected. Foreground dispatch may deliver a
+                    // stationary tag only once, so the activating read can
+                    // be its only report - without this seed the watcher
+                    // would have nothing to time out and proximity mode
+                    // would never stop.
+                    viewModel.tagActivated.collectLatest { uid ->
+                        lastSeenAt = SystemClock.elapsedRealtime()
+                        lastSeenUid = uid
+                    }
+                }
+                launch {
                     PlayerStateHolder.state.collectLatest { state ->
                         if (state.status == com.lumi.player.player.PlaybackStatus.IDLE) {
                             viewModel.onPlaybackStopped()
@@ -207,15 +222,27 @@ class MainActivity : ComponentActivity() {
         nfc.enableForegroundDispatch(this, foregroundDispatchPendingIntent, null, null)
         // Only proximity derives "tag lost" from a presence timeout.
         if (currentMode == PlayMode.PROXIMITY) {
+            // A mode switch into proximity (or a resume) resets the record;
+            // if a tag's list was already playing, carry its uid over so the
+            // watcher has something to time out on. Accepted tradeoff: a
+            // still-present stationary tag, already reported once, stops
+            // after the timeout - "no further reports" is the only removal
+            // signal under foreground dispatch.
+            viewModel.activeTagUid?.let { uid ->
+                lastSeenAt = SystemClock.elapsedRealtime()
+                lastSeenUid = uid
+            }
             presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
         }
     }
 
     private fun handleTagDetected(uid: String) {
         if (uid.isEmpty()) return
-        // Only the active registered tag's reads refresh the presence
-        // record; a read of any other tag must not clobber the record or
-        // mask the active tag's removal.
+        // The presence record is seeded when a tag BECOMES active (see the
+        // viewModel.tagActivated collector) and refreshed by a re-read of
+        // the tag already playing. A read of some OTHER tag while one is
+        // playing must not touch the record, or it would mask the active
+        // tag's removal.
         if (uid == viewModel.activeTagUid) {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
