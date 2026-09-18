@@ -21,7 +21,8 @@ data class LumiTagData(val name: String, val mode: PlayMode)
  *
  * Reading is lenient (a tag with no lumi record, a malformed payload, or an
  * unknown mode all degrade to "no record" / defaults); writing is strict
- * (never write to a read-only tag or one without enough free NDEF space).
+ * (never write to a read-only tag or one whose NDEF area cannot hold the
+ * new message).
  *
  * API note: this compiles against the project's stub SDK (see AGENTS.md),
  * whose NFC surface is the classic one - [Ndef.get] instead of a
@@ -92,13 +93,15 @@ object LumiTagNdef {
     }
 
     /**
-     * Whether [tag] is NDEF formatted, writable, and has at least
-     * [payloadBytes] of free NDEF space left.
+     * Whether [tag] is NDEF formatted, writable, and whose NDEF area can
+     * hold the message for [data] (a write replaces the tag's whole NDEF
+     * message, so the full area is available).
      */
-    fun canWritePayload(tag: Tag?, payloadBytes: Int = MAX_PAYLOAD_BYTES): Boolean {
+    fun canWritePayload(tag: Tag?, data: LumiTagData): Boolean {
         val ndef = ndefOf(tag) ?: return false
+        val size = messageByteLength(toNdefMessage(data))
         return try {
-            ndef.isWritable && ndef.maxSize - currentByteLength(ndef) >= payloadBytes
+            ndef.isWritable && ndef.maxSize >= size
         } catch (e: Exception) {
             false
         }
@@ -115,7 +118,7 @@ object LumiTagNdef {
         val size = messageByteLength(message)
         if (size > MAX_PAYLOAD_BYTES) return false
         return try {
-            if (!ndef.isWritable || ndef.maxSize - currentByteLength(ndef) < size) {
+            if (!ndef.isWritable || ndef.maxSize < size) {
                 false
             } else {
                 ndef.connect()
@@ -131,12 +134,5 @@ object LumiTagNdef {
                 // Tag is already gone; nothing to clean up.
             }
         }
-    }
-
-    /** Byte size of the message currently on the tag (0 when empty). */
-    private fun currentByteLength(ndef: Ndef): Int = try {
-        ndef.getNdefMessage()?.toByteArray()?.size ?: 0
-    } catch (e: Exception) {
-        0
     }
 }

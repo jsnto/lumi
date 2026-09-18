@@ -53,6 +53,7 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 
 /**
  * Parent-facing settings, laid out as a single scrollable menu with one
@@ -410,7 +411,7 @@ private fun TagNameDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it.take(LumiTagNdef.MAX_NAME_LENGTH) },
                     label = { Text("Name (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),

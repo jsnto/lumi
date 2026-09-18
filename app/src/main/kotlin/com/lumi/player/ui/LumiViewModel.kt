@@ -25,6 +25,7 @@ import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Single view model for the whole app (front screen + settings). It owns the
@@ -251,8 +253,18 @@ class LumiViewModel(
     internal fun capture(uid: String, tag: Tag? = null) {
         _capturedUid.value = uid
         capturedTag = tag
-        _capturedTagData.value = LumiTagNdef.readFromTag(tag)
-        _capturedTagWritable.value = LumiTagNdef.canWritePayload(tag)
+        if (tag == null) {
+            _capturedTagData.value = null
+            _capturedTagWritable.value = false
+            return
+        }
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) { LumiTagNdef.readFromTag(tag) }
+            _capturedTagData.value = data
+            _capturedTagWritable.value = withContext(Dispatchers.IO) {
+                LumiTagNdef.canWritePayload(tag, data ?: LumiTagData(name = "", mode = playMode.value))
+            }
+        }
     }
 
     /** Test seam: capture with explicit payload/writability (no live tag). */
@@ -289,8 +301,11 @@ class LumiViewModel(
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
             if (saved != null) _selectedTagId.value = saved.id
             if (writeToTag) {
+                val written = withContext(Dispatchers.IO) {
+                    LumiTagNdef.write(tag, LumiTagData(name, mode))
+                }
                 event(
-                    if (LumiTagNdef.write(tag, LumiTagData(name, mode))) {
+                    if (written) {
                         "Name written to the tag."
                     } else {
                         "Couldn't write to the tag - keep it on the phone and try again."

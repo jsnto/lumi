@@ -95,7 +95,7 @@ class LumiTagNdefTest {
     @Test
     fun tagAccessors_withoutAnNdefTag_areSafe() {
         assertNull(LumiTagNdef.readFromTag(null))
-        assertFalse(LumiTagNdef.canWritePayload(null))
+        assertFalse(LumiTagNdef.canWritePayload(null, data))
         assertFalse(LumiTagNdef.write(null, data))
     }
 }
