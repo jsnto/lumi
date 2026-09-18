@@ -8,6 +8,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
+import com.lumi.player.data.TagPositionEntity
+import com.lumi.player.data.fingerprintOf
+import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
@@ -221,6 +224,67 @@ class NfcAlwaysListeningUiTest {
             "reading a paused tag must override the pause with a resume, not restart",
             PlayerService.ACTION_RESUME,
             intent!!.action,
+        )
+    }
+
+    // ---- remembered-position restore wiring ----
+
+    /** The tag's specs exactly as [LumiViewModel] builds them for the service. */
+    private fun specsForUid(uid: String): List<EntrySpec> = runBlocking {
+        val tag = app().repository.tagByUid(uid)!!
+        app().repository.entriesForTag(tag.id).map {
+            EntrySpec(type = it.type, label = it.label, payload = it.payload)
+        }
+    }
+
+    private fun rememberPosition(uid: String, fingerprint: String, ms: Long = 42_000L) = runBlocking {
+        app().positionStore.remember(
+            TagPositionEntity(
+                tagUid = uid,
+                positionMs = ms,
+                entryIndex = 0,
+                queueFingerprint = fingerprint,
+                lastPlayedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    @Test
+    fun mainPage_tagWithSavedPosition_startsServiceAtTheRememberedOffset() {
+        setupDb()
+        rememberPosition(UID_A, fingerprintOf(specsForUid(UID_A)))
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val intent = nextServiceIntent()
+        assertNotNull("a tag read must start the player service", intent)
+        assertEquals(PlayerService.ACTION_START, intent!!.action)
+        assertEquals(
+            "a position saved against the same list must be passed as the start entry",
+            0,
+            intent.getIntExtra(PlayerService.EXTRA_START_ENTRY_INDEX, -1),
+        )
+        assertEquals(
+            "the remembered offset must be passed to the service so it resumes there",
+            42_000L,
+            intent.getLongExtra(PlayerService.EXTRA_START_POSITION_MS, -1L),
+        )
+    }
+
+    @Test
+    fun mainPage_tagWithSavedPositionForAChangedList_startsFresh() {
+        // Adversarial: the position row exists but was saved against a
+        // different linked list (a parent swapped the file) - the service
+        // must be told to start fresh, not seek into the wrong place.
+        setupDb()
+        rememberPosition(UID_A, fingerprint = "stale-fingerprint")
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val intent = nextServiceIntent()
+        assertNotNull("a tag read must start the player service", intent)
+        assertEquals(PlayerService.ACTION_START, intent!!.action)
+        assertFalse(
+            "a saved position for a changed list must not resume; start fresh",
+            intent.hasExtra(PlayerService.EXTRA_START_POSITION_MS),
         )
     }
 

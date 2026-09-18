@@ -14,8 +14,17 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.media3.common.C
+import com.lumi.player.LumiApp
 import com.lumi.player.R
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.TagPositionEntity
+import com.lumi.player.data.fingerprintOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -31,19 +40,35 @@ import androidx.media3.exoplayer.ExoPlayer
  */
 class PlayerService : Service(), Player.Listener {
 
+    /** Saves the active tag's position while actively playing. */
+    private class PositionSaver(private val main: Handler, private val service: PlayerService) : Runnable {
+        override fun run() {
+            service.saveCurrentPosition()
+            if (service.shouldKeepSavingPositions()) {
+                main.postDelayed(this, POSITION_SAVE_INTERVAL_MS)
+            }
+        }
+    }
+
     private var player: ExoPlayer? = null
     private var queue: List<EntrySpec> = emptyList()
     private var position: Int = 0
     /** Consecutive load/playback errors; guards against looping on a bad file. */
     private var consecutiveErrors: Int = 0
     private var comingSoon: Boolean = false
+    /** Remembered position to seek to once the first media item is ready. */
+    private var pendingSeekMs: Long = 0
+    private var scope: CoroutineScope? = null
     private val main = Handler(Looper.getMainLooper())
+    /** Saves the active tag's position while actively playing. */
+    private val positionSaver = PositionSaver(main, this)
     private val comingSoonTicker = Runnable { advance() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         ensureChannel()
     }
 
@@ -57,7 +82,9 @@ class PlayerService : Service(), Player.Listener {
                 if (entries.isEmpty()) {
                     stopPlayback()
                 } else {
-                    startQueue(entries, uid)
+                    val startIndex = intent.getIntExtra(EXTRA_START_ENTRY_INDEX, 0).coerceAtLeast(0)
+                    val startSeekMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L).coerceAtLeast(0)
+                    startQueue(entries, uid, startIndex, startSeekMs)
                 }
             }
 
@@ -80,6 +107,8 @@ class PlayerService : Service(), Player.Listener {
 
     override fun onDestroy() {
         main.removeCallbacks(comingSoonTicker)
+        main.removeCallbacks(positionSaver)
+        scope?.cancel()
         player?.release()
         player = null
         super.onDestroy()
@@ -87,9 +116,15 @@ class PlayerService : Service(), Player.Listener {
 
     // ---- queue handling ----
 
-    private fun startQueue(entries: List<EntrySpec>, uid: String?) {
+    private fun startQueue(
+        entries: List<EntrySpec>,
+        uid: String?,
+        startIndex: Int,
+        startSeekMs: Long,
+    ) {
         queue = entries
-        position = 0
+        position = if (entries.isEmpty()) 0 else startIndex.coerceIn(0, entries.lastIndex)
+        pendingSeekMs = startSeekMs
         consecutiveErrors = 0
         startForegroundWithNotification()
         PlayerStateHolder.update { it.copy(activeTagUid = uid) }
@@ -122,6 +157,7 @@ class PlayerService : Service(), Player.Listener {
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
                 p.playWhenReady = true
                 p.prepare()
+                armPositionSaver()
             }
 
             // VIDEO and URL: representable in v1, action deferred.
@@ -156,7 +192,11 @@ class PlayerService : Service(), Player.Listener {
             }
 
             PlaybackStatus.IDLE -> Unit
-            else -> p.playWhenReady = !p.playWhenReady
+            else -> {
+                val play = !p.playWhenReady
+                p.playWhenReady = play
+                if (!play) saveCurrentPosition()
+            }
         }
     }
 
@@ -168,6 +208,9 @@ class PlayerService : Service(), Player.Listener {
 
     private fun stopPlayback() {
         main.removeCallbacks(comingSoonTicker)
+        main.removeCallbacks(positionSaver)
+        pendingSeekMs = 0
+        saveCurrentPosition()
         comingSoon = false
         player?.pause()
         player?.clearMediaItems()
@@ -183,6 +226,43 @@ class PlayerService : Service(), Player.Listener {
         stopSelf()
     }
 
+    // ---- position remembering ----
+
+    private fun shouldKeepSavingPositions(): Boolean {
+        val p = player
+        return queue.isNotEmpty() && p != null && p.isPlaying
+    }
+
+    private fun armPositionSaver() {
+        main.removeCallbacks(positionSaver)
+        main.post(positionSaver)
+    }
+
+    /**
+     * Persists the current position of the active tag. A no-op unless an
+     * audio entry is loaded and ready; the write happens off the way of
+     * playback on the service's scope.
+     */
+    private fun saveCurrentPosition() {
+        val uid = PlayerStateHolder.state.value.activeTagUid ?: return
+        val p = player ?: return
+        if (p.playbackState != Player.STATE_READY) return
+        val spec = queue.getOrNull(position) ?: return
+        if (EntryType.fromStorage(spec.type) != EntryType.AUDIO) return
+        val store = (applicationContext as? LumiApp)?.positionStore ?: return
+        scope?.launch {
+            store.remember(
+                TagPositionEntity(
+                    tagUid = uid,
+                    positionMs = p.currentPosition.coerceAtLeast(0),
+                    entryIndex = position,
+                    queueFingerprint = fingerprintOf(queue),
+                    lastPlayedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+    }
+
     // ---- Player.Listener ----
 
     override fun onPlaybackStateChanged(state: Int) {
@@ -190,6 +270,7 @@ class PlayerService : Service(), Player.Listener {
         when (state) {
             Player.STATE_ENDED -> advance()
             else -> {
+                applyPendingSeek(p)
                 val status = when {
                     comingSoon -> PlaybackStatus.COMING_SOON
                     p.isPlaying -> PlaybackStatus.PLAYING
@@ -199,6 +280,7 @@ class PlayerService : Service(), Player.Listener {
                     else -> PlaybackStatus.PLAYING
                 }
                 PlayerStateHolder.update { it.copy(status = status) }
+                if (status == PlaybackStatus.PLAYING) armPositionSaver()
                 refreshNotification()
             }
         }
@@ -210,8 +292,24 @@ class PlayerService : Service(), Player.Listener {
             PlayerStateHolder.update {
                 it.copy(status = if (playWhenReady) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED)
             }
+            if (playWhenReady) armPositionSaver()
             refreshNotification()
         }
+    }
+
+    /** Applies the remembered position once the first item is ready. */
+    private fun applyPendingSeek(p: ExoPlayer) {
+        val seekMs = pendingSeekMs
+        if (seekMs <= 0) return
+        pendingSeekMs = 0
+        if (p.mediaItemCount == 0) return
+        // A remembered position only applies when the entry is long enough
+        // for it; otherwise start at the beginning.
+        val target = when (val duration = p.duration) {
+            C.TIME_UNSET -> seekMs
+            else -> if (seekMs < duration) seekMs else 0L
+        }
+        p.seekTo(target)
     }
 
     override fun onPlayerError(error: PlaybackException) {
@@ -286,6 +384,7 @@ class PlayerService : Service(), Player.Listener {
         private const val CHANNEL_ID = "lumi_playback"
         private const val NOTIFICATION_ID = 1
         private const val COMING_SOON_DELAY_MS = 3_000L
+        private const val POSITION_SAVE_INTERVAL_MS = 5_000L
 
         const val ACTION_START = "com.lumi.player.action.START"
         const val ACTION_TOGGLE = "com.lumi.player.action.TOGGLE"
@@ -294,5 +393,10 @@ class PlayerService : Service(), Player.Listener {
         const val ACTION_STOP = "com.lumi.player.action.STOP"
         const val EXTRA_ENTRIES = "com.lumi.player.extra.ENTRIES"
         const val EXTRA_TAG_UID = "com.lumi.player.extra.TAG_UID"
+
+        /** Entry index to start at when restoring a remembered position. */
+        const val EXTRA_START_ENTRY_INDEX = "com.lumi.player.extra.START_ENTRY_INDEX"
+        /** Offset in ms to seek to within that entry. */
+        const val EXTRA_START_POSITION_MS = "com.lumi.player.extra.START_POSITION_MS"
     }
 }

@@ -70,4 +70,18 @@ interface LumiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSetting(setting: SettingsEntity)
+
+    // ---- remembered tag playback positions ----
+
+    @Query("SELECT * FROM tag_positions WHERE tag_uid = :uid LIMIT 1")
+    suspend fun positionByUid(uid: String): TagPositionEntity?
+
+    @Query("SELECT * FROM tag_positions ORDER BY last_played_at ASC, tag_uid ASC")
+    suspend fun allPositions(): List<TagPositionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPosition(position: TagPositionEntity)
+
+    @Query("DELETE FROM tag_positions WHERE tag_uid = :uid")
+    suspend fun deletePosition(uid: String)
 }

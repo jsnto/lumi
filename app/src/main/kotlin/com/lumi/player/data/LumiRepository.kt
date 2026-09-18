@@ -86,6 +86,11 @@ class LumiRepository(private val db: LumiDatabase) {
         }
     }
 
+    // ---- remembered playback positions ----
+
+    /** The saved last-played position row for [uid], if any. */
+    suspend fun positionFor(uid: String): TagPositionEntity? = dao.positionByUid(uid.trim())
+
     // ---- settings ----
 
     suspend fun setPlayMode(mode: PlayMode) {

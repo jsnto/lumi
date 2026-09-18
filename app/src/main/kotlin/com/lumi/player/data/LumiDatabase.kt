@@ -6,8 +6,14 @@ import androidx.room.RoomDatabase
 import android.content.Context
 
 @Database(
-    entities = [TagEntity::class, EntryEntity::class, TagLinkEntity::class, SettingsEntity::class],
-    version = 1,
+    entities = [
+        TagEntity::class,
+        EntryEntity::class,
+        TagLinkEntity::class,
+        SettingsEntity::class,
+        TagPositionEntity::class,
+    ],
+    version = 2,
     exportSchema = false,
 )
 abstract class LumiDatabase : RoomDatabase() {
@@ -19,6 +25,9 @@ abstract class LumiDatabase : RoomDatabase() {
 
         fun create(context: Context): LumiDatabase =
             Room.databaseBuilder(context, LumiDatabase::class.java, NAME)
+                // Pre-release: the remembered-positions table (v2) has nothing
+                // worth migrating.
+                .fallbackToDestructiveMigration()
                 .build()
     }
 }

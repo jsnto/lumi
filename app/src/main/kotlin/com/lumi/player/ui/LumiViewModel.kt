@@ -11,8 +11,11 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.PlayMode
+import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.LumiRepository
+import com.lumi.player.data.decideRestore
+import com.lumi.player.data.fingerprintOf
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
@@ -170,11 +173,23 @@ class LumiViewModel(
 
     // ---- player commands ----
 
-    private fun startPlayer(specs: List<EntrySpec>, uid: String) {
+    /**
+     * Starts the service to play [specs] for tag [uid]. When the tag has a
+     * remembered position saved against this exact linked list, it is passed
+     * to the service so playback resumes where it stopped.
+     */
+    private suspend fun startPlayer(specs: List<EntrySpec>, uid: String) {
         val intent = Intent(context, PlayerService::class.java).apply {
             action = PlayerService.ACTION_START
             putExtra(PlayerService.EXTRA_ENTRIES, ArrayList(specs))
             putExtra(PlayerService.EXTRA_TAG_UID, uid)
+            when (val restore = decideRestore(repository.positionFor(uid), fingerprintOf(specs), specs.size)) {
+                is PositionRestore.StartFresh -> Unit
+                is PositionRestore.SeekTo -> {
+                    putExtra(PlayerService.EXTRA_START_ENTRY_INDEX, restore.entryIndex)
+                    putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
+                }
+            }
         }
         ContextCompat.startForegroundService(context, intent)
     }
