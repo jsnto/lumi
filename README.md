@@ -11,9 +11,10 @@ server or account — everything is stored locally on the device.
    the tag), register content (pick an audio file from the device, or add a
    video/link entry for future use), and link a tag to one or more entries in
    the order you want them played.
-2. On the **front screen**, tap a registered tag against the phone. lumi
-   looks up the tag's content list and starts playing, with a big friendly
-   animated visual showing what is up.
+2. On the **front screen**, hold a registered tag against the phone (no tap
+   needed — the NFC reader is always listening). lumi looks up the tag's
+   content list and starts playing, with a big friendly animated visual
+   showing what is up.
 
 If the NFC radio is off (or the device has no NFC hardware), lumi shows a
 prompt with a shortcut to the NFC settings screen.
@@ -22,11 +23,15 @@ prompt with a shortcut to the NFC settings screen.
 
 Both modes are selectable in Settings and are remembered on the device.
 
-- **Continuous** — tapping a tag starts playback and it keeps going (and
-  loops the tag's list) until you tap a *different* tag, which switches to
-  that tag's list. Re-tapping the same tag does not restart.
+- **Continuous** — reading a tag starts playback and it keeps going (and
+  loops the tag's list, even after the tag is removed) until you read a
+  *different* tag, which switches to that tag's list. Re-reading the same
+  tag does not restart.
 - **Proximity** — playback continues only while the tag stays in the phone's
   NFC range; remove the tag and playback stops.
+
+In both modes, re-reading the tag that is playing while you have paused
+resumes playback — an NFC read overrides play/pause.
 
 ## Content types
 
@@ -47,9 +52,10 @@ storage or the registration UI.
 - Kotlin + Jetpack Compose (Material 3), minSdk 26, target/compile SDK 35
 - Room for the local database (tags, entries, ordered tag→entry links, settings)
 - Media3/ExoPlayer in a foreground media service for background playback
-- NFC via foreground dispatch (continuous mode, tag registration) and reader
-  mode (proximity mode, where tag removal is derived from a presence timeout;
-  see `MainActivity`)
+- NFC via reader mode in both play modes (passive, always-listening tag
+  reads); foreground dispatch is used only while registering a tag. In
+  proximity mode, tag removal is derived from a presence timeout
+  (see `MainActivity`)
 
 ## Permissions
 

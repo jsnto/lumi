@@ -1,0 +1,9 @@
+# Per-repo no-mistakes overrides.
+
+# Pin the deterministic test gate to the project's canonical unit-test suite.
+# The toolchain lives in /home/jasonto/.lumi-dev (no system Java or Android
+# SDK; see AGENTS.md), so the environment is pinned explicitly. Without this,
+# the agent-driven test step re-derives the command each run and has timed
+# out authoring extra Robolectric coverage from scratch.
+commands:
+  test: 'sh -c "JAVA_HOME=/home/jasonto/.lumi-dev/jdk ANDROID_HOME=/home/jasonto/.lumi-dev/android-sdk ./gradlew testDebugUnitTest"'

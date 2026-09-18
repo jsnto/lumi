@@ -7,7 +7,10 @@ sealed interface NfcAction {
     /** Start (or switch to) playback of the tag's content list. */
     data object StartPlayback : NfcAction
 
-    /** Do nothing (e.g. re-tap of the tag already playing). */
+    /** Resume the paused list that is already playing. */
+    data object Resume : NfcAction
+
+    /** Do nothing (e.g. re-read of the tag already playing). */
     data object Ignore : NfcAction
 
     /** Stop playback (proximity mode: the tag left the reader range). */
@@ -18,10 +21,14 @@ sealed interface NfcAction {
  * Pure decision logic for the two play modes, decoupled from Android so it
  * can be unit tested.
  *
- * CONTINUOUS: a tag tap starts/switches playback; the tag is "active" until a
- * different tag is tapped. Re-tapping the active tag is ignored.
- * PROXIMITY: a detected tag starts playback and stays active only while it is
- * detected; losing the active tag stops playback.
+ * Both modes keep NFC always listening: a registered tag read starts or
+ * switches playback, and a re-read of the tag already playing resumes it
+ * when it is paused (NFC reading overrides play/pause).
+ *
+ * CONTINUOUS: playback keeps going after the tag is removed; the tag stays
+ * "active" until a different tag is read. Tag loss is ignored.
+ * PROXIMITY: a detected tag starts playback and stays active only while it
+ * is detected; losing the active tag stops playback.
  */
 class PlaybackPolicy(private val mode: PlayMode) {
 
@@ -29,16 +36,21 @@ class PlaybackPolicy(private val mode: PlayMode) {
     var activeTagUid: String? = null
         private set
 
-    fun onTagDetected(uid: String): NfcAction =
+    /**
+     * A registered tag was read. [paused] reports whether the active tag's
+     * list is currently paused so a re-read of it can resume it (reading
+     * overrides the user's pause).
+     */
+    fun onTagDetected(uid: String, paused: Boolean = false): NfcAction =
         if (uid == activeTagUid) {
-            NfcAction.Ignore
+            if (paused) NfcAction.Resume else NfcAction.Ignore
         } else {
             activeTagUid = uid
             NfcAction.StartPlayback
         }
 
     fun onTagLost(uid: String): NfcAction =
-        if (uid == activeTagUid) {
+        if (mode == PlayMode.PROXIMITY && uid == activeTagUid) {
             activeTagUid = null
             NfcAction.StopPlayback
         } else {
