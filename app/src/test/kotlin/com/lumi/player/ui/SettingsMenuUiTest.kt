@@ -3,6 +3,7 @@ package com.lumi.player.ui
 import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -21,9 +22,10 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * Behavioral tests for the tabbed parent settings screen: the four tabs are
- * rendered, switching tabs shows only that tab's section, and the link tab
- * lays out every tag chip and every add-content button (no clipped lists).
+ * Behavioral tests for the parent settings menu: all four settings sections
+ * (play mode, NFC tags, content, tag-to-content linking) live on one
+ * scrollable screen with no tab navigation, and the link section lays out
+ * every tag chip and every add-content button (no clipped lists).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -32,7 +34,7 @@ import org.robolectric.shadows.ShadowLooper
     shadows = [ShadowNfcAdapterForTest::class],
 )
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class SettingsTabsUiTest {
+class SettingsMenuUiTest {
 
     @get:Rule
     val compose = createEmptyComposeRule()
@@ -77,47 +79,31 @@ class SettingsTabsUiTest {
     }
 
     @Test
-    fun settingsShowFourTabsAndSwitchContent() {
+    fun settingsShowAllSectionsOnOneScrollableMenu() {
         openSettings()
 
-        // All four tabs are present.
-        compose.onNodeWithText("Play mode").assertExists()
-        compose.onNodeWithText("Tags").assertExists()
-        compose.onNodeWithText("Content").assertExists()
-        compose.onNodeWithText("Link").assertExists()
-
-        // The Link tab is selected by default and shows only its section.
-        compose.onNodeWithText("Tag to content").assertIsDisplayed()
-        compose.onNodeWithText("Register a tag first, then link content to it.")
-            .assertIsDisplayed()
-        compose.onNodeWithText("Register a tag").assertDoesNotExist()
-
-        // Tags tab.
-        compose.onNodeWithText("Tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Register a tag").assertIsDisplayed()
-        compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
-            .assertIsDisplayed()
-        compose.onNodeWithText("Tag to content").assertDoesNotExist()
-
-        // Content tab.
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Add content").assertIsDisplayed()
-        compose.onNodeWithText("Nothing here yet. Add a song, or a video or link to use later.")
-            .assertIsDisplayed()
-        compose.onNodeWithText("Register a tag").assertDoesNotExist()
-
-        // Play mode tab.
-        compose.onNodeWithText("Play mode").performClick()
-        compose.waitForIdle()
+        // The leading section is fully visible without any tab switching.
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("Continuous").assertIsDisplayed()
         compose.onNodeWithText("Proximity").assertIsDisplayed()
-        compose.onNodeWithText("Tag to content").assertDoesNotExist()
+
+        // The other sections sit below it on the same screen: everything is
+        // laid out at once. On the small test screen later sections may sit
+        // outside the viewport, so existence is the assertion for those.
+        compose.onNodeWithText("NFC tags").assertExists()
+        compose.onNodeWithText("Register a tag").assertExists()
+        compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
+            .assertExists()
+        compose.onNodeWithText("Content").assertExists()
+        compose.onNodeWithText("Add content").assertExists()
+        compose.onNodeWithText("Nothing here yet. Add a song, or a video or link to use later.")
+            .assertExists()
+        compose.onNodeWithText("Tag to content").assertExists()
+        compose.onNodeWithText("Register a tag first, then link content to it.").assertExists()
     }
 
     @Test
-    fun linkTabLaysOutEveryTagAndEveryEntry() {
+    fun linkSectionLaysOutEveryTagAndEveryEntry() {
         val tags = listOf(
             "Bunny", "Fox", "Owl", "Bear", "Whale", "Panda", "Koala", "Otter",
         )
@@ -129,17 +115,20 @@ class SettingsTabsUiTest {
 
         // Every tag chip and every content button is *laid out* in the
         // (scrollable) row / editor - none are clipped away by the layout.
-        // On the small test screen later items sit outside the viewport, so
-        // existence is the assertion; the leading items must also be visible.
-        compose.onNodeWithText("Bunny").assertIsDisplayed()
-        tags.forEach { tag -> compose.onNodeWithText(tag).assertExists() }
-        compose.onNodeWithText("Add to this tag:").assertIsDisplayed()
+        // The link section sits at the bottom of the settings menu, so on
+        // the small test screen its items may be outside the viewport:
+        // existence is the assertion, and the leading section must still be
+        // visible. Tag names appear in both the tags and the link section,
+        // so at-least-one is the multiplicity assertion.
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        tags.forEach { tag -> check(compose.onAllNodesWithText(tag).fetchSemanticsNodes().isNotEmpty()) { "tag '$tag' not laid out" } }
+        compose.onNodeWithText("Add to this tag:").assertExists()
         entries.forEach { label -> compose.onNodeWithText("+ $label").assertExists() }
         compose.waitForIdle()
         // Sanity: first and last tag chip and the last content button coexist
-        // on the Link tab.
-        compose.onNodeWithText("Bunny").assertExists()
-        compose.onNodeWithText("Otter").assertExists()
+        // on the settings menu.
+        check(compose.onAllNodesWithText("Bunny").fetchSemanticsNodes().isNotEmpty())
+        check(compose.onAllNodesWithText("Otter").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("+ Twinkle").assertExists()
         compose.onNodeWithText("+ Gentle Waves").assertExists()
     }
