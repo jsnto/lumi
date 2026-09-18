@@ -523,8 +523,8 @@ private fun ModeRow(
 private fun SettingRow(
     leading: String,
     title: String,
-    detail: String? = null,
     modifier: Modifier = Modifier,
+    detail: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
