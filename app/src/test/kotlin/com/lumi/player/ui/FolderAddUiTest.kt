@@ -203,6 +203,29 @@ class FolderAddUiTest {
     }
 
     @Test
+    fun rePickingTheSameFileThroughTheFilePickerAddsNoDuplicateRow() {
+        val viewModel = openContentPane()
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        val fileUri = Uri.parse("content://docs/document/audio:100")
+        viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "Song added!" } })
+
+        // Picking the very same file again must not create a second row.
+        viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "That song is already in your content list." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the file appears once, not twice, after the second pick",
+            listOf("song-a.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
     fun addFolderWithoutSupportedAudioAddsNothing() {
         val viewModel = openContentPane()
         viewModel.folderChildren = { folderUri ->
