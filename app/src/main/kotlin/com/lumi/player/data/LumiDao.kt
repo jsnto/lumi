@@ -62,8 +62,6 @@ interface LumiDao {
     @Insert
     suspend fun insertFolder(folder: FolderEntity): Long
 
-    @Delete
-    suspend fun deleteFolder(folder: FolderEntity)
 
     /** Every stored entry's payload, so a rescan can skip already-stored files. */
     @Query("SELECT payload FROM entries")

@@ -195,7 +195,6 @@ fun SettingsScreen(
             },
             onAddFolder = { folderPicker.launch(null) },
             onRescanFolder = { viewModel.rescanFolder(it) },
-            onFolderRemoved = { viewModel.removeFolder(it) },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.Link -> LinkPane(
@@ -560,7 +559,6 @@ private fun ContentPane(
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
     onRescanFolder: (FolderEntity) -> Unit,
-    onFolderRemoved: (FolderEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -619,9 +617,6 @@ private fun ContentPane(
                                 Icon(Icons.Default.Refresh, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Rescan")
-                            }
-                            IconButton(onClick = { onFolderRemoved(folder) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Remove folder")
                             }
                         },
                     )

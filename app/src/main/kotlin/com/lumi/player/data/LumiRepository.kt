@@ -114,7 +114,6 @@ class LumiRepository(private val db: LumiDatabase) {
 
     fun observeFolders(): Flow<List<FolderEntity>> = dao.observeFolders()
 
-    suspend fun deleteFolder(folder: FolderEntity) = dao.deleteFolder(folder)
 
     /** The set of every stored entry's payload (content uris). */
     suspend fun storedEntryPayloads(): Set<String> = dao.allEntryPayloads().toSet()

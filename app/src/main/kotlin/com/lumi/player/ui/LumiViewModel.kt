@@ -451,7 +451,9 @@ class LumiViewModel(
         viewModelScope.launch {
             if (!persistReadGrant(treeUri)) return@launch
             // Remember the folder so it can be rescanned later for new songs.
-            repository.rememberFolder(treeUri.toString(), folderDisplayName(treeUri))
+            // The label query is a ContentResolver read, so keep it off the main thread.
+            val label = withContext(Dispatchers.IO) { folderDisplayName(treeUri) }
+            repository.rememberFolder(treeUri.toString(), label)
             val scanned = withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
             if (scanned.isEmpty()) {
                 event("No songs found in that folder.")
@@ -497,11 +499,6 @@ class LumiViewModel(
                 },
             )
         }
-    }
-
-    /** Drops a folder from the rescan list without touching its songs. */
-    fun removeFolder(folder: FolderEntity) {
-        viewModelScope.launch { repository.deleteFolder(folder) }
     }
 
     /** The tree uri's display name (the folder's name), or the uri itself. */
