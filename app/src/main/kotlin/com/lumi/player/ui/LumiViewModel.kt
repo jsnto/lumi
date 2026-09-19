@@ -3,6 +3,7 @@ package com.lumi.player.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.nfc.Tag
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -16,12 +17,15 @@ import com.lumi.player.data.TagEntity
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
+import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +38,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Single view model for the whole app (front screen + settings). It owns the
@@ -66,6 +71,21 @@ class LumiViewModel(
 
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
+
+    /** The payload the captured tag carried (name + mode), if it had one. */
+    private val _capturedTagData = MutableStateFlow<LumiTagData?>(null)
+    val capturedTagData: StateFlow<LumiTagData?> = _capturedTagData.asStateFlow()
+
+    /** Whether the captured tag is writable and fits the tag payload. */
+    private val _capturedTagWritable = MutableStateFlow(false)
+    val capturedTagWritable: StateFlow<Boolean> = _capturedTagWritable.asStateFlow()
+
+    // The raw NFC tag of the last registration capture, kept so the payload
+    // can be written to it after the user confirms the form. Writing must
+    // happen while the app is in the foreground and the tag still in range
+    // (the Android 10+ NFC write constraint); a tag that left range simply
+    // fails the write and the tag is still saved.
+    private var capturedTag: Tag? = null
 
     // ---- transient UI events (toasts/snackbars) ----
 
@@ -124,12 +144,14 @@ class LumiViewModel(
     /**
      * A tag was detected (reader-mode read in either play mode, a tap
      * delivered by intent on cold start, or a registration capture).
+     * [tag] is the raw NFC tag; during registration it is kept (for a
+     * later write) and its lumi payload read for form prefill.
      */
-    fun onTagDetected(uid: String) {
+    fun onTagDetected(uid: String, tag: Tag? = null) {
         if (_registering.value) {
             // We were waiting to register a tag: capture it.
-            _capturedUid.value = uid
             _registering.value = false
+            capture(uid, tag)
             return
         }
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
@@ -223,17 +245,87 @@ class LumiViewModel(
         _registering.value = false
     }
 
-    fun discardCaptured() {
-        _capturedUid.value = null
+    /**
+     * Records a tag captured during a registration session, reading its
+     * lumi payload (for form prefill) and its writability (for the optional
+     * "write to tag" step).
+     */
+    internal fun capture(uid: String, tag: Tag? = null) {
+        _capturedUid.value = uid
+        capturedTag = tag
+        if (tag == null) {
+            _capturedTagData.value = null
+            _capturedTagWritable.value = false
+            return
+        }
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) { tagReader(tag) }
+            if (_capturedUid.value != uid) return@launch
+            _capturedTagData.value = data
+            val writable = withContext(Dispatchers.IO) {
+                LumiTagNdef.canWritePayload(tag, data ?: LumiTagData(name = "", mode = playMode.value))
+            }
+            if (_capturedUid.value != uid) return@launch
+            _capturedTagWritable.value = writable
+        }
     }
 
-    fun confirmTagName(name: String) {
-        val uid = _capturedUid.value ?: return
+    /** Test seam: capture with explicit payload/writability (no live tag). */
+    internal fun captureForTest(uid: String, data: LumiTagData?, writable: Boolean) {
+        _capturedUid.value = uid
+        capturedTag = null
+        _capturedTagData.value = data
+        _capturedTagWritable.value = writable
+    }
+
+    /** Test seam: the physical tag write, replaced in unit tests. */
+    internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean = { tag, data ->
+        LumiTagNdef.write(tag, data)
+    }
+
+    /** Test seam: the physical tag payload read, replaced in unit tests. */
+    internal var tagReader: (Tag?) -> LumiTagData? = { tag ->
+        LumiTagNdef.readFromTag(tag)
+    }
+
+    fun discardCaptured() {
         _capturedUid.value = null
+        _capturedTagData.value = null
+        _capturedTagWritable.value = false
+        capturedTag = null
+    }
+
+    /**
+     * Saves the captured tag under [name] and - when [writeToTag] and the
+     * tag is still reachable - writes the name + mode back to the tag so
+     * re-registering it later prefills the form. The mode only records what
+     * the tag was registered with (and prefills the form on re-read); it
+     * does NOT change the app's play mode. When the tag is already
+     * registered and the write lands, the stored record's name is updated
+     * to follow the written tag payload.
+     */
+    fun confirmTagName(name: String, mode: PlayMode, writeToTag: Boolean) {
+        val uid = _capturedUid.value ?: return
+        val tag = capturedTag
+        _capturedUid.value = null
+        _capturedTagData.value = null
+        _capturedTagWritable.value = false
+        capturedTag = null
         viewModelScope.launch {
             val saved = repository.addTag(uid, name)
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
             if (saved != null) _selectedTagId.value = saved.id
+            if (writeToTag) {
+                val written = withContext(Dispatchers.IO) {
+                    tagWriter(tag, LumiTagData(name, mode))
+                }
+                if (written) {
+                    if (saved == null) repository.renameTag(uid, name)
+                    event("Name written to the tag.")
+                } else {
+                    event("Couldn't write to the tag - keep it on the phone and try again.")
+                }
+            }
         }
     }
 

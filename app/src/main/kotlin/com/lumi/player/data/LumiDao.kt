@@ -22,6 +22,9 @@ interface LumiDao {
     @Insert
     suspend fun insertTag(tag: TagEntity): Long
 
+    @Query("UPDATE tags SET name = :name WHERE id = :id")
+    suspend fun renameTag(id: Long, name: String)
+
     @Delete
     suspend fun deleteTag(tag: TagEntity)
 

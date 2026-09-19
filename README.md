@@ -8,7 +8,10 @@ server or account — everything is stored locally on the device.
 ## How it works
 
 1. In **Settings**, register an NFC tag (hold the back of the phone against
-   the tag), register content (pick an audio file from the device), and link
+   the tag — the dialog lets you name it and pick its preferred play mode,
+   and a writable tag can optionally store that on the tag itself so
+   re-registering it later pre-fills the form), register content (pick an
+   audio file from the device), and link
    a tag to one or more entries in the order you want them played.
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +53,8 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
+import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 
 /**
  * Parent-facing settings, laid out as a single scrollable menu with one
@@ -72,6 +75,8 @@ fun SettingsScreen(
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val registering by viewModel.registering.collectAsState(false)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
+    val capturedTagData by viewModel.capturedTagData.collectAsState(null)
+    val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
     val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
 
@@ -128,8 +133,12 @@ fun SettingsScreen(
     if (capturedUid != null) {
         TagNameDialog(
             uid = capturedUid ?: "",
+            prefill = capturedTagData,
+            writable = capturedTagWritable,
+            defaultMode = playMode,
             onDismiss = { viewModel.discardCaptured() },
-            onSave = { name -> viewModel.confirmTagName(name) },
+            onSave = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = false) },
+            onSaveAndWrite = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = true) },
         )
     }
 
@@ -375,14 +384,33 @@ private fun onFilePicked(
     viewModel.addFileEntry(uri, type, name)
 }
 
-/** Dialog asking for an optional friendly name for a freshly captured tag. */
+/**
+ * Dialog asking for a friendly name and the preferred play mode for a
+ * freshly captured tag. Both fields are pre-filled from the tag's own
+ * lumi payload when the tag carries one. When the tag is writable, an
+ * extra "Save and write to tag" button offers to write the name + mode
+ * back to the tag so re-registering it later pre-fills the form again.
+ */
 @Composable
 private fun TagNameDialog(
     uid: String,
+    prefill: LumiTagData?,
+    writable: Boolean,
+    defaultMode: PlayMode,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
+    onSave: (String, PlayMode) -> Unit,
+    onSaveAndWrite: (String, PlayMode) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
+    var name by remember(uid) { mutableStateOf("") }
+    var mode by remember(uid) { mutableStateOf(defaultMode) }
+    var fieldsTouched by remember(uid) { mutableStateOf(false) }
+    LaunchedEffect(uid, prefill) {
+        if (fieldsTouched) return@LaunchedEffect
+        prefill?.let {
+            name = it.name
+            mode = it.mode
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tag captured") },
@@ -392,15 +420,46 @@ private fun TagNameDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = {
+                        name = it.take(LumiTagNdef.MAX_NAME_LENGTH)
+                        fieldsTouched = true
+                    },
                     label = { Text("Name (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(8.dp))
+                ModeRow(
+                    title = "Continuous",
+                    detail = "Keeps playing until you tap a different tag.",
+                    selected = mode == PlayMode.CONTINUOUS,
+                    onSelect = {
+                        mode = PlayMode.CONTINUOUS
+                        fieldsTouched = true
+                    },
+                )
+                ModeRow(
+                    title = "Proximity",
+                    detail = "Plays while the tag stays near.",
+                    selected = mode == PlayMode.PROXIMITY,
+                    onSelect = {
+                        mode = PlayMode.PROXIMITY
+                        fieldsTouched = true
+                    },
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(name) }) { Text("Save") }
+            if (writable) {
+                Row {
+                    TextButton(onClick = { onSave(name, mode) }) { Text("Save") }
+                    TextButton(onClick = { onSaveAndWrite(name, mode) }) {
+                        Text("Save and write to tag")
+                    }
+                }
+            } else {
+                TextButton(onClick = { onSave(name, mode) }) { Text("Save") }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

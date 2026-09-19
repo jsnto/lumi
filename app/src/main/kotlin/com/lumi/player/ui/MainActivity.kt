@@ -236,7 +236,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleTagDetected(uid: String) {
+    private fun handleTagDetected(uid: String, tag: Tag) {
         if (uid.isEmpty()) return
         // The presence record is seeded when a tag BECOMES active (see the
         // viewModel.tagActivated collector) and refreshed by a re-read of
@@ -247,7 +247,7 @@ class MainActivity : ComponentActivity() {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
         }
-        viewModel.onTagDetected(uid)
+        viewModel.onTagDetected(uid, tag)
     }
 
     private fun handleTagLost(uid: String) {
@@ -291,7 +291,7 @@ class MainActivity : ComponentActivity() {
             // later resume (e.g. after the app is backgrounded and reopened);
             // a fresh tag presentation always delivers a fresh intent.
             intent.removeExtra(NfcAdapter.EXTRA_TAG)
-            handleTagDetected(tag.id.toHex())
+            handleTagDetected(tag.id.toHex(), tag)
         }
     }
 

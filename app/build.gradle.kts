@@ -55,6 +55,15 @@ android {
     }
 }
 
+// Robolectric NATIVE-graphics Compose tests accumulate render/native state across
+// test classes that share one executor JVM; that makes a later class's Compose
+// idling (waitForIdle) never settle and fail with AppNotIdleException even though
+// the same class passes in isolation. Fork a fresh executor JVM per test class so
+// each class starts with clean Compose/native state.
+tasks.withType<Test>().configureEach {
+    forkEvery = 1
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
