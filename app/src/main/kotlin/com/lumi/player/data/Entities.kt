@@ -31,6 +31,20 @@ data class EntryEntity(
 )
 
 /**
+ * A folder tree the user added as content, remembered so it can be rescanned
+ * for audio files added since the last scan. [uri] is the picked tree's own
+ * content uri - the scan root - and is unique: re-picking the same folder
+ * does not create a second row.
+ */
+@Entity(tableName = "folders", indices = [Index(value = ["uri"], unique = true)])
+data class FolderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val uri: String,
+    val label: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+/**
  * Ordered association from a tag to an entry. A tag's content list is the set
  * of links sorted by [sortOrder].
  */

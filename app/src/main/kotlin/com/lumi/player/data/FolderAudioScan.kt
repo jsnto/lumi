@@ -57,3 +57,19 @@ fun collectAudioFiles(
     walk(rootUri)
     return songs
 }
+
+/**
+ * The rescan decision for a folder that was added earlier: re-walks the tree
+ * (every subfolder included) and returns only the supported audio files whose
+ * uri is NOT already in [storedPayloads] (the content uris already in the
+ * content list). Files that are already stored are skipped, and a folder with
+ * no new songs returns an empty list - the rescan no-op. The walk shares
+ * [collectAudioFiles], so the new songs come back in the same order the
+ * initial add would have stored them.
+ */
+fun rescanNewSongs(
+    rootUri: String,
+    storedPayloads: Set<String>,
+    childrenOf: (folderUri: String) -> List<FolderChild>,
+): List<ScannedSong> =
+    collectAudioFiles(rootUri, childrenOf).filter { it.uri !in storedPayloads }

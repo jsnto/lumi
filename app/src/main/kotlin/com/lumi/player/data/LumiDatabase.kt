@@ -12,8 +12,9 @@ import android.content.Context
         TagLinkEntity::class,
         SettingsEntity::class,
         TagPositionEntity::class,
+        FolderEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class LumiDatabase : RoomDatabase() {
@@ -25,8 +26,8 @@ abstract class LumiDatabase : RoomDatabase() {
 
         fun create(context: Context): LumiDatabase =
             Room.databaseBuilder(context, LumiDatabase::class.java, NAME)
-                // Pre-release: the remembered-positions table (v2) has nothing
-                // worth migrating.
+                // Pre-release: the remembered-positions table (v2) and the
+                // folders table (v3) have nothing worth migrating.
                 .fallbackToDestructiveMigration()
                 .build()
     }

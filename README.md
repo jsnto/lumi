@@ -88,7 +88,9 @@ the video/URL actions later does not require reworking storage.
 - No storage permissions: audio files are picked with the system
   document picker (SAF) — a single file or a whole folder tree — and the
   read grant is persisted per file / folder. Re-adding a file or folder
-  already in the list adds no duplicates.
+  already in the list adds no duplicates. An added folder can be rescanned
+  (Settings → Content → Folders) to pick up songs added to the folder or its
+  subfolders since the last scan; rescanning an unchanged folder adds nothing.
 
 ## Building
 

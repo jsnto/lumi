@@ -133,4 +133,75 @@ class FolderAudioScanTest {
         assertTrue(isSupportedAudioFile("photo.jpg.mp3"))
         assertTrue(!isSupportedAudioFile("song.mp3.txt"))
     }
+
+    // ---- rescan of an added folder ----
+
+    @Test
+    fun rescanPicksUpANewFileInTheRootFolder() {
+        val tree = childrenOf(
+            mapOf(
+                "root" to listOf(
+                    file("old.mp3", "c://x/old"),
+                    file("new-song.mp3", "c://x/new"),
+                ),
+            ),
+        )
+        val newSongs = rescanNewSongs("root", storedPayloads("c://x/old"), tree)
+        assertEquals(listOf("new-song.mp3"), newSongs.map { it.displayName })
+    }
+
+    @Test
+    fun rescanPicksUpANewFileInASubfolder() {
+        val tree = childrenOf(
+            mapOf(
+                "root" to listOf(dir("albums", "c://x/sub")),
+                "c://x/sub" to listOf(file("added-later.flac", "c://x/later")),
+            ),
+        )
+        // Nothing was stored before; the new song lives in a subfolder.
+        val newSongs = rescanNewSongs("root", emptySet(), tree)
+        assertEquals(listOf("added-later.flac"), newSongs.map { it.displayName })
+    }
+
+    @Test
+    fun rescanSkipsFilesAlreadyStored() {
+        val tree = childrenOf(
+            mapOf(
+                "root" to listOf(
+                    file("song-a.mp3", "c://x/a"),
+                    file("song-b.mp3", "c://x/b"),
+                ),
+            ),
+        )
+        val newSongs = rescanNewSongs("root", storedPayloads("c://x/a"), tree)
+        // Only the not-yet-stored file is returned.
+        assertEquals(listOf("song-b.mp3"), newSongs.map { it.displayName })
+    }
+
+    @Test
+    fun rescanOfAnUnchangedFolderIsANoOp() {
+        val tree = childrenOf(
+            mapOf(
+                "root" to listOf(file("song-a.mp3", "c://x/a")),
+            ),
+        )
+        // Every song in the folder is already stored: the rescan is empty.
+        assertTrue(rescanNewSongs("root", storedPayloads("c://x/a"), tree).isEmpty())
+    }
+
+    @Test
+    fun rescanIgnoresUnsupportedFilesItWalks() {
+        val tree = childrenOf(
+            mapOf(
+                "root" to listOf(
+                    file("notes.txt", "c://x/n"),
+                    file("brand-new.m4a", "c://x/m"),
+                ),
+            ),
+        )
+        val newSongs = rescanNewSongs("root", emptySet(), tree)
+        assertEquals(listOf("brand-new.m4a"), newSongs.map { it.displayName })
+    }
+
+    private fun storedPayloads(vararg payloads: String): Set<String> = payloads.toSet()
 }
