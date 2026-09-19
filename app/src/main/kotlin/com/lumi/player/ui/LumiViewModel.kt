@@ -259,7 +259,7 @@ class LumiViewModel(
             return
         }
         viewModelScope.launch {
-            val data = withContext(Dispatchers.IO) { LumiTagNdef.readFromTag(tag) }
+            val data = withContext(Dispatchers.IO) { tagReader(tag) }
             if (_capturedUid.value != uid) return@launch
             _capturedTagData.value = data
             val writable = withContext(Dispatchers.IO) {
@@ -281,6 +281,11 @@ class LumiViewModel(
     /** Test seam: the physical tag write, replaced in unit tests. */
     internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean = { tag, data ->
         LumiTagNdef.write(tag, data)
+    }
+
+    /** Test seam: the physical tag payload read, replaced in unit tests. */
+    internal var tagReader: (Tag?) -> LumiTagData? = { tag ->
+        LumiTagNdef.readFromTag(tag)
     }
 
     fun discardCaptured() {

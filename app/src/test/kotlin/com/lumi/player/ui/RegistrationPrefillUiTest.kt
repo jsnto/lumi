@@ -1,5 +1,6 @@
 package com.lumi.player.ui
 
+import android.nfc.Tag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -14,6 +15,8 @@ import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -81,6 +84,15 @@ class RegistrationPrefillUiTest {
     private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+    }
+
+    /** Idles the main looper for [durationMs] unconditionally. */
+    private fun pumpMain(durationMs: Long) {
+        val deadline = System.currentTimeMillis() + durationMs
+        while (System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
             Thread.sleep(10)
         }
@@ -217,7 +229,105 @@ class RegistrationPrefillUiTest {
         assertEquals("The saved tag must have the empty name from the empty form", "", savedTagName(UID))
     }
 
+    @Test
+    fun registration_typingBeforePayloadLands_keepsTypedName() {
+        // The dialog composes (empty form) before the async NDEF read lands,
+        // so the user may start typing in that window; when the payload then
+        // arrives it must not clobber what the user already typed.
+        val viewModel = openSettings()
+        viewModel.captureForTest(UID, null, false)
+        compose.waitForIdle()
+        compose.onNodeWithText("Name (optional)").performTextInput("Mine")
+        compose.waitForIdle()
+        viewModel.captureForTest(UID, LumiTagData("Hallway", PlayMode.PROXIMITY), true)
+        compose.waitForIdle()
+        compose.onNodeWithText("Mine").assertIsDisplayed()
+        compose.onNodeWithText("Hallway").assertDoesNotExist()
+        // Writability from the late read still takes effect.
+        compose.onNodeWithText("Save and write to tag").assertIsDisplayed()
+    }
+
+    // ---- stale capture read must not overwrite a newer session ----
+
+    /**
+     * A synthetic tag with the given UID. The stub SDK omits Tag's test
+     * hooks; the real framework (loaded by Robolectric at runtime) exposes
+     * the public constructor, so build it reflectively (same approach as
+     * NfcAlwaysListeningUiTest). It carries no NDEF handle, so the real
+     * reader would see nothing - tests replace [LumiViewModel.tagReader].
+     */
+    private fun tagWithUid(uid: String): Tag {
+        val nfcTagCls = Class.forName("android.nfc.INfcTag")
+        val ctor = Tag::class.java.getDeclaredConstructor(
+            ByteArray::class.java,
+            IntArray::class.java,
+            Array<android.os.Bundle>::class.java,
+            Int::class.javaPrimitiveType!!,
+            Long::class.javaPrimitiveType!!,
+            nfcTagCls,
+        )
+        ctor.isAccessible = true
+        val tagService = java.lang.reflect.Proxy.newProxyInstance(
+            nfcTagCls.classLoader,
+            arrayOf(nfcTagCls),
+        ) { _, _, _ -> null } as Any
+        return ctor.newInstance(
+            ByteArray(uid.length / 2) {
+                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
+            },
+            intArrayOf(),
+            arrayOfNulls<android.os.Bundle>(0),
+            0,
+            0L,
+            tagService,
+        ) as Tag
+    }
+
+    @Test
+    fun registration_staleCaptureRead_doesNotOverwriteNewerSession() {
+        // Start a capture of tag A whose read is in flight; cancel into a
+        // new capture of tag B; A's read then lands. Its stale payload must
+        // not publish into B's session - only B's own read may.
+        val viewModel = openSettings()
+        val gateA = CountDownLatch(1)
+        val gateB = CountDownLatch(1)
+        val entered = AtomicInteger(0)
+        viewModel.tagReader = {
+            if (entered.incrementAndGet() == 1) {
+                gateA.await()
+                LumiTagData("Stale", PlayMode.PROXIMITY)
+            } else {
+                gateB.await()
+                LumiTagData("Fresh", PlayMode.CONTINUOUS)
+            }
+        }
+        viewModel.capture(UID_A, tagWithUid(UID_A))
+        idleUntil({ entered.get() == 1 }) // A's read is in flight (blocked)
+        viewModel.capture(UID_B, tagWithUid(UID_B))
+        idleUntil({ entered.get() == 2 }) // B's read is in flight (blocked)
+        // A's (stale) read lands while B's session is active: suppressed.
+        gateA.countDown()
+        // Pump the main looper well past A's resumption so its (suppressed)
+        // publish window has passed; the new session must still be empty.
+        pumpMain(1_000)
+        assertEquals(
+            "a stale in-flight read must not publish into the newer session",
+            null,
+            viewModel.capturedTagData.value,
+        )
+        // B's own read lands: it publishes B's payload.
+        gateB.countDown()
+        idleUntil({ viewModel.capturedTagData.value != null })
+        assertEquals(
+            "the active session's own read must publish",
+            LumiTagData("Fresh", PlayMode.CONTINUOUS),
+            viewModel.capturedTagData.value,
+        )
+    }
+
     companion object {
         const val UID = "04CAFE00"
+        const val UID_A = "AABBCCDD"
+        const val UID_B = "11223344"
     }
 }
