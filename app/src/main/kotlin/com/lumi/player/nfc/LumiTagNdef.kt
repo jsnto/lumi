@@ -86,9 +86,16 @@ object LumiTagNdef {
     fun readFromTag(tag: Tag?): LumiTagData? {
         val ndef = ndefOf(tag) ?: return null
         return try {
+            ndef.connect()
             fromNdefMessage(ndef.getNdefMessage())
         } catch (e: Exception) {
             null
+        } finally {
+            try {
+                ndef.close()
+            } catch (e: Exception) {
+                // Tag is already gone; nothing to clean up.
+            }
         }
     }
 
@@ -101,9 +108,16 @@ object LumiTagNdef {
         val ndef = ndefOf(tag) ?: return false
         val size = messageByteLength(toNdefMessage(data))
         return try {
+            ndef.connect()
             ndef.isWritable && ndef.maxSize >= size
         } catch (e: Exception) {
             false
+        } finally {
+            try {
+                ndef.close()
+            } catch (e: Exception) {
+                // Tag is already gone; nothing to clean up.
+            }
         }
     }
 
@@ -118,10 +132,10 @@ object LumiTagNdef {
         val size = messageByteLength(message)
         if (size > MAX_PAYLOAD_BYTES) return false
         return try {
+            ndef.connect()
             if (!ndef.isWritable || ndef.maxSize < size) {
                 false
             } else {
-                ndef.connect()
                 ndef.writeNdefMessage(message)
                 true
             }

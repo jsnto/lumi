@@ -260,10 +260,13 @@ class LumiViewModel(
         }
         viewModelScope.launch {
             val data = withContext(Dispatchers.IO) { LumiTagNdef.readFromTag(tag) }
+            if (_capturedUid.value != uid) return@launch
             _capturedTagData.value = data
-            _capturedTagWritable.value = withContext(Dispatchers.IO) {
+            val writable = withContext(Dispatchers.IO) {
                 LumiTagNdef.canWritePayload(tag, data ?: LumiTagData(name = "", mode = playMode.value))
             }
+            if (_capturedUid.value != uid) return@launch
+            _capturedTagWritable.value = writable
         }
     }
 

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -400,8 +401,14 @@ private fun TagNameDialog(
     onSave: (String, PlayMode) -> Unit,
     onSaveAndWrite: (String, PlayMode) -> Unit,
 ) {
-    var name by remember { mutableStateOf(prefill?.name ?: "") }
-    var mode by remember { mutableStateOf(prefill?.mode ?: defaultMode) }
+    var name by remember(uid) { mutableStateOf("") }
+    var mode by remember(uid) { mutableStateOf(defaultMode) }
+    LaunchedEffect(uid, prefill) {
+        prefill?.let {
+            name = it.name
+            mode = it.mode
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tag captured") },
