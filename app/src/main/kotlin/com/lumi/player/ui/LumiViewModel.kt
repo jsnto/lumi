@@ -271,6 +271,24 @@ class LumiViewModel(
         viewModelScope.launch { repository.setLockPopupSuppressed(suppressed) }
     }
 
+    // ---- settings: nfc re-read wait ----
+
+    /**
+     * How many seconds of absence of reports on the active tag (proximity
+     * mode) count as the tag having been removed; persisted in the database.
+     */
+    val nfcRereadSeconds: StateFlow<Long> =
+        repository.observeNfcRereadSeconds()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                LumiRepository.NFC_REREAD_SECONDS_DEFAULT,
+            )
+
+    fun setNfcRereadSeconds(seconds: Long) {
+        viewModelScope.launch { repository.setNfcRereadSeconds(seconds) }
+    }
+
     // ---- settings: tags ----
 
     fun startTagRegistration() {

@@ -7,8 +7,9 @@ import org.junit.Test
 
 /**
  * Unit tests for the soft-lock tap counting: [TripleTapUnlocker] unlocks on
- * [TripleTapUnlocker.REQUIRED_TAPS] taps, only while the taps stay inside the
- * time window; a tap after the window starts a fresh count.
+ * [TripleTapUnlocker.REQUIRED_TAPS] fast taps, only while each tap stays
+ * inside the time window of the previous one; a slow tap (gap longer than
+ * the window) starts a fresh count.
  */
 class TripleTapUnlockerTest {
 
@@ -79,6 +80,49 @@ class TripleTapUnlockerTest {
     @Test
     fun defaults_matchSpec() {
         assertEquals(3, TripleTapUnlocker.REQUIRED_TAPS)
-        assertEquals(2_000L, TripleTapUnlocker.UNLOCK_TAP_WINDOW_MS)
+        // The default window is the fast-triple-tap window: quick taps
+        // ~100-400ms apart, but never a slow tap (the spec allows 400-500ms;
+        // 450ms is the picked constant).
+        assertEquals(450L, TripleTapUnlocker.UNLOCK_TAP_WINDOW_MS)
+    }
+
+    @Test
+    fun defaultWindow_fastTripleTap_unlocks() {
+        // A real fast triple-tap: taps ~150ms apart with the default window.
+        val unlocker = TripleTapUnlocker()
+        unlocker.recordTap(0)
+        unlocker.recordTap(150)
+        assertTrue(
+            "three quick taps (each within the default 450ms window) must " +
+                "unlock with the default constructor",
+            unlocker.recordTap(280),
+        )
+    }
+
+    @Test
+    fun defaultWindow_slowTaps_doNotUnlock() {
+        // Deliberate, far-apart taps (600ms gaps > the 450ms window) must
+        // never accumulate into an unlock, no matter how many arrive.
+        val unlocker = TripleTapUnlocker()
+        assertFalse(unlocker.recordTap(0))
+        assertFalse("a 600ms gap exceeds the 450ms window and resets", unlocker.recordTap(600))
+        assertFalse(unlocker.recordTap(1_200))
+        assertFalse(unlocker.recordTap(1_800))
+    }
+
+    @Test
+    fun defaultWindow_boundary_gapsBehaveCorrectly() {
+        // Exactly at the window boundary the tap still counts; one
+        // millisecond past it resets the count.
+        val atBoundary = TripleTapUnlocker()
+        atBoundary.recordTap(0)
+        atBoundary.recordTap(450)
+        assertTrue("a tap exactly 450ms after the previous one still counts", atBoundary.recordTap(900))
+
+        val pastBoundary = TripleTapUnlocker()
+        pastBoundary.recordTap(0)
+        pastBoundary.recordTap(451)
+        assertFalse("a tap 451ms after the previous one resets the count", pastBoundary.recordTap(902))
+        assertEquals(1, pastBoundary.count)
     }
 }

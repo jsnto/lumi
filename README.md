@@ -23,7 +23,9 @@ server or account — everything is stored locally on the device.
 The front screen can be soft-locked with the lock button (top right): the
 screen darkens while the app underneath keeps working — music keeps playing.
 A one-time popup first explains how to unlock and offers a
-"Don't show this again" checkbox. Tap the screen 3 times to unlock.
+"Don't show this again" checkbox. Unlock with a fast triple-tap: three
+taps in quick succession (each within about half a second of the
+previous one); taps that are too far apart restart the count.
 
 If a tag has been played before, lumi resumes where that tag left off —
 the last played position is remembered per tag, for the three most
@@ -67,8 +69,11 @@ the video/URL actions later does not require reworking storage.
 - Media3/ExoPlayer in a foreground media service for background playback
 - NFC via foreground dispatch in both play modes (passive, always-listening
   tag reads), also used while registering a tag. In proximity mode, tag
-  removal is derived from a 1-second presence poll and a 2-second absence
-  timeout (see `MainActivity`)
+  removal is derived from a 1-second presence poll with a configurable
+  absence grace ("Tag re-read wait" setting, 1-120 s, default 15): playback
+  pauses only once the active tag has gone unreported for that long; Mifare
+  Ultralight tags additionally get a continuous-read fast path that confirms
+  removal in ~0.4 s (see `MainActivity`, `MifarePresencePoller`)
 
 ## Permissions
 

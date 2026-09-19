@@ -234,7 +234,7 @@ private fun LockOverlay(onTap: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "🔒 Tap the screen 3 times to unlock",
+            text = "🔒 Tap the screen 3 times fast to unlock",
             style = MaterialTheme.typography.titleMedium,
             color = Color.White,
         )
@@ -259,7 +259,7 @@ private fun LockPromptDialog(
             Column {
                 Text(
                     text = "The screen will darken, but lumi keeps working: music keeps " +
-                        "playing. Tap the screen 3 times to unlock.",
+                        "playing. Tap the screen 3 times fast to unlock.",
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(

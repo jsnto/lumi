@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
+import android.nfc.tech.MifareUltralight
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -26,11 +27,20 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
+import com.lumi.player.nfc.MifarePresencePoller
+import com.lumi.player.nfc.PresenceReader
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.ui.theme.LumiTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 
 /**
  * Hosts the Compose UI and drives NFC.
@@ -45,14 +55,25 @@ import kotlinx.coroutines.launch
  *   where foreground dispatch worked.
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
- * - PROXIMITY: "tag lost" is derived, conservatively, from a short absence
- *   of reports on the active tag, checked by a presence poll every second.
- *   Foreground dispatch may deliver a stationary tag only once per
- *   presentation, so "no further reports" is the only removal signal
- *   available — a held-still tag may trigger the timeout early; verifying
- *   pause-on-removal timing on a real device is the first on-device
- *   validation item. Loss PAUSES playback (the session and the active tag
- *   are kept), so a re-read of the same tag resumes it.
+ * - PROXIMITY: tag loss has two detectors, both ending in the same
+ *   handleTagLost pause. FAST PATH: the Tag handle delivered by the
+ *   foreground-dispatch read is held ([lastSeenTag]); while that tag is the
+ *   active tag a background coroutine continuously reads page 0 of it
+ *   ([MifarePresencePoller], Mifare Ultralight tags only) - every
+ *   successful read refreshes the presence record, and a read that fails
+ *   twice (a 100 ms retry between the strikes - a two-strike debounce
+ *   against single-occurrence blips) confirms the removal well under a
+ *   second. FALLBACK: "tag lost" is derived, conservatively, from a
+ *   sustained absence of reports on the active tag, checked by a presence
+ *   poll every second against the user-configurable absence window
+ *   (settings "Tag re-read wait", [presenceTimeoutMs]); it
+ *   owns removal detection whenever the fast path cannot run (the tag is
+ *   not a Mifare Ultralight, or its session cannot be connected). Known
+ *   on-device risk: with foreground dispatch a held-still tag can go cold
+ *   (the phone stops actively reading it), so the fast-path read can fail
+ *   and pause before a real removal - on-device validation item. Loss
+ *   PAUSES playback (the session and the active tag are kept), so a
+ *   re-read of the same tag resumes it.
  * - Tag registration: the same foreground dispatch, with the view model in
  *   capture mode, so any tag type can be registered.
  */
@@ -134,6 +155,12 @@ class MainActivity : ComponentActivity() {
                         if (currentMode == PlayMode.PROXIMITY) {
                             presenceHandler.removeCallbacks(presenceWatcher)
                             presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
+                            // The activating read just delivered this tag's
+                            // handle (kept in lastSeenTag): start the
+                            // continuous-reading fast path for it.
+                            if (lastSeenTagUid == uid) {
+                                lastSeenTag?.let { startPresencePoll(it, uid) }
+                            }
                         }
                     }
                 }
@@ -142,10 +169,12 @@ class MainActivity : ComponentActivity() {
                         if (state.status == PlaybackStatus.IDLE) {
                             viewModel.onPlaybackStopped()
                             // Playback has stopped: tear the presence poll
-                            // down so no background work is left running.
-                            // It is re-armed when a tag next becomes active
-                            // (see the tagActivated collector).
+                            // (fallback and fast path) down so no background
+                            // work is left running. Both are re-armed when a
+                            // tag next becomes active (see the tagActivated
+                            // collector).
                             presenceHandler.removeCallbacks(presenceWatcher)
+                            stopPresencePoll()
                             lastSeenUid = null
                         }
                     }
@@ -160,28 +189,64 @@ class MainActivity : ComponentActivity() {
     }
 
     // Proximity-mode presence tracking. Under foreground dispatch a
-    // stationary tag may be delivered only once, so the presence record is
-    // the only proxy for "still in range"; a short absence of reports is
-    // treated as removal. Only the ACTIVE tag's reads touch the record, so
+    // stationary tag may be delivered only once per presentation, so the
+    // presence record is the only proxy for "still in range"; only an
+    // absence of reports that outlives the grace period is treated as
+    // removal. Only the ACTIVE tag's reads touch the record, so
     // an unrelated tag read can never mask the active tag's removal.
     // Only proximity mode watches for tag loss; continuous keeps playing.
     private val presenceHandler = Handler(Looper.getMainLooper())
     private var lastSeenUid: String? = null
     @Volatile private var lastSeenAt: Long = 0L
+
+    // Continuous-reading fast path (proximity mode, Mifare Ultralight tags
+    // only): the Tag handle from the most recent foreground-dispatch
+    // delivery, kept so the active tag can be read continuously instead of
+    // waiting for the NFC stack to re-report it.
+    @Volatile private var lastSeenTag: Tag? = null
+    @Volatile private var lastSeenTagUid: String? = null
+
+    // The active tag's continuous-reading poll (see startPresencePoll).
+    private val nfcScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var presencePollJob: Job? = null
+
+    /**
+     * Test seam: establishes a connected low-level read session on a tag.
+     * Returns null when no session can be established (the tag is not a
+     * Mifare Ultralight, or the connect fails) - then the absence-timeout
+     * fallback owns removal detection for that tag.
+     */
+    private var establishPresenceSession: (Tag) -> PresenceReader? = this::defaultPresenceSession
+
+    private fun defaultPresenceSession(tag: Tag): PresenceReader? {
+        val mifare = MifareUltralight.get(tag) ?: return null
+        mifare.connect()
+        return PresenceReader { mifare.readPages(0) }
+    }
     private val presenceWatcher = object : Runnable {
         override fun run() {
             val uid = lastSeenUid
-            if (uid != null && SystemClock.elapsedRealtime() - lastSeenAt > PRESENCE_TIMEOUT_MS) {
+            if (uid != null && SystemClock.elapsedRealtime() - lastSeenAt > presenceTimeoutMs()) {
                 handleTagLost(uid)
                 lastSeenUid = null
             }
             presenceHandler.postDelayed(this, PRESENCE_CHECK_MS)
         }
     }
-    // The poll asks every PRESENCE_CHECK_MS whether the active tag is still
-    // being reported; PRESENCE_TIMEOUT_MS of absence counts as removal. The
-    // timeout stays longer than one poll period because a stationary tag
-    // may be reported only once per presentation.
+
+    /**
+     * The user-configurable absence-tolerance window (settings "Tag re-read
+     * wait", seconds) as the millisecond grace period the presence poll
+     * checks against.
+     */
+    private fun presenceTimeoutMs(): Long =
+        (viewModel.nfcRereadSeconds.value.coerceIn(1, 120) * 1_000L)
+
+    // The poll asks every PRESENCE_CHECK_MS whether the active tag has been
+    // reported within the configured absence window. A stationary tag may be
+    // reported only once per presentation, so the window must be long enough
+    // that a still-present tag (which re-reports when it moves) keeps
+    // playback going; only a sustained absence counts as removal.
 
     /**
      * Re-check NFC availability and keep the prompt in sync: raised while the
@@ -233,6 +298,7 @@ class MainActivity : ComponentActivity() {
         val nfc = nfc ?: return
         nfc.disableForegroundDispatch(this)
         presenceHandler.removeCallbacks(presenceWatcher)
+        stopPresencePoll()
         lastSeenUid = null
         if (!nfc.isEnabled) return
         // Always listening: foreground dispatch delivers any tag in range to
@@ -244,13 +310,16 @@ class MainActivity : ComponentActivity() {
         if (currentMode == PlayMode.PROXIMITY) {
             // A mode switch into proximity (or a resume) resets the record;
             // if a tag's list was already playing, carry its uid over so the
-            // poll has something to time out on. Accepted tradeoff: a
-            // still-present stationary tag, already reported once, pauses
-            // after the timeout - "no further reports" is the only removal
-            // signal under foreground dispatch.
+            // fallback poll has something to time out on.
             viewModel.activeTagUid?.let { uid ->
                 lastSeenAt = SystemClock.elapsedRealtime()
                 lastSeenUid = uid
+                // A tag already playing before the switch may still be in
+                // range: if its handle is on hand, resume the
+                // continuous-reading fast path for it.
+                if (lastSeenTagUid == uid) {
+                    lastSeenTag?.let { startPresencePoll(it, uid) }
+                }
             }
             presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
         }
@@ -258,6 +327,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleTagDetected(uid: String, tag: Tag) {
         if (uid.isEmpty()) return
+        // Keep the delivered Tag handle: the continuous-reading fast path
+        // needs the live handle, not just the uid.
+        lastSeenTag = tag
+        lastSeenTagUid = uid
         // The presence record is seeded when a tag BECOMES active (see the
         // viewModel.tagActivated collector) and refreshed by a re-read of
         // the tag already playing. A read of some OTHER tag while one is
@@ -266,6 +339,15 @@ class MainActivity : ComponentActivity() {
         if (uid == viewModel.activeTagUid) {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
+            if (currentMode == PlayMode.PROXIMITY) {
+                // A (re-)presentation of the active tag starts (or restarts,
+                // cancelling any stale loop) the continuous-reading poll.
+                startPresencePoll(tag, uid)
+            }
+        } else if (currentMode == PlayMode.PROXIMITY) {
+            // A new tag presentation cancels the previous tag's poll; the
+            // new tag's loop starts when it becomes active (tagActivated).
+            stopPresencePoll()
         }
         viewModel.onTagDetected(uid, tag)
     }
@@ -273,6 +355,77 @@ class MainActivity : ComponentActivity() {
     private fun handleTagLost(uid: String) {
         if (uid.isEmpty()) return
         viewModel.onTagLost(uid)
+    }
+
+    /**
+     * Starts (or restarts) the continuous-reading poll for the active tag.
+     * Every successful read refreshes the presence record, so the
+     * absence-timeout fallback never fires while the tag answers; a
+     * confirmed removal (two failed reads) pauses through the same
+     * [handleTagLost] route as the fallback and clears the record so the
+     * fallback does not double-report the loss.
+     */
+    private fun startPresencePoll(tag: Tag, uid: String) {
+        // A new tag presentation always cancels the previous tag's poll.
+        stopPresencePoll()
+        presencePollJob = nfcScope.launch {
+            val reader = withContext(Dispatchers.IO) {
+                try {
+                    establishPresenceSession(tag)
+                } catch (e: Exception) {
+                    // No session (not a Mifare Ultralight, connect failed,
+                    // ...): the absence-timeout fallback owns this tag.
+                    null
+                }
+            } ?: return@launch
+            withContext(Dispatchers.IO) {
+                MifarePresencePoller.loop(
+                    readPage0 = {
+                        try {
+                            reader.readPage0()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: IOException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // A dead session (NFC service dropped mid-read)
+                            // surfaces a runtime exception, not an
+                            // IOException: treat any read failure as a
+                            // "tag out of range" strike so the loop
+                            // degrades to the absence-timeout fallback
+                            // instead of crashing the app.
+                            throw IOException("presence read failed", e)
+                        }
+                    },
+                    onStillPresent = {
+                        presenceHandler.post {
+                            if (lastSeenUid == uid) {
+                                lastSeenAt = SystemClock.elapsedRealtime()
+                            }
+                        }
+                    },
+                    onConfirmedRemoved = {
+                        presenceHandler.post {
+                            if (lastSeenUid == uid) {
+                                handleTagLost(uid)
+                                // The fast path already reported the loss:
+                                // clear the record so the fallback poll does
+                                // not issue a second pause for the same
+                                // removal (a re-read re-seeds the record via
+                                // the normal activation path).
+                                lastSeenUid = null
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    /** Cancels the active tag's continuous-reading poll, if any. */
+    private fun stopPresencePoll() {
+        presencePollJob?.cancel()
+        presencePollJob = null
     }
 
     override fun onResume() {
@@ -293,6 +446,7 @@ class MainActivity : ComponentActivity() {
             nfc?.disableForegroundDispatch(this)
         }
         presenceHandler.removeCallbacks(presenceWatcher)
+        stopPresencePoll()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
     }
@@ -319,6 +473,5 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val PRESENCE_CHECK_MS = 1_000L
-        private const val PRESENCE_TIMEOUT_MS = 2_000L
     }
 }
