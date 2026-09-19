@@ -92,7 +92,6 @@ private enum class SettingsPane {
 fun SettingsScreen(
     viewModel: LumiViewModel,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     var pane by remember { mutableStateOf(SettingsPane.Menu) }
     // The menu list's scroll position lives at this level so leaving for a
