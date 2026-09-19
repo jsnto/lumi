@@ -421,15 +421,25 @@ class LumiViewModel(
     fun addFileEntry(uri: Uri, type: EntryType, displayName: String?) {
         viewModelScope.launch {
             if (!persistReadGrant(uri)) return@launch
-            repository.addEntry(type, displayName ?: "Untitled", uri.toString())
-            event(if (type == EntryType.AUDIO) "Song added!" else "Content added")
+            val added = repository.addEntryUnique(type, displayName ?: "Untitled", uri.toString())
+            event(
+                if (added == null) {
+                    "That song is already in your content list."
+                } else if (type == EntryType.AUDIO) {
+                    "Song added!"
+                } else {
+                    "Content added"
+                },
+            )
         }
     }
 
     /**
      * Adds a picked folder tree: persists the SAF grant on the tree, walks
      * it recursively (subfolders included), and stores every supported
-     * audio file found as an AUDIO entry. A folder without supported audio
+     * audio file found as an AUDIO entry - skipping files whose content uri
+     * is already stored, so re-adding a folder (or a folder whose songs were
+     * added earlier) adds no duplicate rows. A folder without supported audio
      * adds nothing and reports so.
      */
     fun addFolderEntry(treeUri: Uri) {
@@ -440,10 +450,16 @@ class LumiViewModel(
                 event("No songs found in that folder.")
                 return@launch
             }
-            scanned.forEach { song ->
-                repository.addEntry(EntryType.AUDIO, song.displayName, song.uri)
+            val fresh = scanned.count {
+                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri) != null
             }
-            event("Added ${scanned.size} songs from the folder.")
+            event(
+                when {
+                    fresh == 0 -> "All ${scanned.size} songs from the folder are already in your content list."
+                    fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
+                    else -> "Added ${scanned.size} songs from the folder."
+                },
+            )
         }
     }
 

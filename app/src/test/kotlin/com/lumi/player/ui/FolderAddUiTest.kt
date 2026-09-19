@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -134,6 +135,70 @@ class FolderAddUiTest {
         assertEquals(
             "content://docs/document/audio:200",
             entries.first { it.label == "song-b.flac" }.payload,
+        )
+    }
+
+    @Test
+    fun reAddingTheSameFolderAddsNoDuplicateRows() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(
+                    FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"),
+                    FolderChild("song-b.mp3", isDirectory = false, childUri = "content://docs/document/audio:101"),
+                )
+            } else {
+                emptyList()
+            }
+        }
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("Added") } })
+
+        // Picking the same folder again must not duplicate its songs.
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("All 2 songs") } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the folder's songs appear once, not twice, after the second pick",
+            listOf("song-a.mp3", "song-b.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun folderContainingAnAlreadyAddedFileAddsNoDuplicateRow() {
+        val viewModel = openContentPane()
+        // song-a was already added through the file picker; the later folder
+        // pick contains it again.
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+        viewModel.addFileEntry(Uri.parse("content://docs/document/audio:100"), EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "Song added!" } })
+
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(
+                    FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"),
+                    FolderChild("song-b.mp3", isDirectory = false, childUri = "content://docs/document/audio:101"),
+                )
+            } else {
+                emptyList()
+            }
+        }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "Added 1 of 2 songs from the folder." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the folder adds only the file it brought that was not stored yet",
+            listOf("song-a.mp3", "song-b.mp3"),
+            entries.map { it.label },
         )
     }
 
