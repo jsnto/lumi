@@ -74,6 +74,7 @@ fun SettingsScreen(
     val entries by viewModel.observeEntries().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val registering by viewModel.registering.collectAsState(false)
+    val scanning by viewModel.scanning.collectAsState(false)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
@@ -118,6 +119,17 @@ fun SettingsScreen(
     }
 
     // ---------- dialogs ----------
+
+    if (scanning) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelTagScan() },
+            title = { Text("Point a tag at a song list") },
+            text = { Text("Hold the back of the phone against the tag…") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cancelTagScan() }) { Text("Cancel") }
+            },
+        )
+    }
 
     if (registering) {
         AlertDialog(
@@ -285,6 +297,9 @@ private fun LinkSection(
     linked: List<EntryEntity>,
 ) {
     SectionCard("Tag to content") {
+        OutlinedButton(onClick = { viewModel.startTagScan() }) {
+            Text("Scan a tag to change its song list")
+        }
         if (tags.isEmpty()) {
             Text(
                 text = "Register a tag first, then link content to it.",
