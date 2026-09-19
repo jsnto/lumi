@@ -32,12 +32,12 @@ import androidx.navigation.compose.rememberNavController
 @Composable
 fun LumiRoot(
     viewModel: LumiViewModel,
+    modifier: Modifier = Modifier,
     nfcMissing: Boolean = false,
     nfcDisabled: Boolean = false,
     showNfcPrompt: Boolean = false,
     onEnableNfc: () -> Unit = {},
     onDismissNfcPrompt: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
