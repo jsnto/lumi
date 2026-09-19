@@ -39,6 +39,9 @@ interface LumiDao {
     @Query("SELECT * FROM entries WHERE id = :id")
     suspend fun entryById(id: Long): EntryEntity?
 
+    @Query("SELECT * FROM entries WHERE payload = :payload LIMIT 1")
+    suspend fun entryByPayload(payload: String): EntryEntity?
+
     @Insert
     suspend fun insertEntry(entry: EntryEntity): Long
 

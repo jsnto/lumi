@@ -1,0 +1,256 @@
+package com.lumi.player.ui
+
+import android.net.Uri
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.lifecycle.viewModelScope
+import androidx.test.core.app.ApplicationProvider
+import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
+import com.lumi.player.data.FolderChild
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
+
+/**
+ * Behavioral coverage for adding a whole folder: the content pane offers an
+ * "Add folder" button (next to "Add content"), and picking a folder tree
+ * stores every supported audio file found at any subfolder depth as an
+ * AUDIO entry, one per file, with the file's own document uri as the
+ * payload. A folder without supported audio adds nothing.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(
+    sdk = [35],
+    application = LumiApp::class,
+    shadows = [ShadowNfcAdapterForTest::class],
+)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class FolderAddUiTest {
+
+    @get:Rule
+    val compose = createEmptyComposeRule()
+
+    @Before
+    fun setUp() {
+        NfcTestState.reset()
+        NfcTestState.radioEnabled = true
+    }
+
+    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
+
+    private fun openContentPane(): LumiViewModel {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+        val field = MainActivity::class.java.getDeclaredField("viewModel")
+        field.isAccessible = true
+        return field.get(activity) as LumiViewModel
+    }
+
+    /** Runs a suspend block on the app's database and returns its result. */
+    private fun <T> dbAndGet(block: suspend () -> T): T {
+        var result: T? = null
+        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!cond() && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+        check(cond()) { "timed out waiting for the folder scan to settle" }
+    }
+
+    @Test
+    fun contentPaneOffersAnAddFolderButtonBesideAddContent() {
+        openContentPane()
+        compose.onNodeWithText("Add content").assertExists()
+        // The folder button is right under the content button in the same
+        // card; on the small test screen it may sit below the viewport, so
+        // existence is the layout assertion.
+        compose.onNodeWithText("Add folder").assertExists()
+    }
+
+    @Test
+    fun addFolderStoresEveryAudioFileAtEveryDepth() {
+        val viewModel = openContentPane()
+
+        // A fake documents tree: the root holds a song, a subfolder (with
+        // its own song deeper down) and an unsupported file.
+        viewModel.folderChildren = { folderUri ->
+            when (folderUri.toString()) {
+                TREE_URI -> listOf(
+                    FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"),
+                    FolderChild("albums", isDirectory = true, childUri = "content://docs/document/audio:101"),
+                    FolderChild("readme.txt", isDirectory = false, childUri = "content://docs/document/audio:102"),
+                )
+                "content://docs/document/audio:101" -> listOf(
+                    FolderChild("song-b.flac", isDirectory = false, childUri = "content://docs/document/audio:200"),
+                )
+                else -> emptyList()
+            }
+        }
+
+        // Collect the UI events on the view model's own (main) context so
+        // the "Added" event is observed in order with the scan.
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("Added") } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the folder's audio files become content, unsupported files skipped",
+            listOf("song-a.mp3", "song-b.flac"),
+            entries.map { it.label },
+        )
+        assertEquals(listOf("audio", "audio"), entries.map { it.type })
+        // Each entry's payload is the file's own document uri, so playback
+        // opens the file directly.
+        assertEquals(
+            "content://docs/document/audio:100",
+            entries.first { it.label == "song-a.mp3" }.payload,
+        )
+        assertEquals(
+            "content://docs/document/audio:200",
+            entries.first { it.label == "song-b.flac" }.payload,
+        )
+    }
+
+    @Test
+    fun reAddingTheSameFolderAddsNoDuplicateRows() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(
+                    FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"),
+                    FolderChild("song-b.mp3", isDirectory = false, childUri = "content://docs/document/audio:101"),
+                )
+            } else {
+                emptyList()
+            }
+        }
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("Added") } })
+
+        // Picking the same folder again must not duplicate its songs.
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("All 2 songs") } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the folder's songs appear once, not twice, after the second pick",
+            listOf("song-a.mp3", "song-b.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun folderContainingAnAlreadyAddedFileAddsNoDuplicateRow() {
+        val viewModel = openContentPane()
+        // song-a was already added through the file picker; the later folder
+        // pick contains it again.
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+        viewModel.addFileEntry(Uri.parse("content://docs/document/audio:100"), EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "Song added!" } })
+
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(
+                    FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"),
+                    FolderChild("song-b.mp3", isDirectory = false, childUri = "content://docs/document/audio:101"),
+                )
+            } else {
+                emptyList()
+            }
+        }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "Added 1 of 2 songs from the folder." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the folder adds only the file it brought that was not stored yet",
+            listOf("song-a.mp3", "song-b.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun rePickingTheSameFileThroughTheFilePickerAddsNoDuplicateRow() {
+        val viewModel = openContentPane()
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        val fileUri = Uri.parse("content://docs/document/audio:100")
+        viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "Song added!" } })
+
+        // Picking the very same file again must not create a second row.
+        viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
+        idleUntil({ events.any { it == "That song is already in your content list." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the file appears once, not twice, after the second pick",
+            listOf("song-a.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun addFolderWithoutSupportedAudioAddsNothing() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(
+                    FolderChild("notes.txt", isDirectory = false, childUri = "content://docs/document/audio:102"),
+                    FolderChild("empty-sub", isDirectory = true, childUri = "content://docs/document/audio:103"),
+                )
+            } else {
+                emptyList()
+            }
+        }
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("No songs found") } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertTrue("a folder without supported audio must add nothing", entries.isEmpty())
+    }
+
+    companion object {
+        /** A documents tree uri (folder selected with ":tree" access). */
+        const val TREE_URI = "content://docs/document/audio%3A1:tree"
+    }
+}

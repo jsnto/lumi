@@ -70,6 +70,17 @@ class LumiRepository(private val db: LumiDatabase) {
     }
 
     /**
+     * Stores a new entry, or returns null when an entry with the same
+     * payload (the content uri) is already stored - so re-picking a file,
+     * or re-adding a folder whose songs are already in the content list,
+     * adds no duplicate rows.
+     */
+    suspend fun addEntryUnique(type: EntryType, label: String, payload: String): EntryEntity? {
+        if (dao.entryByPayload(payload) != null) return null
+        return addEntry(type, label, payload)
+    }
+
+    /**
      * Stores a new entry and appends it to the end of [tagId]'s song list in
      * one Room transaction, so "adding a song onto a tag" never leaves a
      * linked but missing row or a stored but unlinked row. The link order is

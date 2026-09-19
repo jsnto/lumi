@@ -11,7 +11,8 @@ server or account — everything is stored locally on the device.
    the tag — the dialog lets you name it and pick its preferred play mode,
    and a writable tag can optionally store that on the tag itself so
    re-registering it later pre-fills the form), register content (pick an
-   audio file from the device), and link
+   audio file from the device, or a whole folder to add every song in it and
+   its subfolders), and link
    a tag to one or more entries in the order you want them played. The
    tag-to-content section is scan-first: scan the tag (or pick one from its
    chips) to see the songs currently on it — then edit the list, or add a
@@ -85,7 +86,9 @@ the video/URL actions later does not require reworking storage.
   notification shown when granted.
 - **Foreground service (media)** — keeps audio playing in the background.
 - No storage permissions: audio files are picked with the system
-  document picker (SAF), and the read grant is persisted per file.
+  document picker (SAF) — a single file or a whole folder tree — and the
+  read grant is persisted per file / folder. Re-adding a file or folder
+  already in the list adds no duplicates.
 
 ## Building
 

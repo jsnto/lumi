@@ -91,31 +91,33 @@ class TagPickerDispatchUiTest {
 
     /**
      * Delivers the document picker's result for [uri] through the same
-     * activity-result registry slot the real picker would use. The single
-     * shared launcher in [SettingsScreen] registers into the activity's
-     * registry under a composition-scoped key (not the `activity_rq#` key
-     * used by [MainActivity]'s permission launcher); its callback dispatches
-     * the URI to whichever pane set its pending target before the launch.
+     * activity-result registry slot the real picker would use. The settings
+     * screen registers two document launchers (the shared audio picker and
+     * the folder picker, different contracts); the click above launched
+     * exactly one of them and [ActivityResultRegistry.launch] records its
+     * key in the registry's launched set, so the launched key is the slot to
+     * deliver the pick to.
      */
     private fun deliverPick(activity: MainActivity, uri: Uri): String {
+        val registry = activity.activityResultRegistry
         val field = ActivityResultRegistry::class.java
             .getDeclaredField("keyToRc")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val keyToRc = field.get(activity.activityResultRegistry) as Map<String, Int>
-        val picker = keyToRc.entries.single { entry: Map.Entry<String, Int> -> entry.key != "activity_rq#0" }
-            ?: error("expected the shared audio picker's registration; registry keys: $keyToRc")
+        val keyToRc = field.get(registry) as Map<String, Int>
         val launchedField = ActivityResultRegistry::class.java
             .getDeclaredField("launchedKeys")
         launchedField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val launchedKeys = launchedField.get(activity.activityResultRegistry) as MutableList<String>
-        // The click above already called launch() (the picker intent was
-        // started); record the launch the way the framework does, and
-        // deliver the parsed pick through the registry's dispatch so the
-        // shared launcher's callback runs exactly as on-device.
-        launchedKeys.add(picker.key)
-        val dispatched = activity.activityResultRegistry.dispatchResult(picker.value, uri)
+        val launchedKeys = launchedField.get(registry) as MutableList<String>
+        val picker = keyToRc.entries
+            .filter { entry: Map.Entry<String, Int> -> entry.key != "activity_rq#0" }
+            .singleOrNull { it.key in launchedKeys }
+            ?: error("expected the launched audio picker's registration; registry keys: $keyToRc launched=$launchedKeys")
+        // The click above already called launch(); record the launch the
+        // way the framework does when it has not recorded it yet.
+        if (picker.key !in launchedKeys) launchedKeys.add(picker.key)
+        val dispatched = registry.dispatchResult(picker.value, uri)
         check(dispatched) { "dispatchResult returned false; keys=$keyToRc launched=$launchedKeys" }
         return "keys=$keyToRc launched=$launchedKeys"
     }
