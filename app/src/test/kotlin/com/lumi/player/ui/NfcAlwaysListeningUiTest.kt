@@ -324,6 +324,38 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_customRereadWait_usesTheConfiguredWindow() {
+        setupDb(mode = PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
+        // A 7-second wait replaces the 15-second default (settings "Tag
+        // re-read wait"): the Room write is async, so pump the main looper
+        // until the view model's flow settles on it.
+        viewModel.setNfcRereadSeconds(7L)
+        idleUntil({ viewModel.nfcRereadSeconds.value == 7L })
+        sendTag(controller, UID_A)
+        // Six seconds of absence is under the configured 7-second window:
+        // no pause yet.
+        ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
+        assertNull(
+            "an absence under the configured re-read wait must not pause",
+            shadowOf(app() as Application).nextStartedService,
+        )
+        // Crossing the configured window (the 1-second poll ticks at 7s
+        // and 8s after the seed) must pause.
+        ShadowLooper.idleMainLooper(3_000, TimeUnit.MILLISECONDS)
+        val pause = nextServiceIntent(1_000)
+        assertNotNull(
+            "an absence past the configured re-read wait must pause",
+            pause,
+        )
+        assertEquals(PlayerService.ACTION_PAUSE, pause!!.action)
+    }
+
+    @Test
     fun proximityMode_freshTagPresented_thenRemoved_thenBack_pausesAndResumes() {
         // The bug this pins: foreground dispatch may deliver a stationary
         // tag only once, and the activating read used to be the only one
@@ -693,8 +725,9 @@ class NfcAlwaysListeningUiTest {
         const val UID_A = "04A1B2C3"
         const val UID_B = "04DEADBEEF"
 
-        // MainActivity PRESENCE_TIMEOUT_MS (15s grace) plus a margin for the
-        // 1s poll ticks: the first tick past the grace lands at ~16s.
+        // The default 15s absence window (settings "Tag re-read wait" falls
+        // back to 15 when unset) plus a margin for the 1s poll ticks: the
+        // first tick past the window lands at ~16s.
         private const val PRESENCE_TIMEOUT_MS_OVERSHOOT_MS = 17_000L
     }
 }

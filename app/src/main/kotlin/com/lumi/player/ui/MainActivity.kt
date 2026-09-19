@@ -64,7 +64,8 @@ import java.io.IOException
  *   against single-occurrence blips) confirms the removal well under a
  *   second. FALLBACK: "tag lost" is derived, conservatively, from a
  *   sustained absence of reports on the active tag, checked by a presence
- *   poll every second against the grace period ([PRESENCE_TIMEOUT_MS]); it
+ *   poll every second against the user-configurable absence window
+ *   (settings "Tag re-read wait", [presenceTimeoutMs]); it
  *   owns removal detection whenever the fast path cannot run (the tag is
  *   not a Mifare Ultralight, or its session cannot be connected). Known
  *   on-device risk: with foreground dispatch a held-still tag can go cold
@@ -224,17 +225,26 @@ class MainActivity : ComponentActivity() {
     private val presenceWatcher = object : Runnable {
         override fun run() {
             val uid = lastSeenUid
-            if (uid != null && SystemClock.elapsedRealtime() - lastSeenAt > PRESENCE_TIMEOUT_MS) {
+            if (uid != null && SystemClock.elapsedRealtime() - lastSeenAt > presenceTimeoutMs()) {
                 handleTagLost(uid)
                 lastSeenUid = null
             }
             presenceHandler.postDelayed(this, PRESENCE_CHECK_MS)
         }
     }
+
+    /**
+     * The user-configurable absence-tolerance window (settings "Tag re-read
+     * wait", seconds) as the millisecond grace period the presence poll
+     * checks against.
+     */
+    private fun presenceTimeoutMs(): Long =
+        (viewModel.nfcRereadSeconds.value.coerceIn(1, 120) * 1_000L)
+
     // The poll asks every PRESENCE_CHECK_MS whether the active tag has been
-    // reported within the last PRESENCE_TIMEOUT_MS. A stationary tag may be
-    // reported only once per presentation, so the grace period must be long
-    // enough that a still-present tag (which re-reports when it moves) keeps
+    // reported within the configured absence window. A stationary tag may be
+    // reported only once per presentation, so the window must be long enough
+    // that a still-present tag (which re-reports when it moves) keeps
     // playback going; only a sustained absence counts as removal.
 
     /**
@@ -446,11 +456,5 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val PRESENCE_CHECK_MS = 1_000L
-        // Grace period: absence of reports on the active tag for this long
-        // counts as removal. Kept long because a stationary tag is reported
-        // only once per presentation (foreground dispatch is edge-triggered)
-        // — a short window (2s was the old value) false-fired and paused
-        // playback while the tag was still held close.
-        private const val PRESENCE_TIMEOUT_MS = 15_000L
     }
 }

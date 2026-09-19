@@ -114,4 +114,34 @@ class LumiRepository(private val db: LumiDatabase) {
             ),
         )
     }
+
+    // ---- settings: nfc re-read wait ----
+
+    /**
+     * How many seconds of absence of reports on the active tag (proximity
+     * mode) count as the tag having been removed. Unset or invalid stored
+     * values fall back to the default.
+     */
+    fun observeNfcRereadSeconds(): Flow<Long> =
+        dao.observeSettings().map { rows ->
+            rows.firstOrNull { it.key == SettingsEntity.NFC_REREAD_SECONDS }
+                ?.value
+                ?.toLongOrNull()
+                ?.takeIf { it in NFC_REREAD_SECONDS_RANGE }
+                ?: NFC_REREAD_SECONDS_DEFAULT
+        }
+
+    suspend fun setNfcRereadSeconds(seconds: Long) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.NFC_REREAD_SECONDS, seconds.coerceIn(NFC_REREAD_SECONDS_RANGE).toString()),
+        )
+    }
+
+    companion object {
+        /** Default absence window (seconds) before a removed tag pauses playback. */
+        const val NFC_REREAD_SECONDS_DEFAULT = 15L
+
+        /** Inclusive range the re-read wait (seconds) is allowed to take. */
+        val NFC_REREAD_SECONDS_RANGE = 1L..120L
+    }
 }

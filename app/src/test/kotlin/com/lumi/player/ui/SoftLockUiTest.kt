@@ -238,9 +238,9 @@ class SoftLockUiTest {
     }
 
     companion object {
-        private const val UNLOCK_HINT = "🔒 Tap the screen 3 times to unlock"
+        private const val UNLOCK_HINT = "🔒 Tap the screen 3 times fast to unlock"
         private const val POPUP_TEXT =
             "The screen will darken, but lumi keeps working: music keeps playing. " +
-                "Tap the screen 3 times to unlock."
+                "Tap the screen 3 times fast to unlock."
     }
 }

@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -23,11 +24,12 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
- * is a list of buttons, one per setting (play mode, NFC tags, content,
- * tag-to-content linking); clicking a row navigates into that setting's own
- * configuration screen, and the back arrow / system back unwind it back to
- * the menu (from the menu, to the player screen). The link configuration
- * lays out every tag chip and every add-content button (no clipped lists).
+ * is a list of buttons, one per setting (play mode, tag re-read wait, NFC
+ * tags, content, tag-to-content linking); clicking a row navigates into that
+ * setting's own configuration screen, and the back arrow / system back
+ * unwind it back to the menu (from the menu, to the player screen). The link
+ * configuration lays out every tag chip and every add-content button (no
+ * clipped lists).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -61,6 +63,28 @@ class SettingsMenuUiTest {
         compose.waitForIdle()
     }
 
+    private fun viewModelOf(activity: MainActivity): LumiViewModel {
+        val field = MainActivity::class.java
+            .getDeclaredField("viewModel")
+            .also { it.isAccessible = true }
+        return field.get(activity) as LumiViewModel
+    }
+
+    /**
+     * Pumps the main looper until a node with [text] is laid out (the
+     * settings values arrive through an async Room round trip) or fails.
+     */
+    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
+            Thread.sleep(20)
+        }
+        compose.onNodeWithText(text).assertExists()
+    }
+
     private fun seedData(
         tagNames: List<String> = listOf(
             "Bunny", "Fox", "Owl", "Bear", "Whale", "Panda", "Koala", "Otter",
@@ -91,6 +115,8 @@ class SettingsMenuUiTest {
 
         // Every setting is a button on the settings screen itself.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Tag re-read wait").assertExists()
+        compose.onNodeWithText("15 s until a removed tag pauses").assertExists()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithText("Tag to content").assertExists()
@@ -98,6 +124,8 @@ class SettingsMenuUiTest {
         // The menu only lists the settings - none of the configuration
         // content is on it (that lives in the sub-screens).
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
+            .assertDoesNotExist()
+        compose.onNodeWithText("In proximity mode, how many seconds a tag may go ", substring = true)
             .assertDoesNotExist()
         compose.onNodeWithText("Register a tag").assertDoesNotExist()
         compose.onNodeWithText("Add content").assertDoesNotExist()
@@ -119,6 +147,18 @@ class SettingsMenuUiTest {
         systemBack(activity)
         compose.onNodeWithText("Play mode").assertExists()
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
+            .assertDoesNotExist()
+
+        // Tag re-read wait: the sub-screen shows the configured value with
+        // steppers (the default is 15 s).
+        compose.onNodeWithText("Tag re-read wait").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("In proximity mode, how many seconds a tag may go ", substring = true)
+            .assertIsDisplayed()
+        compose.onNodeWithText("15 s").assertIsDisplayed()
+        systemBack(activity)
+        compose.onNodeWithText("Tag re-read wait").assertExists()
+        compose.onNodeWithText("In proximity mode, how many seconds a tag may go ", substring = true)
             .assertDoesNotExist()
 
         // NFC tags: the sub-screen offers registration and the (empty) list.
@@ -150,6 +190,27 @@ class SettingsMenuUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Tag to content").assertExists()
         compose.onNodeWithText("Scan a tag to change its song list").assertDoesNotExist()
+    }
+
+    @Test
+    fun tagRereadWaitStepper_updatesTheValueAndPersistsIt() {
+        val activity = openSettings()
+        compose.onNodeWithText("Tag re-read wait").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("15 s").assertIsDisplayed()
+        // Stepping up one second: the UI and the persisted value follow the
+        // async Room round trip, so pump until the stepped value is laid
+        // out.
+        compose.onNodeWithText("+").performClick()
+        waitForText("16 s")
+        compose.onNodeWithText("16 s").assertIsDisplayed()
+        // The view model's flow (same StateFlow the UI collects) settled on
+        // the new value: it is persisted.
+        assertEquals(16L, viewModelOf(activity).nfcRereadSeconds.value)
+        // Stepping down one second works the other way.
+        compose.onNodeWithText("\u2212").performClick()
+        waitForText("15 s")
+        compose.onNodeWithText("15 s").assertIsDisplayed()
     }
 
     @Test

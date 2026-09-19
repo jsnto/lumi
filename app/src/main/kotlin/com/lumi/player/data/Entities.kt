@@ -71,5 +71,11 @@ data class SettingsEntity(
 
         /** "1" when the user asked not to show the soft-lock prompt again. */
         const val LOCK_POPUP_SUPPRESSED = "lock_popup_suppressed"
+
+        /**
+         * Seconds of absence of reports on the active tag (proximity mode)
+         * that count as the tag having been removed; "15" by default.
+         */
+        const val NFC_REREAD_SECONDS = "nfc_reread_seconds"
     }
 }
