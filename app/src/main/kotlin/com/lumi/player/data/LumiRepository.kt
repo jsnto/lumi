@@ -48,6 +48,11 @@ class LumiRepository(private val db: LumiDatabase) {
 
     suspend fun tagByUid(uid: String): TagEntity? = dao.tagByUid(uid.trim())
 
+    /** Renames a registered tag; a no-op when the UID is unknown. */
+    suspend fun renameTag(uid: String, name: String) {
+        dao.tagByUid(uid.trim())?.let { dao.renameTag(it.id, name.trim()) }
+    }
+
     suspend fun deleteTag(tag: TagEntity) = dao.deleteTag(tag)
 
     // ---- entries ----

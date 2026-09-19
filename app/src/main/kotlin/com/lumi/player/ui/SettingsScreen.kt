@@ -403,7 +403,9 @@ private fun TagNameDialog(
 ) {
     var name by remember(uid) { mutableStateOf("") }
     var mode by remember(uid) { mutableStateOf(defaultMode) }
+    var fieldsTouched by remember(uid) { mutableStateOf(false) }
     LaunchedEffect(uid, prefill) {
+        if (fieldsTouched) return@LaunchedEffect
         prefill?.let {
             name = it.name
             mode = it.mode
@@ -418,7 +420,10 @@ private fun TagNameDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it.take(LumiTagNdef.MAX_NAME_LENGTH) },
+                    onValueChange = {
+                        name = it.take(LumiTagNdef.MAX_NAME_LENGTH)
+                        fieldsTouched = true
+                    },
                     label = { Text("Name (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -428,13 +433,19 @@ private fun TagNameDialog(
                     title = "Continuous",
                     detail = "Keeps playing until you tap a different tag.",
                     selected = mode == PlayMode.CONTINUOUS,
-                    onSelect = { mode = PlayMode.CONTINUOUS },
+                    onSelect = {
+                        mode = PlayMode.CONTINUOUS
+                        fieldsTouched = true
+                    },
                 )
                 ModeRow(
                     title = "Proximity",
                     detail = "Plays while the tag stays near.",
                     selected = mode == PlayMode.PROXIMITY,
-                    onSelect = { mode = PlayMode.PROXIMITY },
+                    onSelect = {
+                        mode = PlayMode.PROXIMITY
+                        fieldsTouched = true
+                    },
                 )
             }
         },

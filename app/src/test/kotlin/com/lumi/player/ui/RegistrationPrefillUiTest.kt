@@ -59,15 +59,23 @@ class RegistrationPrefillUiTest {
         return field.get(activity) as LumiViewModel
     }
 
-    private fun openSettingsAndCapture(data: LumiTagData?, writable: Boolean): LumiViewModel {
+    private fun openSettings(): LumiViewModel {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        val viewModel = viewModelOf(activity)
+        return viewModelOf(activity)
+    }
+
+    private fun openSettingsAndCapture(data: LumiTagData?, writable: Boolean): LumiViewModel {
+        val viewModel = openSettings()
         viewModel.captureForTest(UID, data, writable)
         compose.waitForIdle()
         return viewModel
+    }
+
+    private fun db(block: suspend () -> Unit) {
+        Thread { runBlocking { block() } }.also { it.start() }.apply { join() }
     }
 
     private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
@@ -92,14 +100,19 @@ class RegistrationPrefillUiTest {
 
     @Test
     fun registration_tagWithLumiPayload_prefillsNameAndOffersWrite() {
-        val viewModel = openSettingsAndCapture(
-            data = LumiTagData("Hallway", PlayMode.PROXIMITY),
-            writable = true,
-        )
+        val viewModel = openSettings()
+        // Live capture shape: the dialog opens before the async NDEF read
+        // lands, so the payload arrives after the form has already composed.
+        viewModel.captureForTest(UID, null, false)
+        compose.waitForIdle()
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
-        // The name field pre-fills from the tag's payload.
+        compose.onNodeWithText("Name (optional)").assertIsDisplayed()
+        compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
+        viewModel.captureForTest(UID, LumiTagData("Hallway", PlayMode.PROXIMITY), true)
+        compose.waitForIdle()
+        // The name field picks up the tag's payload; a writable tag offers
+        // the optional write step.
         compose.onNodeWithText("Hallway").assertIsDisplayed()
-        // A writable tag offers the optional write step.
         compose.onNodeWithText("Save and write to tag").assertIsDisplayed()
 
         // Saving must NOT change the app's play mode, even though the tag's
@@ -135,6 +148,27 @@ class RegistrationPrefillUiTest {
             playModeOf(viewModel),
         )
         assertEquals("The tag must be saved under the pre-filled name", "Porch", savedTagName(UID))
+    }
+
+    @Test
+    fun registration_rewritingRegisteredTag_updatesStoredName() {
+        // The tag is already registered under its stored name.
+        db { app().repository.addTag(UID, "Old Name") }
+        val viewModel = openSettingsAndCapture(data = null, writable = true)
+        viewModel.tagWriter = { _, _ -> true }
+        compose.onNodeWithText("Name (optional)").assertIsDisplayed()
+        // Name the tag and write that name to it: the stored record must
+        // follow the written tag payload.
+        compose.onNodeWithText("Name (optional)").performTextInput("Porch")
+        compose.waitForIdle()
+        compose.onNodeWithText("Save and write to tag").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) == "Porch" })
+        assertEquals(
+            "the stored name must follow the written tag payload",
+            "Porch",
+            savedTagName(UID),
+        )
     }
 
     @OptIn(ExperimentalTestApi::class)

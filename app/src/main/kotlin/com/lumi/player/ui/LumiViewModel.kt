@@ -278,6 +278,11 @@ class LumiViewModel(
         _capturedTagWritable.value = writable
     }
 
+    /** Test seam: the physical tag write, replaced in unit tests. */
+    internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean = { tag, data ->
+        LumiTagNdef.write(tag, data)
+    }
+
     fun discardCaptured() {
         _capturedUid.value = null
         _capturedTagData.value = null
@@ -290,7 +295,9 @@ class LumiViewModel(
      * tag is still reachable - writes the name + mode back to the tag so
      * re-registering it later prefills the form. The mode only records what
      * the tag was registered with (and prefills the form on re-read); it
-     * does NOT change the app's play mode.
+     * does NOT change the app's play mode. When the tag is already
+     * registered and the write lands, the stored record's name is updated
+     * to follow the written tag payload.
      */
     fun confirmTagName(name: String, mode: PlayMode, writeToTag: Boolean) {
         val uid = _capturedUid.value ?: return
@@ -305,15 +312,14 @@ class LumiViewModel(
             if (saved != null) _selectedTagId.value = saved.id
             if (writeToTag) {
                 val written = withContext(Dispatchers.IO) {
-                    LumiTagNdef.write(tag, LumiTagData(name, mode))
+                    tagWriter(tag, LumiTagData(name, mode))
                 }
-                event(
-                    if (written) {
-                        "Name written to the tag."
-                    } else {
-                        "Couldn't write to the tag - keep it on the phone and try again."
-                    },
-                )
+                if (written) {
+                    if (saved == null) repository.renameTag(uid, name)
+                    event("Name written to the tag.")
+                } else {
+                    event("Couldn't write to the tag - keep it on the phone and try again.")
+                }
             }
         }
     }
