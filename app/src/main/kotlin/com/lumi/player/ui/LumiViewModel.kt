@@ -316,8 +316,10 @@ class LumiViewModel(
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
             if (saved != null) _selectedTagId.value = saved.id
             if (writeToTag) {
+                // The DB stores the name trimmed; write it trimmed to the
+                // tag as well so the two can never diverge.
                 val written = withContext(Dispatchers.IO) {
-                    tagWriter(tag, LumiTagData(name, mode))
+                    tagWriter(tag, LumiTagData(name.trim(), mode))
                 }
                 if (written) {
                     if (saved == null) repository.renameTag(uid, name)

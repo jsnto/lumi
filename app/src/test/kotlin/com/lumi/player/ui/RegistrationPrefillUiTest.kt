@@ -183,6 +183,27 @@ class RegistrationPrefillUiTest {
         )
     }
 
+    @Test
+    fun registration_writeTrimsNameSoTagAndDbMatch() {
+        // The DB stores the name trimmed, so the tag write must use the
+        // same trimmed value - otherwise a name with surrounding
+        // whitespace would leave the tag and the DB record diverging.
+        val viewModel = openSettingsAndCapture(data = null, writable = true)
+        var writtenName: String? = null
+        viewModel.tagWriter = { _, data ->
+            writtenName = data.name
+            true
+        }
+        compose.onNodeWithText("Name (optional)").assertIsDisplayed()
+        compose.onNodeWithText("Name (optional)").performTextInput("  Porch  ")
+        compose.waitForIdle()
+        compose.onNodeWithText("Save and write to tag").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null && writtenName != null })
+        assertEquals("the DB stores the trimmed name", "Porch", savedTagName(UID))
+        assertEquals("the tag must be written with the same trimmed name", "Porch", writtenName)
+    }
+
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun registration_nameInput_isClampedToTagPayloadLimit() {
