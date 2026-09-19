@@ -73,6 +73,19 @@ class PlaybackPolicyTest {
     }
 
     @Test
+    fun proximity_secondLossWhilePausedStillPauses() {
+        // A duplicated loss report (e.g. the generic session drops right
+        // after the fallback already paused, or the two fast paths race) must
+        // not restart or switch anything - pausing is idempotent.
+        val policy = PlaybackPolicy(PlayMode.PROXIMITY)
+        policy.onTagDetected(uidA)
+        assertEquals(NfcAction.PausePlayback, policy.onTagLost(uidA))
+        assertEquals(NfcAction.PausePlayback, policy.onTagLost(uidA))
+        // A re-read of the paused tag still resumes.
+        assertEquals(NfcAction.Resume, policy.onTagDetected(uidA, paused = true))
+    }
+
+    @Test
     fun proximity_lossOfInactiveTagIsIgnored() {
         val policy = PlaybackPolicy(PlayMode.PROXIMITY)
         policy.onTagDetected(uidA)

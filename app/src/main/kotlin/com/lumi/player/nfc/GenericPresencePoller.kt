@@ -1,0 +1,96 @@
+package com.lumi.player.nfc
+
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import java.io.IOException
+
+/**
+ * A live low-level read session on a tag the Mifare Ultralight fast path
+ * cannot read (any other NfcA or IsoDep tag).
+ *
+ * In the app this wraps a connected [android.nfc.tech.TagTechnology]
+ * session: a probe is a real low-level read command to the tag, and it
+ * succeeds only while the tag is physically in the reader's field, so a
+ * failed probe is a reliable "tag removed" signal even when the NFC stack
+ * itself reports nothing about a stationary tag.
+ */
+interface GenericPresenceSession {
+    /**
+     * Performs one low-level read on the tag; throws [IOException] when the
+     * tag is out of range.
+     */
+    @Throws(IOException::class)
+    fun probe()
+
+    /** Closes the tag-tech session (a no-op when the tag is already gone). */
+    fun close()
+}
+
+/**
+ * The probe loop for non-Mifare tags. Under foreground dispatch a
+ * stationary tag may be delivered only once, so without a fast path a held
+ * non-Mifare tag would look "removed" to the absence-timeout fallback.
+ * Probing the tag with a real low-level read on every tick (like the
+ * Mifare fast path's page-0 reads) refreshes the presence record as long
+ * as the tag stays on the antenna:
+ *
+ * - a successful probe refreshes [onStillPresent] (the tag is still in
+ *   range);
+ * - a failed probe waits [retryDelayMs] and performs ONE retry probe (a
+ *   two-strike debounce against single-occurrence blips): a successful
+ *   retry means the tag is still there - the loop resets and continues; a
+ *   failed retry confirms the removal - [onConfirmedRemoved] is called
+ *   exactly once and the loop ends.
+ *
+ * The loop only probes and never touches playback itself; it must run on
+ * a background dispatcher (each probe blocks for the duration of the NFC
+ * command) and the callbacks are responsible for hopping to the main
+ * thread.
+ */
+object GenericPresencePoller {
+    /** Cadence of the probes; matches the Mifare fast path. */
+    const val READ_INTERVAL_MS = 300L
+
+    /** Debounce delay before the single retry probe after a failed probe. */
+    const val RETRY_DELAY_MS = 100L
+
+    /**
+     * Runs the probe loop; returns when the removal is confirmed or the
+     * coroutine is cancelled. [delayFn] is injectable so tests can advance
+     * time without a real clock.
+     */
+    suspend fun loop(
+        probe: () -> Unit,
+        onStillPresent: () -> Unit,
+        onConfirmedRemoved: () -> Unit,
+        readIntervalMs: Long = READ_INTERVAL_MS,
+        retryDelayMs: Long = RETRY_DELAY_MS,
+        delayFn: suspend (Long) -> Unit = { delay(it) },
+    ): Unit {
+        val job = currentCoroutineContext()[Job]
+        while (job?.isActive != false) {
+            val present = try {
+                probe()
+                true
+            } catch (e: IOException) {
+                false
+            }
+            if (!present) {
+                delayFn(retryDelayMs)
+                val stillPresent = try {
+                    probe()
+                    true
+                } catch (e: IOException) {
+                    false
+                }
+                if (!stillPresent) {
+                    onConfirmedRemoved()
+                    return
+                }
+            }
+            onStillPresent()
+            delayFn(readIntervalMs)
+        }
+    }
+}
