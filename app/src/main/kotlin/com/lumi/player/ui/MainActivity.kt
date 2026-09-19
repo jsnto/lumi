@@ -5,7 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
+import android.nfc.tech.IsoDep
 import android.nfc.tech.MifareUltralight
+import android.nfc.tech.NfcA
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -27,6 +29,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
+import com.lumi.player.nfc.GenericPresencePoller
+import com.lumi.player.nfc.GenericPresenceSession
 import com.lumi.player.nfc.MifarePresencePoller
 import com.lumi.player.nfc.PresenceReader
 import com.lumi.player.player.PlaybackStatus
@@ -55,23 +59,29 @@ import java.io.IOException
  *   where foreground dispatch worked.
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
- * - PROXIMITY: tag loss has two detectors, both ending in the same
- *   handleTagLost pause. FAST PATH: the Tag handle delivered by the
+ * - PROXIMITY: tag loss has three detectors, all ending in the same
+ *   handleTagLost pause. MIFARE FAST PATH: the Tag handle delivered by the
  *   foreground-dispatch read is held ([lastSeenTag]); while that tag is the
  *   active tag a background coroutine continuously reads page 0 of it
  *   ([MifarePresencePoller], Mifare Ultralight tags only) - every
  *   successful read refreshes the presence record, and a read that fails
  *   twice (a 100 ms retry between the strikes - a two-strike debounce
  *   against single-occurrence blips) confirms the removal well under a
- *   second. FALLBACK: "tag lost" is derived, conservatively, from a
+ *   second. GENERIC FAST PATH: any other tag the Mifare path cannot read
+ *   keeps a tag-tech connection (NfcA, then IsoDep) alive
+ *   ([GenericPresencePoller]); every connected check refreshes the
+ *   presence record, so a non-Mifare tag HELD STATIONARY no longer false
+ *   -pauses after the absence window, and the connection dropping (the tag
+ *   lifted off the reader) confirms the removal through the same route.
+ *   FALLBACK: "tag lost" is derived, conservatively, from a
  *   sustained absence of reports on the active tag, checked by a presence
  *   poll every second against the user-configurable absence window
- *   (settings "Tag re-read wait", [presenceTimeoutMs]); it
- *   owns removal detection whenever the fast path cannot run (the tag is
- *   not a Mifare Ultralight, or its session cannot be connected). Known
- *   on-device risk: with foreground dispatch a held-still tag can go cold
- *   (the phone stops actively reading it), so the fast-path read can fail
- *   and pause before a real removal - on-device validation item. Loss
+ *   (settings "Tag re-read wait", [presenceTimeoutMs]); it owns removal
+ *   detection whenever no fast path can run (no Mifare Ultralight session
+ *   AND no connectable generic tag-tech session). Known on-device risk:
+ *   with foreground dispatch a held-still tag can go cold (the phone stops
+ *   actively reading it), so a fast-path read or a session connection can
+ *   drop and pause before a real removal - on-device validation item. Loss
  *   PAUSES playback (the session and the active tag are kept), so a
  *   re-read of the same tag resumes it.
  * - Tag registration: the same foreground dispatch, with the view model in
@@ -223,6 +233,31 @@ class MainActivity : ComponentActivity() {
         mifare.connect()
         return PresenceReader { mifare.readPages(0) }
     }
+
+    /**
+     * Test seam: establishes a connected generic tag-tech session on a tag
+     * the Mifare fast path cannot read. Returns null when no session can be
+     * established (no NfcA/IsoDep tech, or the connect fails) - then the
+     * absence-timeout fallback owns removal detection for that tag.
+     */
+    private var establishGenericPresenceSession: (Tag) -> GenericPresenceSession? =
+        this::defaultGenericPresenceSession
+
+    private fun defaultGenericPresenceSession(tag: Tag): GenericPresenceSession? {
+        // Chain to whichever common tag-tech the tag exposes; a Mifare
+        // Ultralight that the fast path failed to connect still answers as
+        // an NfcA tag.
+        val tech = NfcA.get(tag) ?: IsoDep.get(tag) ?: MifareUltralight.get(tag) ?: return null
+        tech.connect()
+        return object : GenericPresenceSession {
+            override val isConnected: Boolean
+                get() = runCatching { tech.isConnected }.getOrDefault(false)
+            override fun close() {
+                runCatching { tech.close() }
+            }
+        }
+    }
+
     private val presenceWatcher = object : Runnable {
         override fun run() {
             val uid = lastSeenUid
@@ -358,67 +393,128 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Starts (or restarts) the continuous-reading poll for the active tag.
-     * Every successful read refreshes the presence record, so the
-     * absence-timeout fallback never fires while the tag answers; a
-     * confirmed removal (two failed reads) pauses through the same
-     * [handleTagLost] route as the fallback and clears the record so the
-     * fallback does not double-report the loss.
+     * Starts (or restarts) the presence poll for the active tag. Whichever
+     * fast path can run (Mifare page-0 reads, or a connected generic
+     * tag-tech session) refreshes the presence record so the
+     * absence-timeout fallback stays quiet while the tag stays present; a
+     * confirmed removal pauses through the same [handleTagLost] route as
+     * the fallback and clears the record so the fallback does not
+     * double-report the loss.
      */
     private fun startPresencePoll(tag: Tag, uid: String) {
         // A new tag presentation always cancels the previous tag's poll.
         stopPresencePoll()
         presencePollJob = nfcScope.launch {
+            // Mifare fast path first: a connectable Mifare Ultralight
+            // session reads page 0 continuously.
             val reader = withContext(Dispatchers.IO) {
                 try {
                     establishPresenceSession(tag)
                 } catch (e: Exception) {
                     // No session (not a Mifare Ultralight, connect failed,
-                    // ...): the absence-timeout fallback owns this tag.
+                    // ...): fall through to the generic fast path.
+                    null
+                }
+            }
+            if (reader != null) {
+                runMifarePresenceLoop(reader, uid)
+                return@launch
+            }
+            // Generic fast path: any other tag keeps a tag-tech session
+            // connected; the connection dropping confirms the removal.
+            val session = withContext(Dispatchers.IO) {
+                try {
+                    establishGenericPresenceSession(tag)
+                } catch (e: Exception) {
+                    // No connectable session: the absence-timeout fallback
+                    // owns this tag.
                     null
                 }
             } ?: return@launch
             withContext(Dispatchers.IO) {
-                MifarePresencePoller.loop(
-                    readPage0 = {
-                        try {
-                            reader.readPage0()
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: IOException) {
-                            throw e
-                        } catch (e: Exception) {
-                            // A dead session (NFC service dropped mid-read)
-                            // surfaces a runtime exception, not an
-                            // IOException: treat any read failure as a
-                            // "tag out of range" strike so the loop
-                            // degrades to the absence-timeout fallback
-                            // instead of crashing the app.
-                            throw IOException("presence read failed", e)
-                        }
-                    },
-                    onStillPresent = {
-                        presenceHandler.post {
-                            if (lastSeenUid == uid) {
-                                lastSeenAt = SystemClock.elapsedRealtime()
+                try {
+                    GenericPresencePoller.loop(
+                        isConnected = { session.isConnected },
+                        onStillPresent = {
+                            presenceHandler.post {
+                                if (lastSeenUid == uid) {
+                                    lastSeenAt = SystemClock.elapsedRealtime()
+                                }
                             }
-                        }
-                    },
-                    onConfirmedRemoved = {
-                        presenceHandler.post {
-                            if (lastSeenUid == uid) {
-                                handleTagLost(uid)
-                                // The fast path already reported the loss:
-                                // clear the record so the fallback poll does
-                                // not issue a second pause for the same
-                                // removal (a re-read re-seeds the record via
-                                // the normal activation path).
-                                lastSeenUid = null
+                        },
+                        onDisconnected = {
+                            presenceHandler.post {
+                                if (lastSeenUid == uid) {
+                                    handleTagLost(uid)
+                                    // The fast path already reported the
+                                    // loss: clear the record so the
+                                    // fallback poll does not issue a second
+                                    // pause for the same removal (a re-read
+                                    // re-seeds the record via the normal
+                                    // activation path).
+                                    lastSeenUid = null
+                                }
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                } finally {
+                    // Cancellation (tag switch, mode change, playback stop)
+                    // exits through this finally without reporting the
+                    // removal; only a dropped connection does.
+                    session.close()
+                }
             }
+        }
+    }
+
+    /**
+     * The Mifare fast path: every successful page-0 read refreshes the
+     * presence record, so the absence-timeout fallback never fires while
+     * the tag answers; a confirmed removal (two failed reads) pauses
+     * through the same [handleTagLost] route as the fallback and clears
+     * the record so the fallback does not double-report the loss.
+     */
+    private suspend fun runMifarePresenceLoop(reader: PresenceReader, uid: String) {
+        withContext(Dispatchers.IO) {
+            MifarePresencePoller.loop(
+                readPage0 = {
+                    try {
+                        reader.readPage0()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: IOException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A dead session (NFC service dropped mid-read)
+                        // surfaces a runtime exception, not an
+                        // IOException: treat any read failure as a
+                        // "tag out of range" strike so the loop degrades to
+                        // the absence-timeout fallback instead of crashing
+                        // the app.
+                        throw IOException("presence read failed", e)
+                    }
+                },
+                onStillPresent = {
+                    presenceHandler.post {
+                        if (lastSeenUid == uid) {
+                            lastSeenAt = SystemClock.elapsedRealtime()
+                        }
+                    }
+                },
+                onConfirmedRemoved = {
+                    presenceHandler.post {
+                        if (lastSeenUid == uid) {
+                            handleTagLost(uid)
+                            // The fast path already reported the loss:
+                            // clear the record so the fallback poll does
+                            // not issue a second pause for the same removal
+                            // (a re-read re-seeds the record via the normal
+                            // activation path).
+                            lastSeenUid = null
+                        }
+                    }
+                },
+            )
         }
     }
 

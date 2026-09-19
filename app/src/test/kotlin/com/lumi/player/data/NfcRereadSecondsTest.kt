@@ -1,9 +1,12 @@
 package com.lumi.player.data
 
 import com.lumi.player.LumiApp
+import com.lumi.player.nfc.GenericPresencePoller
+import com.lumi.player.nfc.MifarePresencePoller
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -37,6 +40,33 @@ class NfcRereadSecondsTest {
         val repo = app().repository
         repo.setNfcRereadSeconds(7L)
         assertEquals(7L, repo.observeNfcRereadSeconds().first())
+    }
+
+    @Test
+    fun minimumBoundaryValues_roundTrip() = runBlocking {
+        // The tightest windows the user can pick (1 s, 5 s) must survive a
+        // round trip unchanged: the presence poll relies on exactly these
+        // values as its absence window.
+        val repo = app().repository
+        for (seconds in listOf(1L, 5L)) {
+            repo.setNfcRereadSeconds(seconds)
+            assertEquals(seconds, repo.observeNfcRereadSeconds().first())
+        }
+    }
+
+    @Test
+    fun minimumWindow_staysWiderThanThePresencePollRate() {
+        // Both fast paths (the Mifare page-0 reads and the generic
+        // connection checks) refresh the presence record at a rate several
+        // times faster than the tightest allowed absence window (1 s), so a
+        // held-still tag keeps its record fresh long before the window can
+        // trip a false pause at the 1 s / 5 s boundaries.
+        val minWindowMs = LumiRepository.NFC_REREAD_SECONDS_RANGE.first * 1_000L
+        assertTrue(
+            "multiple presence checks must fit inside the minimum window",
+            minWindowMs >= 2 * MifarePresencePoller.READ_INTERVAL_MS &&
+                minWindowMs >= 2 * GenericPresencePoller.CHECK_INTERVAL_MS,
+        )
     }
 
     @Test
