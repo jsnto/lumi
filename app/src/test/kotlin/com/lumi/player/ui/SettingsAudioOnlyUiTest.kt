@@ -28,8 +28,9 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the audio-only settings change: the "Add content"
- * button must go straight to the audio file picker - the old Audio/Video/Link
- * type dialog and the link-entry form are gone - while legacy video/url rows
+ * button (on the Content settings sub-screen, reached from its menu button)
+ * must go straight to the audio file picker - the old Audio/Video/Link type
+ * dialog and the link-entry form are gone - while legacy video/url rows
  * saved before the change still parse and render in the content list.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -82,7 +83,11 @@ class SettingsAudioOnlyUiTest {
         val activity = Robolectric.buildActivity(SettingsHostActivity::class.java).setup().get()
         compose.waitForIdle()
 
-        // The settings column is taller than the tiny Robolectric display and
+        // Open the Content configuration from its menu button.
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+
+        // The content column is taller than the tiny Robolectric display and
         // performClick injects real touch input at the node's screen position,
         // so scroll the button into view first.
         compose.onNodeWithText("Add content").performScrollTo()
@@ -169,6 +174,10 @@ class SettingsAudioOnlyUiTest {
         thread.join()
         ShadowLooper.idleMainLooper()
         openSettings()
+
+        // Open the Content configuration from its menu button.
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
 
         compose.onNodeWithText("Old Clip").assertExists()
         compose.onNodeWithText("video file").assertExists()

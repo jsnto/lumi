@@ -1,8 +1,10 @@
 package com.lumi.player.ui
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,7 +38,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,9 +53,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
@@ -56,18 +65,39 @@ import com.lumi.player.data.TagEntity
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 
+/** Which settings sub-screen the settings screen shows. */
+private enum class SettingsPane {
+    Menu,
+    PlayMode,
+    Tags,
+    Content,
+    Link,
+}
+
 /**
- * Parent-facing settings, laid out as a single scrollable menu with one
- * section per settings group: play mode, NFC tag registration, audio content
- * registration, and tag-to-content linking.
+ * Parent-facing settings, laid out like the polex settings menu: the settings
+ * screen is a list of buttons, one per setting (play mode, NFC tags, content,
+ * tag-to-content linking); clicking a row navigates into that setting's own
+ * configuration screen.
+ *
+ * Back navigation unwinds one level at a time: system back and the back arrow
+ * take a sub-screen back to the menu, and from the menu the host's back
+ * handling (the NavHost in [LumiRoot]) returns to the player screen. The
+ * [SettingsPane] state and the menu's scroll position live here at the top
+ * level, so returning from a sub-screen lands in the menu at the exact scroll
+ * position it was left at, with every dialog and selection intact.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: LumiViewModel,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
+    var pane by remember { mutableStateOf(SettingsPane.Menu) }
+    // The menu list's scroll position lives at this level so leaving for a
+    // sub-screen and coming back preserves it.
+    val menuScroll = remember { ScrollState(0) }
+
     val context = LocalContext.current
 
     val tags by viewModel.observeTags().collectAsState(emptyList())
@@ -88,37 +118,53 @@ fun SettingsScreen(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.AUDIO) }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            PlayModeSection(viewModel, playMode)
-            TagsSection(viewModel, tags) { deleteTag = it }
-            ContentSection(viewModel, entries, onAddContent = { audioPicker.launch(arrayOf("audio/*")) }) {
-                deleteEntry = it
-            }
-            LinkSection(viewModel, tags, entries, effectiveSelectedId, linked)
-        }
+    // System back must unwind the settings screen itself (sub-screen → menu)
+    // before the host can pop settings away entirely; only when the menu is
+    // showing is the default back handler allowed through.
+    BackHandler(enabled = pane != SettingsPane.Menu) {
+        pane = SettingsPane.Menu
     }
 
-    // ---------- dialogs ----------
+    when (pane) {
+        SettingsPane.Menu -> SettingsMenuPane(
+            scrollState = menuScroll,
+            playMode = playMode,
+            tags = tags,
+            entries = entries,
+            onPlayMode = { pane = SettingsPane.PlayMode },
+            onTags = { pane = SettingsPane.Tags },
+            onContent = { pane = SettingsPane.Content },
+            onLink = { pane = SettingsPane.Link },
+            onBack = onBack,
+        )
+        SettingsPane.PlayMode -> PlayModePane(
+            viewModel = viewModel,
+            playMode = playMode,
+            onBack = { pane = SettingsPane.Menu },
+        )
+        SettingsPane.Tags -> TagsPane(
+            viewModel = viewModel,
+            tags = tags,
+            onBack = { pane = SettingsPane.Menu },
+            onTagDeleted = { deleteTag = it },
+        )
+        SettingsPane.Content -> ContentPane(
+            entries = entries,
+            onBack = { pane = SettingsPane.Menu },
+            onAddContent = { audioPicker.launch(arrayOf("audio/*")) },
+            onEntryDeleted = { deleteEntry = it },
+        )
+        SettingsPane.Link -> LinkPane(
+            viewModel = viewModel,
+            tags = tags,
+            entries = entries,
+            effectiveSelectedId = effectiveSelectedId,
+            linked = linked,
+            onBack = { pane = SettingsPane.Menu },
+        )
+    }
+
+    // ---------- dialogs (overlay any pane) ----------
 
     if (scanning) {
         AlertDialog(
@@ -189,95 +235,255 @@ fun SettingsScreen(
     }
 }
 
-// ---------- sections (one per settings group) ----------
+// ---------- the menu (one button per setting) ----------
+
+/**
+ * The settings menu: one clickable row per setting plus an app-version
+ * footer. Clicking a row navigates into that setting's configuration screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsMenuPane(
+    scrollState: ScrollState,
+    playMode: PlayMode,
+    tags: List<TagEntity>,
+    entries: List<EntryEntity>,
+    onPlayMode: () -> Unit,
+    onTags: () -> Unit,
+    onContent: () -> Unit,
+    onLink: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            MenuRow(
+                icon = Icons.Default.PlayArrow,
+                title = "Play mode",
+                subtitle = when (playMode) {
+                    PlayMode.CONTINUOUS -> "Continuous"
+                    PlayMode.PROXIMITY -> "Proximity"
+                },
+                onClick = onPlayMode,
+            )
+            MenuRow(
+                icon = Icons.Default.LocationOn,
+                title = "NFC tags",
+                subtitle = if (tags.isEmpty()) "No tags yet" else "${tags.size} registered",
+                onClick = onTags,
+            )
+            MenuRow(
+                icon = Icons.Default.List,
+                title = "Content",
+                subtitle = if (entries.isEmpty()) "No songs yet" else "${entries.size} songs",
+                onClick = onContent,
+            )
+            MenuRow(
+                icon = Icons.Default.Star,
+                title = "Tag to content",
+                subtitle = "Choose what each tag plays",
+                onClick = onLink,
+            )
+            Text(
+                text = "lumi v${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** A settings button: icon, title, subtitle, chevron (polex-style row). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MenuRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+        }
+    }
+}
+
+// ---------- sub-screens (one per setting) ----------
+
+/** Shared top bar for the settings sub-screens. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PaneTopAppBar(title: String, onBack: () -> Unit) {
+    TopAppBar(
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+        },
+    )
+}
 
 /** Play mode: pick continuous or proximity behaviour. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlayModeSection(
+private fun PlayModePane(
     viewModel: LumiViewModel,
     playMode: PlayMode,
+    onBack: () -> Unit,
 ) {
-    SectionCard("Play mode") {
-        ModeRow(
-            title = "Continuous",
-            detail = "Keeps playing until you tap a different tag.",
-            selected = playMode == PlayMode.CONTINUOUS,
-            onSelect = { viewModel.setPlayMode(PlayMode.CONTINUOUS) },
-        )
-        ModeRow(
-            title = "Proximity",
-            detail = "Plays while the tag stays near; stops when it's removed.",
-            selected = playMode == PlayMode.PROXIMITY,
-            onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
-        )
+    Scaffold(topBar = { PaneTopAppBar("Play mode", onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard("Play mode") {
+                ModeRow(
+                    title = "Continuous",
+                    detail = "Keeps playing until you tap a different tag.",
+                    selected = playMode == PlayMode.CONTINUOUS,
+                    onSelect = { viewModel.setPlayMode(PlayMode.CONTINUOUS) },
+                )
+                ModeRow(
+                    title = "Proximity",
+                    detail = "Plays while the tag stays near; stops when it's removed.",
+                    selected = playMode == PlayMode.PROXIMITY,
+                    onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
+                )
+            }
+        }
     }
 }
 
 /** NFC tags: register and manage tags. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TagsSection(
+private fun TagsPane(
     viewModel: LumiViewModel,
     tags: List<TagEntity>,
+    onBack: () -> Unit,
     onTagDeleted: (TagEntity) -> Unit,
 ) {
-    SectionCard("NFC tags") {
-        OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Register a tag")
-        }
-        if (tags.isEmpty()) {
-            Text(
-                text = "No tags yet. Tap a tag on the back of the phone to register it.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        tags.forEach { tag ->
-            SettingRow(
-                leading = "🏷️",
-                title = tag.name.ifEmpty { "Tag" },
-                detail = tag.uid,
-                trailing = {
-                    IconButton(onClick = { onTagDeleted(tag) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete tag")
-                    }
-                },
-            )
+    Scaffold(topBar = { PaneTopAppBar("NFC tags", onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard("NFC tags") {
+                OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Register a tag")
+                }
+                if (tags.isEmpty()) {
+                    Text(
+                        text = "No tags yet. Tap a tag on the back of the phone to register it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                tags.forEach { tag ->
+                    SettingRow(
+                        leading = "🏷️",
+                        title = tag.name.ifEmpty { "Tag" },
+                        detail = tag.uid,
+                        trailing = {
+                            IconButton(onClick = { onTagDeleted(tag) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete tag")
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
 
 /** Content: register and manage audio entries. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ContentSection(
-    viewModel: LumiViewModel,
+private fun ContentPane(
     entries: List<EntryEntity>,
+    onBack: () -> Unit,
     onAddContent: () -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
-    SectionCard("Content") {
-        OutlinedButton(onClick = onAddContent) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Add content")
-        }
-        if (entries.isEmpty()) {
-            Text(
-                text = "Nothing here yet. Add a song.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        entries.forEach { entry ->
-            SettingRow(
-                leading = emojiFor(entry.type),
-                title = entry.label,
-                detail = detailFor(entry.type, entry.payload),
-                trailing = {
-                    IconButton(onClick = { onEntryDeleted(entry) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete")
-                    }
-                },
-            )
+    Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard("Content") {
+                OutlinedButton(onClick = onAddContent) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add content")
+                }
+                if (entries.isEmpty()) {
+                    Text(
+                        text = "Nothing here yet. Add a song.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                entries.forEach { entry ->
+                    SettingRow(
+                        leading = emojiFor(entry.type),
+                        title = entry.label,
+                        detail = detailFor(entry.type, entry.payload),
+                        trailing = {
+                            IconButton(onClick = { onEntryDeleted(entry) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete")
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
@@ -287,94 +493,106 @@ private fun ContentSection(
  * tag chips scroll horizontally and the "add content" buttons flow, so
  * neither list gets clipped no matter how many tags or entries exist.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun LinkSection(
+private fun LinkPane(
     viewModel: LumiViewModel,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
     effectiveSelectedId: Long?,
     linked: List<EntryEntity>,
+    onBack: () -> Unit,
 ) {
-    SectionCard("Tag to content") {
-        OutlinedButton(onClick = { viewModel.startTagScan() }) {
-            Text("Scan a tag to change its song list")
-        }
-        if (tags.isEmpty()) {
-            Text(
-                text = "Register a tag first, then link content to it.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                tags.forEach { tag ->
-                    FilterChip(
-                        selected = tag.id == effectiveSelectedId,
-                        onClick = { viewModel.selectTag(tag.id) },
-                        label = {
-                            Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
-                        },
-                    )
+    Scaffold(topBar = { PaneTopAppBar("Tag to content", onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard("Tag to content") {
+                OutlinedButton(onClick = { viewModel.startTagScan() }) {
+                    Text("Scan a tag to change its song list")
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            val effectiveId = effectiveSelectedId
-            if (effectiveId == null) {
-                Text(
-                    text = "Pick a tag above.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            } else {
-                if (linked.isEmpty()) {
+                if (tags.isEmpty()) {
                     Text(
-                        text = "This tag plays nothing yet.",
+                        text = "Register a tag first, then link content to it.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                }
-                linked.forEachIndexed { index, entry ->
-                    SettingRow(
-                        leading = emojiFor(entry.type),
-                        title = entry.label,
-                        trailing = {
-                            IconButton(
-                                onClick = { viewModel.moveLinked(effectiveId, index, -1) },
-                                enabled = index > 0,
-                            ) {
-                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
-                            }
-                            IconButton(
-                                onClick = { viewModel.moveLinked(effectiveId, index, 1) },
-                                enabled = index < linked.size - 1,
-                            ) {
-                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
-                            }
-                            IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
-                                Icon(Icons.Default.Close, contentDescription = "Remove")
-                            }
-                        },
-                    )
-                }
-                if (entries.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Add to this tag:",
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    FlowRow(
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        entries.forEach { entry ->
-                            OutlinedButton(
-                                onClick = { viewModel.addLinked(effectiveId, entry.id) },
+                        tags.forEach { tag ->
+                            FilterChip(
+                                selected = tag.id == effectiveSelectedId,
+                                onClick = { viewModel.selectTag(tag.id) },
+                                label = {
+                                    Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
+                                },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    val effectiveId = effectiveSelectedId
+                    if (effectiveId == null) {
+                        Text(
+                            text = "Pick a tag above.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        if (linked.isEmpty()) {
+                            Text(
+                                text = "This tag plays nothing yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        linked.forEachIndexed { index, entry ->
+                            SettingRow(
+                                leading = emojiFor(entry.type),
+                                title = entry.label,
+                                trailing = {
+                                    IconButton(
+                                        onClick = { viewModel.moveLinked(effectiveId, index, -1) },
+                                        enabled = index > 0,
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.moveLinked(effectiveId, index, 1) },
+                                        enabled = index < linked.size - 1,
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
+                                    }
+                                    IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove")
+                                    }
+                                },
+                            )
+                        }
+                        if (entries.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Add to this tag:",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text("+ ${entry.label}")
+                                entries.forEach { entry ->
+                                    OutlinedButton(
+                                        onClick = { viewModel.addLinked(effectiveId, entry.id) },
+                                    ) {
+                                        Text("+ ${entry.label}")
+                                    }
+                                }
                             }
                         }
                     }
