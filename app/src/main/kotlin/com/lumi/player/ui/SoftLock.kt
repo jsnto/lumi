@@ -44,6 +44,9 @@ class TripleTapUnlocker(private val windowMs: Long = UNLOCK_TAP_WINDOW_MS) {
 
     companion object {
         const val REQUIRED_TAPS = 3
-        const val UNLOCK_TAP_WINDOW_MS = 2_000L
+        // Fast-triple-tap window: each tap must land within this many
+        // milliseconds of the previous one, otherwise the count resets. A
+        // slow, deliberate tap is never part of the unlock gesture.
+        const val UNLOCK_TAP_WINDOW_MS = 450L
     }
 }
