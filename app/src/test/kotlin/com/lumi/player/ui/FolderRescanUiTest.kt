@@ -1,6 +1,7 @@
 package com.lumi.player.ui
 
 import android.net.Uri
+import java.io.FileNotFoundException
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -162,6 +163,34 @@ class FolderRescanUiTest {
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertTrue("an unchanged rescan adds no rows", entries.map { it.label } == listOf("song-a.mp3"))
+    }
+
+    @Test
+    fun rescanOfAFolderWithARevokedGrantAddsNothingAndDoesNotCrash() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
+            } else emptyList()
+        }
+
+        val events = eventsOf(viewModel)
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("Added") } })
+
+        // The user revokes the folder's read grant: the document provider
+        // query throws instead of returning an empty list.
+        viewModel.folderChildren = { _ -> throw FileNotFoundException("grant revoked") }
+
+        val folder = dbAndGet { app().repository.observeFolders().first() }.single()
+        viewModel.rescanFolder(folder)
+        idleUntil({ events.any { it == "Nothing new in that folder." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertTrue(
+            "a revoked-grant rescan adds no rows",
+            entries.map { it.label } == listOf("song-a.mp3"),
+        )
     }
 
     companion object {

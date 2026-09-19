@@ -483,10 +483,14 @@ class LumiViewModel(
     fun rescanFolder(folder: FolderEntity) {
         viewModelScope.launch {
             val stored = repository.storedEntryPayloads()
-            val newSongs = withContext(Dispatchers.IO) {
-                rescanNewSongs(folder.uri, stored) { folderUri ->
-                    folderChildren(Uri.parse(folderUri))
+            val newSongs = try {
+                withContext(Dispatchers.IO) {
+                    rescanNewSongs(folder.uri, stored) { folderUri ->
+                        folderChildren(Uri.parse(folderUri))
+                    }
                 }
+            } catch (_: Exception) {
+                emptyList()
             }
             newSongs.forEach {
                 repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri)
