@@ -99,6 +99,26 @@ class LumiRepository(private val db: LumiDatabase) {
 
     suspend fun deleteEntry(entry: EntryEntity) = dao.deleteEntry(entry)
 
+    // ---- added folders (rescannable content) ----
+
+    /**
+     * Remembers a picked folder tree so it can be rescanned later. Returns the
+     * stored folder; re-remembering the same tree uri is a no-op that returns
+     * the existing row, so re-picking a folder adds no duplicate.
+     */
+    suspend fun rememberFolder(uri: String, label: String): FolderEntity {
+        dao.folderByUri(uri)?.let { return it }
+        val id = dao.insertFolder(FolderEntity(uri = uri, label = label))
+        return checkNotNull(dao.folderById(id))
+    }
+
+    fun observeFolders(): Flow<List<FolderEntity>> = dao.observeFolders()
+
+    suspend fun deleteFolder(folder: FolderEntity) = dao.deleteFolder(folder)
+
+    /** The set of every stored entry's payload (content uris). */
+    suspend fun storedEntryPayloads(): Set<String> = dao.allEntryPayloads().toSet()
+
     // ---- links ----
 
     /** The tag's current song list in link order (the scan-first read). */

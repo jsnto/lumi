@@ -15,11 +15,13 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.FolderChild
+import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.ScannedSong
 import com.lumi.player.data.collectAudioFiles
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
+import com.lumi.player.data.rescanNewSongs
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
@@ -68,6 +70,9 @@ class LumiViewModel(
     fun observeTags(): Flow<List<TagEntity>> = repository.observeTags()
 
     fun observeEntries(): Flow<List<EntryEntity>> = repository.observeEntries()
+
+    /** Added folder trees, each rescannable for new songs. */
+    fun observeFolders(): Flow<List<FolderEntity>> = repository.observeFolders()
 
     // ---- NFC registration flow ----
 
@@ -445,6 +450,8 @@ class LumiViewModel(
     fun addFolderEntry(treeUri: Uri) {
         viewModelScope.launch {
             if (!persistReadGrant(treeUri)) return@launch
+            // Remember the folder so it can be rescanned later for new songs.
+            repository.rememberFolder(treeUri.toString(), folderDisplayName(treeUri))
             val scanned = withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
             if (scanned.isEmpty()) {
                 event("No songs found in that folder.")
@@ -462,6 +469,52 @@ class LumiViewModel(
             )
         }
     }
+
+    /**
+     * Rescans a folder that was added earlier: re-walks the tree (every
+     * subfolder included) and stores only the supported audio files added
+     * since the last scan - files whose content uri is already stored are
+     * skipped (uri/payload dedup), so a rescan of an unchanged folder adds
+     * nothing. The folder's own read grant was persisted at add time, so the
+     * tree is still readable; an unreadable folder simply rescans to nothing.
+     */
+    fun rescanFolder(folder: FolderEntity) {
+        viewModelScope.launch {
+            val stored = repository.storedEntryPayloads()
+            val newSongs = withContext(Dispatchers.IO) {
+                rescanNewSongs(folder.uri, stored) { folderUri ->
+                    folderChildren(Uri.parse(folderUri))
+                }
+            }
+            newSongs.forEach {
+                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri)
+            }
+            event(
+                when {
+                    newSongs.isEmpty() -> "Nothing new in that folder."
+                    newSongs.size == 1 -> "Added 1 new song from that folder."
+                    else -> "Added ${newSongs.size} new songs from that folder."
+                },
+            )
+        }
+    }
+
+    /** Drops a folder from the rescan list without touching its songs. */
+    fun removeFolder(folder: FolderEntity) {
+        viewModelScope.launch { repository.deleteFolder(folder) }
+    }
+
+    /** The tree uri's display name (the folder's name), or the uri itself. */
+    private fun folderDisplayName(treeUri: Uri): String =
+        context.contentResolver
+            .query(treeUri, arrayOf("_display_name"), null, null, null)
+            ?.use { cursor ->
+                cursor.moveToFirst()
+                val name = cursor.getColumnIndexOrThrow("_display_name")
+                cursor.getString(name)
+            }
+            ?.ifEmpty { null }
+            ?: treeUri.toString()
 
     /**
      * Test seam: the documents provider's folder listing (a folder uri to

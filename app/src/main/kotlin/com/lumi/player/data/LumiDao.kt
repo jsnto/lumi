@@ -48,6 +48,27 @@ interface LumiDao {
     @Delete
     suspend fun deleteEntry(entry: EntryEntity)
 
+    // ---- added folders (rescannable content) ----
+
+    @Query("SELECT * FROM folders ORDER BY createdAt ASC, id ASC")
+    fun observeFolders(): Flow<List<FolderEntity>>
+
+    @Query("SELECT * FROM folders WHERE id = :id LIMIT 1")
+    suspend fun folderById(id: Long): FolderEntity?
+
+    @Query("SELECT * FROM folders WHERE uri = :uri LIMIT 1")
+    suspend fun folderByUri(uri: String): FolderEntity?
+
+    @Insert
+    suspend fun insertFolder(folder: FolderEntity): Long
+
+    @Delete
+    suspend fun deleteFolder(folder: FolderEntity)
+
+    /** Every stored entry's payload, so a rescan can skip already-stored files. */
+    @Query("SELECT payload FROM entries")
+    suspend fun allEntryPayloads(): List<String>
+
     // ---- tag -> entry links (ordered) ----
 
     @Query("SELECT * FROM tag_links WHERE tagId = :tagId ORDER BY sortOrder ASC, id ASC")

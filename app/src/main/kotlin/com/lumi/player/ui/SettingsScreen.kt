@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.nfc.LumiTagData
@@ -106,6 +107,7 @@ fun SettingsScreen(
 
     val tags by viewModel.observeTags().collectAsState(emptyList())
     val entries by viewModel.observeEntries().collectAsState(emptyList())
+    val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val nfcRereadSeconds by viewModel.nfcRereadSeconds.collectAsState(15L)
     val registering by viewModel.registering.collectAsState(false)
@@ -185,12 +187,15 @@ fun SettingsScreen(
         )
         SettingsPane.Content -> ContentPane(
             entries = entries,
+            folders = folders,
             onBack = { pane = SettingsPane.Menu },
             onAddContent = {
                 pendingTagPickId = null
                 audioPicker.launch(arrayOf("audio/*"))
             },
             onAddFolder = { folderPicker.launch(null) },
+            onRescanFolder = { viewModel.rescanFolder(it) },
+            onFolderRemoved = { viewModel.removeFolder(it) },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.Link -> LinkPane(
@@ -550,9 +555,12 @@ private fun TagsPane(
 @Composable
 private fun ContentPane(
     entries: List<EntryEntity>,
+    folders: List<FolderEntity>,
     onBack: () -> Unit,
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
+    onRescanFolder: (FolderEntity) -> Unit,
+    onFolderRemoved: (FolderEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -589,6 +597,31 @@ private fun ContentPane(
                         trailing = {
                             IconButton(onClick = { onEntryDeleted(entry) }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete")
+                            }
+                        },
+                    )
+                }
+            }
+            SectionCard("Folders") {
+                if (folders.isEmpty()) {
+                    Text(
+                        text = "No folders added yet. Use “Add folder” above.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                folders.forEach { folder ->
+                    SettingRow(
+                        leading = "📁",
+                        title = folder.label,
+                        detail = "Rescan to pick up new songs.",
+                        trailing = {
+                            OutlinedButton(onClick = { onRescanFolder(folder) }) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Rescan")
+                            }
+                            IconButton(onClick = { onFolderRemoved(folder) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Remove folder")
                             }
                         },
                     )
