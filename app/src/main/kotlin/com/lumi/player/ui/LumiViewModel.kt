@@ -87,6 +87,12 @@ class LumiViewModel(
     // fails the write and the tag is still saved.
     private var capturedTag: Tag? = null
 
+    // ---- link editor: scan a tag to point it at a song list ----
+
+    /** Whether a "point a tag at a song list" scan is in progress. */
+    private val _scanning = MutableStateFlow(false)
+    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+
     // ---- transient UI events (toasts/snackbars) ----
 
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -143,11 +149,30 @@ class LumiViewModel(
 
     /**
      * A tag was detected (reader-mode read in either play mode, a tap
-     * delivered by intent on cold start, or a registration capture).
+     * delivered by intent on cold start, a registration capture, or a
+     * link-editor scan read).
      * [tag] is the raw NFC tag; during registration it is kept (for a
      * later write) and its lumi payload read for form prefill.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
+        if (_scanning.value) {
+            // A scan was in progress: settle it. A known tag is selected in
+            // the link editor so its song list can be re-pointed; an unknown
+            // tag is captured for registration first (the registration
+            // dialog then lands in the link editor too). Either way the
+            // scan is over, so further reads are normal playback reads.
+            _scanning.value = false
+            viewModelScope.launch {
+                val existing = repository.tagByUid(uid)
+                if (existing != null) {
+                    _selectedTagId.value = existing.id
+                    event("Pointing “${existing.name.ifEmpty { "this tag" }}” - edit its song list below.")
+                } else {
+                    capture(uid, tag)
+                }
+            }
+            return
+        }
         if (_registering.value) {
             // We were waiting to register a tag: capture it.
             _registering.value = false
@@ -254,6 +279,22 @@ class LumiViewModel(
 
     fun cancelTagRegistration() {
         _registering.value = false
+    }
+
+    /**
+     * Starts a scan from the link editor: the next tag read settles the
+     * scan instead of driving playback - a known tag is selected there so
+     * its song list can be re-pointed, an unknown tag goes through the
+     * registration capture first. No tag write happens: the song list is
+     * associated by the tag's UID in the database, not in the tag payload.
+     */
+    fun startTagScan() {
+        _capturedUid.value = null
+        _scanning.value = true
+    }
+
+    fun cancelTagScan() {
+        _scanning.value = false
     }
 
     /**
