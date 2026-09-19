@@ -76,8 +76,9 @@ import java.io.IOException
  *   fast path) confirms the removal through the same route.
  *   FALLBACK: "tag lost" is derived, conservatively, from a
  *   sustained absence of reports on the active tag, checked by a presence
- *   poll every second against the user-configurable absence window
- *   (settings "Tag re-read wait", [presenceTimeoutMs]); it owns removal
+ *   poll every second against the absence window (the `nfc_reread_seconds`
+ *   setting - default 15 s, no user-facing settings UI - [presenceTimeoutMs]);
+ *   it owns removal
  *   detection whenever no fast path can run (no Mifare Ultralight session
  *   AND no connectable generic tag-tech session). Known on-device risk:
  *   with foreground dispatch a held-still tag can go cold (the phone stops
@@ -280,9 +281,10 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * The user-configurable absence-tolerance window (settings "Tag re-read
-     * wait", seconds) as the millisecond grace period the presence poll
-     * checks against.
+     * The absence-tolerance window (the `nfc_reread_seconds` setting, seconds
+     * - default 15; the user-facing "Tag re-read wait" setting was removed,
+     * so it is only settable via [LumiViewModel.setNfcRereadSeconds]) as the
+     * millisecond grace period the presence poll checks against.
      */
     private fun presenceTimeoutMs(): Long =
         (viewModel.nfcRereadSeconds.value.coerceIn(1, 120) * 1_000L)

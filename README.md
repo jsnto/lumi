@@ -72,8 +72,9 @@ the video/URL actions later does not require reworking storage.
 - Media3/ExoPlayer in a foreground media service for background playback
 - NFC via foreground dispatch in both play modes (passive, always-listening
   tag reads), also used while registering a tag. In proximity mode, tag
-  removal is derived from a 1-second presence poll with a configurable
-  absence grace ("Tag re-read wait" setting, 1-120 s, default 15): playback
+  removal is derived from a 1-second presence poll with a 15-second absence
+  grace window (range 1-120 s; the user-facing "Tag re-read wait" setting
+  was removed, so the window is no longer configurable in the app): playback
   pauses only once the active tag has gone unreported for that long; tags
   with a connectable read session (Mifare Ultralight, NfcA, or IsoDep)
   additionally get a continuous-read fast path that confirms removal in
