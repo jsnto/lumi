@@ -52,19 +52,24 @@ class PlaybackPolicyTest {
     // ---- proximity mode ----
 
     @Test
-    fun proximity_detectStartsAndLossStops() {
+    fun proximity_detectStartsAndLossPauses() {
         val policy = PlaybackPolicy(PlayMode.PROXIMITY)
         assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidA))
-        assertEquals(NfcAction.StopPlayback, policy.onTagLost(uidA))
-        assertFalse(policy.active)
+        assertEquals(NfcAction.PausePlayback, policy.onTagLost(uidA))
+        // The tag stays active: a re-read of it resumes the paused list
+        // instead of restarting it.
+        assertTrue(policy.active)
+        assertEquals(NfcAction.Resume, policy.onTagDetected(uidA, paused = true))
     }
 
     @Test
-    fun proximity_reDetectAfterLossStartsAgain() {
+    fun proximity_reDetectAfterLossResumes() {
         val policy = PlaybackPolicy(PlayMode.PROXIMITY)
         policy.onTagDetected(uidA)
-        policy.onTagLost(uidA)
-        assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidA))
+        assertEquals(NfcAction.PausePlayback, policy.onTagLost(uidA))
+        assertEquals(NfcAction.Resume, policy.onTagDetected(uidA, paused = true))
+        // A different tag still switches.
+        assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidB))
     }
 
     @Test
@@ -124,11 +129,12 @@ class PlaybackPolicyTest {
     }
 
     @Test
-    fun seededActiveTagLossStopsInProximity() {
+    fun seededActiveTagLossPausesInProximity() {
         val policy = PlaybackPolicy(PlayMode.PROXIMITY)
         policy.seedActiveTagUid(uidA)
-        assertEquals(NfcAction.StopPlayback, policy.onTagLost(uidA))
-        assertFalse(policy.active)
-        assertEquals(NfcAction.StartPlayback, policy.onTagDetected(uidA))
+        assertEquals(NfcAction.PausePlayback, policy.onTagLost(uidA))
+        // The carried tag stays active so a re-read resumes, not restarts.
+        assertTrue(policy.active)
+        assertEquals(NfcAction.Resume, policy.onTagDetected(uidA, paused = true))
     }
 }

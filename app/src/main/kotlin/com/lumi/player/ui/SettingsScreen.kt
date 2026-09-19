@@ -385,7 +385,7 @@ private fun PlayModePane(
                 )
                 ModeRow(
                     title = "Proximity",
-                    detail = "Plays while the tag stays near; stops when it's removed.",
+                    detail = "Plays while the tag stays near; pauses when it's removed and resumes when you read it again.",
                     selected = playMode == PlayMode.PROXIMITY,
                     onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
                 )

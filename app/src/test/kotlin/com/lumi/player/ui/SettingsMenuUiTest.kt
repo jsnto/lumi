@@ -114,7 +114,7 @@ class SettingsMenuUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
             .assertIsDisplayed()
-        compose.onNodeWithText("Plays while the tag stays near; stops when it's removed.")
+        compose.onNodeWithText("Plays while the tag stays near; pauses when it's removed and resumes when you read it again.")
             .assertExists()
         systemBack(activity)
         compose.onNodeWithText("Play mode").assertExists()

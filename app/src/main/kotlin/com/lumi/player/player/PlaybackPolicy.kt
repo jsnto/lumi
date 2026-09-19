@@ -13,7 +13,10 @@ sealed interface NfcAction {
     /** Do nothing (e.g. re-read of the tag already playing). */
     data object Ignore : NfcAction
 
-    /** Stop playback (proximity mode: the tag left the reader range). */
+    /** Pause playback (proximity mode: the tag left the reader range). */
+    data object PausePlayback : NfcAction
+
+    /** Stop playback (the session ends; a later tag read starts fresh). */
     data object StopPlayback : NfcAction
 }
 
@@ -27,8 +30,10 @@ sealed interface NfcAction {
  *
  * CONTINUOUS: playback keeps going after the tag is removed; the tag stays
  * "active" until a different tag is read. Tag loss is ignored.
- * PROXIMITY: a detected tag starts playback and stays active only while it
- * is detected; losing the active tag stops playback.
+ * PROXIMITY: a detected tag starts playback and stays active while it is
+ * detected; losing the active tag PAUSES playback and keeps the tag active,
+ * so a re-read of the same tag resumes the paused list instead of restarting
+ * it. The tag is cleared only when playback itself stops.
  */
 class PlaybackPolicy(private val mode: PlayMode) {
 
@@ -49,10 +54,14 @@ class PlaybackPolicy(private val mode: PlayMode) {
             NfcAction.StartPlayback
         }
 
+    /**
+     * The active tag left the reader range. In proximity mode this pauses
+     * playback; the tag STAYS active so a re-read of it resumes (the
+     * "reading overrides play/pause" behavior) rather than restarting.
+     */
     fun onTagLost(uid: String): NfcAction =
         if (mode == PlayMode.PROXIMITY && uid == activeTagUid) {
-            activeTagUid = null
-            NfcAction.StopPlayback
+            NfcAction.PausePlayback
         } else {
             NfcAction.Ignore
         }

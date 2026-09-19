@@ -87,6 +87,7 @@ class PlayerService : Service(), Player.Listener {
 
             ACTION_TOGGLE -> togglePlayPause()
             ACTION_RESUME -> resumePlayback()
+            ACTION_PAUSE -> pausePlayback()
             ACTION_NEXT -> {
                 if (queue.isEmpty()) {
                     stopSelf()
@@ -191,6 +192,20 @@ class PlayerService : Service(), Player.Listener {
     private fun resumePlayback() {
         if (queue.isEmpty()) return stopPlayback()
         player?.playWhenReady = true
+    }
+
+    /**
+     * Pauses playback without ending the session (proximity mode: the tag
+     * left range). Idempotent: a no-op when already paused or idle, so the
+     * presence poll can issue it on every confirmed tag loss.
+     */
+    private fun pausePlayback() {
+        if (queue.isEmpty()) return stopPlayback()
+        val p = player ?: return
+        if (p.playWhenReady) {
+            p.playWhenReady = false
+            saveCurrentPosition()
+        }
     }
 
     private fun stopPlayback() {
@@ -378,6 +393,7 @@ class PlayerService : Service(), Player.Listener {
         const val ACTION_START = "com.lumi.player.action.START"
         const val ACTION_TOGGLE = "com.lumi.player.action.TOGGLE"
         const val ACTION_RESUME = "com.lumi.player.action.RESUME"
+        const val ACTION_PAUSE = "com.lumi.player.action.PAUSE"
         const val ACTION_NEXT = "com.lumi.player.action.NEXT"
         const val ACTION_STOP = "com.lumi.player.action.STOP"
         const val EXTRA_ENTRIES = "com.lumi.player.extra.ENTRIES"
