@@ -101,4 +101,19 @@ class LumiRepository(private val db: LumiDatabase) {
     suspend fun setPlayMode(mode: PlayMode) {
         dao.upsertSetting(SettingsEntity(SettingsEntity.PLAY_MODE, mode.storageValue))
     }
+
+    /** Whether the user asked not to show the soft-lock prompt again. */
+    fun observeLockPopupSuppressed(): Flow<Boolean> =
+        dao.observeSettings().map { rows ->
+            rows.any { it.key == SettingsEntity.LOCK_POPUP_SUPPRESSED && it.value == "1" }
+        }
+
+    suspend fun setLockPopupSuppressed(suppressed: Boolean) {
+        dao.upsertSetting(
+            SettingsEntity(
+                SettingsEntity.LOCK_POPUP_SUPPRESSED,
+                if (suppressed) "1" else "0",
+            ),
+        )
+    }
 }

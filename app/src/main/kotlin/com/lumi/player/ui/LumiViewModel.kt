@@ -234,6 +234,17 @@ class LumiViewModel(
         viewModelScope.launch { repository.setPlayMode(mode) }
     }
 
+    // ---- settings: soft lock ----
+
+    /** Whether the user asked not to show the soft-lock prompt again. */
+    val lockPopupSuppressed: StateFlow<Boolean> =
+        repository.observeLockPopupSuppressed()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setLockPopupSuppressed(suppressed: Boolean) {
+        viewModelScope.launch { repository.setLockPopupSuppressed(suppressed) }
+    }
+
     // ---- settings: tags ----
 
     fun startTagRegistration() {

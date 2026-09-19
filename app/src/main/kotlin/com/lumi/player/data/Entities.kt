@@ -68,5 +68,8 @@ data class SettingsEntity(
 ) {
     companion object {
         const val PLAY_MODE = "play_mode"
+
+        /** "1" when the user asked not to show the soft-lock prompt again. */
+        const val LOCK_POPUP_SUPPRESSED = "lock_popup_suppressed"
     }
 }
