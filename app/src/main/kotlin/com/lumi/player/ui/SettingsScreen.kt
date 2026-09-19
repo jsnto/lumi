@@ -52,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,7 +122,7 @@ fun SettingsScreen(
     // One shared OpenDocument launcher: both "Add content" (Content pane) and
     // "Add song to this tag" (Link pane) launch it, and the pending tag id
     // set right before the launch decides which side receives the result.
-    var pendingTagPickId by remember { mutableStateOf<Long?>(null) }
+    var pendingTagPickId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
