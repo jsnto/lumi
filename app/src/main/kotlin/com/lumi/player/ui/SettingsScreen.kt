@@ -118,9 +118,22 @@ fun SettingsScreen(
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
 
+    // One shared OpenDocument launcher: both "Add content" (Content pane) and
+    // "Add song to this tag" (Link pane) launch it, and the pending tag id
+    // set right before the launch decides which side receives the result.
+    var pendingTagPickId by remember { mutableStateOf<Long?>(null) }
+
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
-    ) { uri -> if (uri != null) onFilePicked(viewModel, context, uri, EntryType.AUDIO) }
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val tagId = pendingTagPickId
+        if (tagId != null) {
+            viewModel.addSongToTag(uri, tagId, displayNameFor(context, uri))
+        } else {
+            onFilePicked(viewModel, context, uri, EntryType.AUDIO)
+        }
+    }
 
     // System back must unwind the settings screen itself (sub-screen → menu)
     // before the host can pop settings away entirely; only when the menu is
@@ -162,7 +175,10 @@ fun SettingsScreen(
         SettingsPane.Content -> ContentPane(
             entries = entries,
             onBack = { pane = SettingsPane.Menu },
-            onAddContent = { audioPicker.launch(arrayOf("audio/*")) },
+            onAddContent = {
+                pendingTagPickId = null
+                audioPicker.launch(arrayOf("audio/*"))
+            },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.Link -> LinkPane(
@@ -172,6 +188,10 @@ fun SettingsScreen(
             effectiveSelectedId = effectiveSelectedId,
             linked = linked,
             onBack = { pane = SettingsPane.Menu },
+            onAddSong = { tagId ->
+                pendingTagPickId = tagId
+                audioPicker.launch(arrayOf("audio/*"))
+            },
         )
     }
 
@@ -577,17 +597,8 @@ private fun LinkPane(
     effectiveSelectedId: Long?,
     linked: List<EntryEntity>,
     onBack: () -> Unit,
+    onAddSong: (Long) -> Unit,
 ) {
-    val context = LocalContext.current
-    // Picking a file for the "Add" button both stores the entry and links
-    // it to the currently selected tag in one step.
-    val tagSongPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null && effectiveSelectedId != null) {
-            viewModel.addSongToTag(uri, effectiveSelectedId, displayNameFor(context, uri))
-        }
-    }
     Scaffold(topBar = { PaneTopAppBar("Tag to content", onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -632,7 +643,7 @@ private fun LinkPane(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
-                        OutlinedButton(onClick = { tagSongPicker.launch(arrayOf("audio/*")) }) {
+                        OutlinedButton(onClick = { onAddSong(effectiveId) }) {
                             Icon(Icons.Default.Add, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("Add song to this tag")
