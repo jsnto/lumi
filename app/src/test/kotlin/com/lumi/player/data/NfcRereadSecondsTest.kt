@@ -57,7 +57,7 @@ class NfcRereadSecondsTest {
     @Test
     fun minimumWindow_staysWiderThanThePresencePollRate() {
         // Both fast paths (the Mifare page-0 reads and the generic
-        // connection checks) refresh the presence record at a rate several
+        // probes) refresh the presence record at a rate several
         // times faster than the tightest allowed absence window (1 s), so a
         // held-still tag keeps its record fresh long before the window can
         // trip a false pause at the 1 s / 5 s boundaries.
@@ -65,7 +65,7 @@ class NfcRereadSecondsTest {
         assertTrue(
             "multiple presence checks must fit inside the minimum window",
             minWindowMs >= 2 * MifarePresencePoller.READ_INTERVAL_MS &&
-                minWindowMs >= 2 * GenericPresencePoller.CHECK_INTERVAL_MS,
+                minWindowMs >= 2 * GenericPresencePoller.READ_INTERVAL_MS,
         )
     }
 

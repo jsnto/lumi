@@ -68,11 +68,12 @@ import java.io.IOException
  *   twice (a 100 ms retry between the strikes - a two-strike debounce
  *   against single-occurrence blips) confirms the removal well under a
  *   second. GENERIC FAST PATH: any other tag the Mifare path cannot read
- *   keeps a tag-tech connection (NfcA, then IsoDep) alive
- *   ([GenericPresencePoller]); every connected check refreshes the
+ *   keeps a tag-tech session (NfcA, then IsoDep) alive
+ *   ([GenericPresencePoller]); every successful probe refreshes the
  *   presence record, so a non-Mifare tag HELD STATIONARY no longer false
- *   -pauses after the absence window, and the connection dropping (the tag
- *   lifted off the reader) confirms the removal through the same route.
+ *   -pauses after the absence window; a probe that fails twice (a 100 ms
+ *   retry between the strikes - the same two-strike debounce as the Mifare
+ *   fast path) confirms the removal through the same route.
  *   FALLBACK: "tag lost" is derived, conservatively, from a
  *   sustained absence of reports on the active tag, checked by a presence
  *   poll every second against the user-configurable absence window
@@ -250,8 +251,17 @@ class MainActivity : ComponentActivity() {
         val tech = NfcA.get(tag) ?: IsoDep.get(tag) ?: MifareUltralight.get(tag) ?: return null
         tech.connect()
         return object : GenericPresenceSession {
-            override val isConnected: Boolean
-                get() = runCatching { tech.isConnected }.getOrDefault(false)
+            override fun probe() {
+                // A real low-level read: it only succeeds while the tag is
+                // physically in the field, so an IOException out of range
+                // is the removal signal.
+                when (tech) {
+                    is NfcA -> tech.transceive(byteArrayOf(0x93.toByte(), 0x20.toByte()))
+                    is IsoDep -> tech.transceive(byteArrayOf(0x00, 0x20, 0x00, 0x00, 0x00))
+                    is MifareUltralight -> tech.readPages(0)
+                    else -> throw IOException("unsupported tag tech")
+                }
+            }
             override fun close() {
                 runCatching { tech.close() }
             }
@@ -421,7 +431,8 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             // Generic fast path: any other tag keeps a tag-tech session
-            // connected; the connection dropping confirms the removal.
+            // connected and is probed with a real low-level read every
+            // tick; a probe that fails twice confirms the removal.
             val session = withContext(Dispatchers.IO) {
                 try {
                     establishGenericPresenceSession(tag)
@@ -434,7 +445,24 @@ class MainActivity : ComponentActivity() {
             withContext(Dispatchers.IO) {
                 try {
                     GenericPresencePoller.loop(
-                        isConnected = { session.isConnected },
+                        probe = {
+                            try {
+                                session.probe()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: IOException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // A dead session (NFC service dropped
+                                // mid-read) surfaces a runtime exception,
+                                // not an IOException: treat any probe
+                                // failure as a "tag out of range" strike
+                                // so the loop degrades to the
+                                // absence-timeout fallback instead of
+                                // crashing the app.
+                                throw IOException("presence probe failed", e)
+                            }
+                        },
                         onStillPresent = {
                             presenceHandler.post {
                                 if (lastSeenUid == uid) {
@@ -442,7 +470,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
-                        onDisconnected = {
+                        onConfirmedRemoved = {
                             presenceHandler.post {
                                 if (lastSeenUid == uid) {
                                     handleTagLost(uid)
@@ -460,7 +488,7 @@ class MainActivity : ComponentActivity() {
                 } finally {
                     // Cancellation (tag switch, mode change, playback stop)
                     // exits through this finally without reporting the
-                    // removal; only a dropped connection does.
+                    // removal; only a confirmed probe removal does.
                     session.close()
                 }
             }

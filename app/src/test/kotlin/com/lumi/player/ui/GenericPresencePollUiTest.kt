@@ -13,6 +13,7 @@ import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
 import com.lumi.player.player.PlaybackStatus
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
@@ -35,17 +36,18 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral coverage for the proximity-mode GENERIC fast path: a tag the
- * Mifare fast path cannot read keeps a tag-tech connection (NfcA/IsoDep)
- * alive ([com.lumi.player.nfc.GenericPresencePoller]) so a non-Mifare tag
- * HELD STATIONARY keeps the presence record fresh instead of false-pausing
- * after the absence window. Drives the real [MainActivity] under Robolectric
- * and replaces the activity's generic-session seam with a fake connection:
- * one that stays connected (the tag is still on the antenna) and one that
- * drops (the tag was lifted). Pins that a still-connected tag keeps playing
- * and refreshes the presence record, that a dropped connection pauses
- * through the existing tag-lost route without a fallback double-report,
- * that a new tag presentation cancels the loop, and that the session is
- * closed when the loop ends.
+ * Mifare fast path cannot read keeps a tag-tech session (NfcA/IsoDep) alive
+ * and is probed with a real low-level read every tick
+ * ([com.lumi.player.nfc.GenericPresencePoller]) so a non-Mifare tag HELD
+ * STATIONARY keeps the presence record fresh instead of false-pausing after
+ * the absence window. Drives the real [MainActivity] under Robolectric and
+ * replaces the activity's generic-session seam with a fake probe: one that
+ * keeps answering (the tag is still on the antenna) and one that stops
+ * answering (the tag was lifted). Pins that a still-answering tag keeps
+ * playing and refreshes the presence record, that a tag that stops answering
+ * pauses through the existing tag-lost route (after the two-strike debounce)
+ * without a fallback double-report, that a new tag presentation cancels the
+ * loop, and that the session is closed when the loop ends.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -137,11 +139,13 @@ class GenericPresencePollUiTest {
         return field.get(activity) as Long
     }
 
-    /** A fake tag-tech connection whose state the test can flip. */
+    /** A fake tag-tech session whose probe the test can make fail. */
     private class FakeGenericSession : GenericPresenceSession {
-        @Volatile var connected = true
+        @Volatile var probeThrows = false
         @Volatile var closeCount = 0
-        override val isConnected: Boolean get() = connected
+        override fun probe() {
+            if (probeThrows) throw IOException("tag out of range")
+        }
         override fun close() {
             closeCount++
         }
@@ -162,7 +166,7 @@ class GenericPresencePollUiTest {
     }
 
     @Test
-    fun proximityMode_nonMifareTagStillConnected_genericLoopKeepsPresenceRecordFresh() {
+    fun proximityMode_nonMifareTagStillProbing_genericLoopKeepsPresenceRecordFresh() {
         setupDb(mode = PlayMode.PROXIMITY)
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
@@ -181,7 +185,7 @@ class GenericPresencePollUiTest {
             presencePollJobOf(activity)?.isActive == true,
         )
         val seededAt = lastSeenAtOf(activity)
-        // The loop checks the connection on a real background thread every
+        // The loop probes the tag on a real background thread every
         // 300 ms and refreshes the presence record on the main thread. The
         // refresh is stamped with the CURRENT virtual clock at the moment it
         // is posted, so advance the virtual clock (with a duration) between
@@ -193,12 +197,12 @@ class GenericPresencePollUiTest {
             ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS)
         }
         assertTrue(
-            "a still-connected tag must refresh the presence record, keeping " +
+            "a still-answering tag must refresh the presence record, keeping " +
                 "the absence-timeout fallback quiet while the tag is on the " +
                 "antenna (no false pause for a held-still non-Mifare tag)",
             lastSeenAtOf(activity) > seededAt,
         )
-        assertNull("a still-connected tag must keep playing", shadowOf(app() as Application).nextStartedService)
+        assertNull("a still-answering tag must keep playing", shadowOf(app() as Application).nextStartedService)
         assertEquals(PlaybackStatus.PLAYING, PlayerStateHolder.state.value.status)
         val job = presencePollJobOf(activity)!!
         controller.pause() // tears the poll down
@@ -213,7 +217,7 @@ class GenericPresencePollUiTest {
     }
 
     @Test
-    fun proximityMode_nonMifareTagDisconnects_genericLoopPausesThroughTheTagLostRoute() {
+    fun proximityMode_nonMifareTagLifted_genericLoopPausesThroughTheTagLostRoute() {
         setupDb(mode = PlayMode.PROXIMITY)
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
@@ -225,11 +229,12 @@ class GenericPresencePollUiTest {
         sendTag(controller, UID_A)
         assertTrue("the generic presence poll must be running",
             presencePollJobOf(activity)?.isActive == true)
-        // The tag is lifted: the connection drops at the next check.
-        session.connected = false
+        // The tag is lifted: the probes stop answering, and two failed
+        // probes in a row confirm the removal (the two-strike debounce).
+        session.probeThrows = true
         val intent = nextServiceIntent(3_000)
         assertNotNull(
-            "a dropped generic connection must pause playback through the " +
+            "a confirmed generic-path removal must pause playback through the " +
                 "tag-lost route",
             intent,
         )
