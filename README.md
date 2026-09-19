@@ -73,9 +73,10 @@ the video/URL actions later does not require reworking storage.
   tag reads), also used while registering a tag. In proximity mode, tag
   removal is derived from a 1-second presence poll with a configurable
   absence grace ("Tag re-read wait" setting, 1-120 s, default 15): playback
-  pauses only once the active tag has gone unreported for that long; Mifare
-  Ultralight tags additionally get a continuous-read fast path that confirms
-  removal in ~0.4 s (see `MainActivity`, `MifarePresencePoller`)
+  pauses only once the active tag has gone unreported for that long; tags
+  with a connectable read session (Mifare Ultralight, NfcA, or IsoDep)
+  additionally get a continuous-read fast path that confirms removal in
+  ~0.4 s (see `MainActivity`, `MifarePresencePoller`, `GenericPresencePoller`)
 
 ## Permissions
 
