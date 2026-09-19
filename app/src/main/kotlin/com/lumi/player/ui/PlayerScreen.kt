@@ -129,20 +129,10 @@ fun PlayerScreen(
 
             PlayingVisual(
                 active = playState.isPlaying,
-                color = when (type) {
-                    EntryType.AUDIO -> Color(0xFFFF8A65)
-                    EntryType.VIDEO -> Color(0xFF9575CD)
-                    EntryType.URL -> Color(0xFF4DB6AC)
-                    null -> Color(0xFF64B5F6)
-                },
+                color = type?.let(EntryPresentation::color) ?: Color(0xFF64B5F6),
             ) {
                 Text(
-                    text = when (type) {
-                        EntryType.AUDIO -> "🎵"
-                        EntryType.VIDEO -> "🎬"
-                        EntryType.URL -> "🔗"
-                        null -> "✨"
-                    },
+                    text = type?.let(EntryPresentation::emoji) ?: "✨",
                     fontSize = 96.sp,
                 )
             }

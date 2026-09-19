@@ -14,6 +14,9 @@ import java.nio.charset.StandardCharsets
  */
 data class LumiTagData(val name: String, val mode: PlayMode)
 
+/** The tag's lumi payload and whether the tag can hold the app payload. */
+data class TagInspect(val data: LumiTagData?, val writable: Boolean)
+
 /**
  * NDEF codec for the app's own tag payload: a single NDEF record with the
  * custom MIME type [MIME_TYPE] whose payload is a small JSON object
@@ -82,12 +85,16 @@ object LumiTagNdef {
         null
     }
 
-    /** The app's payload currently on the tag, if the tag is NDEF readable. */
-    fun readFromTag(tag: Tag?): LumiTagData? {
+    /**
+     * Runs [block] on a connected NDEF handle of [tag], closing it
+     * afterwards. Returns null (instead of throwing) when the tag is gone,
+     * not NDEF formatted, or the connection fails.
+     */
+    private inline fun <T> connectedNdef(tag: Tag?, block: (Ndef) -> T): T? {
         val ndef = ndefOf(tag) ?: return null
         return try {
             ndef.connect()
-            fromNdefMessage(ndef.getNdefMessage())
+            block(ndef)
         } catch (e: Exception) {
             null
         } finally {
@@ -99,27 +106,31 @@ object LumiTagNdef {
         }
     }
 
+    private fun Ndef.fits(data: LumiTagData): Boolean =
+        isWritable && maxSize >= messageByteLength(toNdefMessage(data))
+
+    /** The app's payload currently on the tag, if the tag is NDEF readable. */
+    fun readFromTag(tag: Tag?): LumiTagData? =
+        connectedNdef(tag) { ndef -> fromNdefMessage(ndef.getNdefMessage()) }
+
     /**
      * Whether [tag] is NDEF formatted, writable, and whose NDEF area can
      * hold the message for [data] (a write replaces the tag's whole NDEF
      * message, so the full area is available).
      */
-    fun canWritePayload(tag: Tag?, data: LumiTagData): Boolean {
-        val ndef = ndefOf(tag) ?: return false
-        val size = messageByteLength(toNdefMessage(data))
-        return try {
-            ndef.connect()
-            ndef.isWritable && ndef.maxSize >= size
-        } catch (e: Exception) {
-            false
-        } finally {
-            try {
-                ndef.close()
-            } catch (e: Exception) {
-                // Tag is already gone; nothing to clean up.
-            }
-        }
-    }
+    fun canWritePayload(tag: Tag?, data: LumiTagData): Boolean =
+        connectedNdef(tag) { ndef -> ndef.fits(data) } ?: false
+
+    /**
+     * Reads the tag's lumi payload and, in the same NDEF session, checks
+     * whether the tag can hold the app payload (falling back to [fallback]
+     * when the tag carries no readable lumi record).
+     */
+    fun inspect(tag: Tag?, fallback: LumiTagData): TagInspect =
+        connectedNdef(tag) { ndef ->
+            val data = fromNdefMessage(ndef.getNdefMessage())
+            TagInspect(data, ndef.fits(data ?: fallback))
+        } ?: TagInspect(null, false)
 
     /**
      * Writes [data] to [tag], replacing whatever was there. Returns false
@@ -127,26 +138,15 @@ object LumiTagNdef {
      * no room.
      */
     fun write(tag: Tag?, data: LumiTagData): Boolean {
-        val ndef = ndefOf(tag) ?: return false
         val message = toNdefMessage(data)
-        val size = messageByteLength(message)
-        if (size > MAX_PAYLOAD_BYTES) return false
-        return try {
-            ndef.connect()
-            if (!ndef.isWritable || ndef.maxSize < size) {
-                false
-            } else {
+        if (messageByteLength(message) > MAX_PAYLOAD_BYTES) return false
+        return connectedNdef(tag) { ndef ->
+            if (ndef.fits(data)) {
                 ndef.writeNdefMessage(message)
                 true
+            } else {
+                false
             }
-        } catch (e: Exception) {
-            false
-        } finally {
-            try {
-                ndef.close()
-            } catch (e: Exception) {
-                // Tag is already gone; nothing to clean up.
-            }
-        }
+        } ?: false
     }
 }

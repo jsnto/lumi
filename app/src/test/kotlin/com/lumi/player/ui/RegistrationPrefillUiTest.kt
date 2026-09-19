@@ -13,6 +13,7 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.nfc.TagInspect
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import java.util.concurrent.CountDownLatch
@@ -275,7 +276,7 @@ class RegistrationPrefillUiTest {
      * hooks; the real framework (loaded by Robolectric at runtime) exposes
      * the public constructor, so build it reflectively (same approach as
      * NfcAlwaysListeningUiTest). It carries no NDEF handle, so the real
-     * reader would see nothing - tests replace [LumiViewModel.tagReader].
+     * reader would see nothing - tests replace [LumiViewModel.tagInspector].
      */
     private fun tagWithUid(uid: String): Tag {
         val nfcTagCls = Class.forName("android.nfc.INfcTag")
@@ -313,13 +314,13 @@ class RegistrationPrefillUiTest {
         val gateA = CountDownLatch(1)
         val gateB = CountDownLatch(1)
         val entered = AtomicInteger(0)
-        viewModel.tagReader = {
+        viewModel.tagInspector = { _, _ ->
             if (entered.incrementAndGet() == 1) {
                 gateA.await()
-                LumiTagData("Stale", PlayMode.PROXIMITY)
+                TagInspect(LumiTagData("Stale", PlayMode.PROXIMITY), false)
             } else {
                 gateB.await()
-                LumiTagData("Fresh", PlayMode.CONTINUOUS)
+                TagInspect(LumiTagData("Fresh", PlayMode.CONTINUOUS), false)
             }
         }
         viewModel.capture(UID_A, tagWithUid(UID_A))

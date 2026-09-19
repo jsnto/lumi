@@ -142,7 +142,6 @@ class PlayerService : Service(), Player.Listener {
             it.copy(
                 currentLabel = spec.label,
                 currentType = spec.type,
-                queueSize = queue.size,
             )
         }
         when (EntryType.fromStorage(spec.type)) {
@@ -366,15 +365,13 @@ class PlayerService : Service(), Player.Listener {
             .setContentText(s.currentLabel ?: "Tap a tag to start")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(actionIconPause(isPlaying), if (isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE))
-            .addAction(actionIconNext(), "Next", actionIntent(ACTION_NEXT))
-            .addAction(actionIconStop(), "Stop", actionIntent(ACTION_STOP))
+            .addAction(notificationActionIcon, if (isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE))
+            .addAction(notificationActionIcon, "Next", actionIntent(ACTION_NEXT))
+            .addAction(notificationActionIcon, "Stop", actionIntent(ACTION_STOP))
             .build()
     }
 
-    private fun actionIconPause(playing: Boolean): Int = R.drawable.ic_stat_lumi
-    private fun actionIconNext(): Int = R.drawable.ic_stat_lumi
-    private fun actionIconStop(): Int = R.drawable.ic_stat_lumi
+    private val notificationActionIcon: Int = R.drawable.ic_stat_lumi
 
     private fun actionIntent(action: String): PendingIntent =
         PendingIntent.getService(
