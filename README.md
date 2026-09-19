@@ -41,7 +41,8 @@ Both modes are selectable in Settings and are remembered on the device.
   *different* tag, which switches to that tag's list. Re-reading the same
   tag does not restart.
 - **Proximity** — playback continues only while the tag stays in the phone's
-  NFC range; remove the tag and playback stops.
+  NFC range; remove the tag and playback pauses, and reading the tag again
+  resumes where it left off.
 
 In both modes, re-reading the tag that is playing while you have paused
 resumes playback — an NFC read overrides play/pause.
@@ -66,7 +67,8 @@ the video/URL actions later does not require reworking storage.
 - Media3/ExoPlayer in a foreground media service for background playback
 - NFC via foreground dispatch in both play modes (passive, always-listening
   tag reads), also used while registering a tag. In proximity mode, tag
-  removal is derived from a presence timeout (see `MainActivity`)
+  removal is derived from a 1-second presence poll and a 2-second absence
+  timeout (see `MainActivity`)
 
 ## Permissions
 

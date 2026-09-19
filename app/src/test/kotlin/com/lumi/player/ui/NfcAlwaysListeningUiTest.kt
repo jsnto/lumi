@@ -358,6 +358,46 @@ class NfcAlwaysListeningUiTest {
     }
 
     @Test
+    fun proximityMode_presencePollChecksOnAOneSecondCadence() {
+        // Pins the intent's "poll every 1 second": for a FRESH tag the
+        // presence record is seeded in the tagActivated collector at the
+        // same instant the first poll tick is scheduled, so the tick grid
+        // is anchored to the tag's last report: ticks at +1s, +2s, +3s.
+        // The 2s absence timeout passes at the +3s tick - nothing may pause
+        // earlier (a held-still tag is reported only once per presentation
+        // and must not be paused before the timeout window is actually past
+        // a full tick), and the loss must be reported by ~3s, not on a
+        // slower cadence. A 500ms cadence would pause at +2.5s (caught by
+        // the first window) and a 2s cadence would pause at +4s (not
+        // caught by the second window), so this pins the 1s period.
+        setupDb(mode = PlayMode.PROXIMITY)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // The tag now leaves range after its single report. No tick may
+        // report the loss inside this window (it ends just past the 2s
+        // timeout, well before the +3s tick a 1s cadence lands on).
+        ShadowLooper.idleMainLooper(2_600, TimeUnit.MILLISECONDS)
+        assertNull(
+            "the presence poll must not pause before a full tick period has " +
+                "elapsed past the 2s absence timeout",
+            shadowOf(app() as Application).nextStartedService,
+        )
+        // One more tick period: the +3s tick of the 1s cadence must report
+        // the loss and pause.
+        ShadowLooper.idleMainLooper(1_000, TimeUnit.MILLISECONDS)
+        val pause = nextServiceIntent(500)
+        assertNotNull(
+            "the 1s-cadence presence poll must report the loss at the first " +
+                "tick past the 2s timeout (~3s), not on a slower schedule",
+            pause,
+        )
+        assertEquals(PlayerService.ACTION_PAUSE, pause!!.action)
+    }
+
+    @Test
     fun proximityMode_tagSwitched_thenRemoved_pausesPlayback() {
         // The tag-switch seed: tag A starts playback; tag B is then presented
         // and its read SWITCHES playback to B. B's activating read is the
@@ -458,6 +498,35 @@ class NfcAlwaysListeningUiTest {
             intent,
         )
         assertEquals(PlayerService.ACTION_PAUSE, intent!!.action)
+    }
+
+    @Test
+    fun proximityMode_playbackStopped_tearsDownPresencePoll_noPauseAfterStop() {
+        // The poll is torn down when playback stops: with nothing playing,
+        // a still-pending absence of the (already gone) tag must never issue
+        // a command, so no background work survives a stop. It is re-armed
+        // only when a tag next becomes active (covered by the fresh-tag
+        // pause test).
+        setupDb(mode = PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // active-tag re-read refreshes the record
+        // The service stops on its own (user pressed stop, the list ended):
+        // the shared state settles to IDLE and the activity must tear the
+        // presence poll down.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.IDLE, activeTagUid = null) }
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        compose.waitForIdle()
+        // The absence persists long past the timeout: nothing may command.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        assertNull(
+            "the presence poll must be torn down when playback stops: no " +
+                "command may issue for a tag whose absence outlives a stop",
+            shadowOf(app() as Application).nextStartedService,
+        )
     }
 
     @Test
