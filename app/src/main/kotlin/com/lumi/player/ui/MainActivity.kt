@@ -45,11 +45,13 @@ import kotlinx.coroutines.launch
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
  * - PROXIMITY: "tag lost" is derived, conservatively, from a short absence
- *   of reports (presence timeout) on the active tag. Foreground dispatch may
- *   deliver a stationary tag only once per presentation, so "no further
- *   reports" is the only removal signal available — a held-still tag may
- *   trigger the timeout early; verifying stop-on-removal timing on a real
- *   device is the first on-device validation item.
+ *   of reports on the active tag, checked by a presence poll every second.
+ *   Foreground dispatch may deliver a stationary tag only once per
+ *   presentation, so "no further reports" is the only removal signal
+ *   available — a held-still tag may trigger the timeout early; verifying
+ *   pause-on-removal timing on a real device is the first on-device
+ *   validation item. Loss PAUSES playback (the session and the active tag
+ *   are kept), so a re-read of the same tag resumes it.
  * - Tag registration: the same foreground dispatch, with the view model in
  *   capture mode, so any tag type can be registered.
  */
@@ -123,12 +125,26 @@ class MainActivity : ComponentActivity() {
                     viewModel.tagActivated.collectLatest { uid ->
                         lastSeenAt = SystemClock.elapsedRealtime()
                         lastSeenUid = uid
+                        // Re-engage the presence poll for the newly active
+                        // tag: tear down any stale timer and start a fresh
+                        // one, even if the poll was torn down at the last
+                        // playback stop.
+                        if (currentMode == PlayMode.PROXIMITY) {
+                            presenceHandler.removeCallbacks(presenceWatcher)
+                            presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
+                        }
                     }
                 }
                 launch {
                     PlayerStateHolder.state.collectLatest { state ->
                         if (state.status == com.lumi.player.player.PlaybackStatus.IDLE) {
                             viewModel.onPlaybackStopped()
+                            // Playback has stopped: tear the presence poll
+                            // down so no background work is left running.
+                            // It is re-armed when a tag next becomes active
+                            // (see the tagActivated collector).
+                            presenceHandler.removeCallbacks(presenceWatcher)
+                            lastSeenUid = null
                         }
                     }
                 }
@@ -162,6 +178,10 @@ class MainActivity : ComponentActivity() {
             presenceHandler.postDelayed(this, PRESENCE_CHECK_MS)
         }
     }
+    // The poll asks every PRESENCE_CHECK_MS whether the active tag is still
+    // being reported; PRESENCE_TIMEOUT_MS of absence counts as removal. The
+    // timeout stays longer than one poll period because a stationary tag
+    // may be reported only once per presentation.
 
     /**
      * Re-check NFC availability and keep the prompt in sync: raised while the
@@ -298,7 +318,7 @@ class MainActivity : ComponentActivity() {
     private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it) }
 
     companion object {
-        private const val PRESENCE_CHECK_MS = 500L
+        private const val PRESENCE_CHECK_MS = 1_000L
         private const val PRESENCE_TIMEOUT_MS = 2_000L
     }
 }

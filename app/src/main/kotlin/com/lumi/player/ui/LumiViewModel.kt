@@ -201,15 +201,20 @@ class LumiViewModel(
                 NfcAction.Resume -> command(PlayerService.ACTION_RESUME)
 
                 NfcAction.Ignore -> Unit
+                NfcAction.PausePlayback -> Unit
                 NfcAction.StopPlayback -> Unit
             }
         }
     }
 
-    /** The tag left the reader range (proximity mode). */
+    /**
+     * The tag left the reader range (proximity mode). Pauses playback rather
+     * than stopping the session: the tag stays active in the policy, so a
+     * re-read of it resumes the paused list ("reading overrides pause").
+     */
     fun onTagLost(uid: String) {
-        if (policy.onTagLost(uid) == NfcAction.StopPlayback) {
-            stopPlayer()
+        if (policy.onTagLost(uid) == NfcAction.PausePlayback) {
+            command(PlayerService.ACTION_PAUSE)
         }
     }
 
@@ -237,13 +242,6 @@ class LumiViewModel(
                     putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
                 }
             }
-        }
-        ContextCompat.startForegroundService(context, intent)
-    }
-
-    private fun stopPlayer() {
-        val intent = Intent(context, PlayerService::class.java).apply {
-            action = PlayerService.ACTION_STOP
         }
         ContextCompat.startForegroundService(context, intent)
     }
