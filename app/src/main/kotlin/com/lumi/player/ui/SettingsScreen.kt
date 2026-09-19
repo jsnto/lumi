@@ -136,6 +136,16 @@ fun SettingsScreen(
         }
     }
 
+    // The folder picker is its own launcher: OpenDocumentTree is a different
+    // contract from the shared OpenDocument above, so it owns its own request
+    // key and callback. Only the Content pane's "Add folder" uses it: the
+    // picked tree is granted read access and scanned recursively.
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) viewModel.addFolderEntry(uri)
+    }
+
     // System back must unwind the settings screen itself (sub-screen → menu)
     // before the host can pop settings away entirely; only when the menu is
     // showing is the default back handler allowed through.
@@ -180,6 +190,7 @@ fun SettingsScreen(
                 pendingTagPickId = null
                 audioPicker.launch(arrayOf("audio/*"))
             },
+            onAddFolder = { folderPicker.launch(null) },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.Link -> LinkPane(
@@ -541,6 +552,7 @@ private fun ContentPane(
     entries: List<EntryEntity>,
     onBack: () -> Unit,
     onAddContent: () -> Unit,
+    onAddFolder: () -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -557,6 +569,11 @@ private fun ContentPane(
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Add content")
+                }
+                // Text-only on purpose: the project depends on the icons-core
+                // set, which has no Folder icon (Folder lives in icons-extended).
+                OutlinedButton(onClick = onAddFolder) {
+                    Text("Add folder")
                 }
                 if (entries.isEmpty()) {
                     Text(

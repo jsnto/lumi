@@ -14,7 +14,10 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.TagEntity
+import com.lumi.player.data.FolderChild
 import com.lumi.player.data.LumiRepository
+import com.lumi.player.data.ScannedSong
+import com.lumi.player.data.collectAudioFiles
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
 import com.lumi.player.nfc.LumiTagData
@@ -424,6 +427,70 @@ class LumiViewModel(
     }
 
     /**
+     * Adds a picked folder tree: persists the SAF grant on the tree, walks
+     * it recursively (subfolders included), and stores every supported
+     * audio file found as an AUDIO entry. A folder without supported audio
+     * adds nothing and reports so.
+     */
+    fun addFolderEntry(treeUri: Uri) {
+        viewModelScope.launch {
+            if (!persistReadGrant(treeUri)) return@launch
+            val scanned = withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
+            if (scanned.isEmpty()) {
+                event("No songs found in that folder.")
+                return@launch
+            }
+            scanned.forEach { song ->
+                repository.addEntry(EntryType.AUDIO, song.displayName, song.uri)
+            }
+            event("Added ${scanned.size} songs from the folder.")
+        }
+    }
+
+    /**
+     * Test seam: the documents provider's folder listing (a folder uri to
+     * its direct children), replaced in unit tests with a fake tree.
+     * The SAF DocumentsContract class is absent from this project's stub
+     * SDK, so the document-provider protocol constants are inlined verbatim:
+     * the "_id" / "_display_name" / "_flags" columns, the directory flag
+     * value 1, and the child uri shape `scheme://authority/document/<docId>`.
+     */
+    internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
+        context.contentResolver
+            .query(folderUri, null, null, null, null)
+            ?.use { cursor ->
+                val docId = cursor.getColumnIndexOrThrow("_id")
+                val name = cursor.getColumnIndexOrThrow("_display_name")
+                val flags = cursor.getColumnIndexOrThrow("_flags")
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(
+                            FolderChild(
+                                displayName = cursor.getString(name) ?: "",
+                                isDirectory = (cursor.getLong(flags) and DOCUMENT_FLAG_DIR) != 0L,
+                                // A fresh builder: the parent's ":tree" fragment must
+                                // not leak into the child's document uri.
+                                childUri = Uri.Builder()
+                                    .scheme(folderUri.scheme)
+                                    .authority(folderUri.authority)
+                                    .path("document/${cursor.getString(docId)}")
+                                    .build()
+                                    .toString(),
+                            ),
+                        )
+                    }
+                }
+            }
+            ?: emptyList()
+    }
+
+    /** Walks [treeUri] through [folderChildren], keeping the supported audio only. */
+    private fun scanFolderAudioFiles(treeUri: Uri): List<ScannedSong> =
+        collectAudioFiles(treeUri.toString()) { folderUri ->
+            folderChildren(Uri.parse(folderUri))
+        }
+
+    /**
      * Adds a freshly picked song file onto a tag: persists the SAF grant,
      * then stores the entry and appends it to the tag's song list in one
      * transaction, so the tag's list gains the new song with a single pick.
@@ -505,3 +572,6 @@ fun lumiViewModelFactory(app: LumiApp): ViewModelProvider.Factory = object : Vie
     override fun <T : ViewModel> create(modelClass: Class<T>): T =
         LumiViewModel(app, app.repository) as T
 }
+
+/** DocumentsContract.Document.FLAG_DIR_DIR (the stub SDK lacks the class). */
+private const val DOCUMENT_FLAG_DIR = 1L
