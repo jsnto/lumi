@@ -73,7 +73,6 @@ import com.lumi.player.nfc.LumiTagNdef
 private enum class SettingsPane {
     Menu,
     PlayMode,
-    Reread,
     Tags,
     Content,
     Link,
@@ -81,8 +80,8 @@ private enum class SettingsPane {
 
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
- * screen is a list of buttons, one per setting (play mode, tag re-read wait,
- * NFC tags, content, tag-to-content linking); clicking a row navigates into that setting's own
+ * screen is a list of buttons, one per setting (play mode, NFC tags, content,
+ * tag-to-content linking); clicking a row navigates into that setting's own
  * configuration screen.
  *
  * Back navigation unwinds one level at a time: system back and the back arrow
@@ -109,7 +108,6 @@ fun SettingsScreen(
     val entries by viewModel.observeEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
-    val nfcRereadSeconds by viewModel.nfcRereadSeconds.collectAsState(15L)
     val registering by viewModel.registering.collectAsState(false)
     val scanning by viewModel.scanning.collectAsState(false)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
@@ -159,11 +157,9 @@ fun SettingsScreen(
         SettingsPane.Menu -> SettingsMenuPane(
             scrollState = menuScroll,
             playMode = playMode,
-            nfcRereadSeconds = nfcRereadSeconds,
             tags = tags,
             entries = entries,
             onPlayMode = { pane = SettingsPane.PlayMode },
-            onReread = { pane = SettingsPane.Reread },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
             onLink = { pane = SettingsPane.Link },
@@ -172,11 +168,6 @@ fun SettingsScreen(
         SettingsPane.PlayMode -> PlayModePane(
             viewModel = viewModel,
             playMode = playMode,
-            onBack = { pane = SettingsPane.Menu },
-        )
-        SettingsPane.Reread -> RereadPane(
-            viewModel = viewModel,
-            rereadSeconds = nfcRereadSeconds,
             onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.Tags -> TagsPane(
@@ -293,11 +284,9 @@ fun SettingsScreen(
 private fun SettingsMenuPane(
     scrollState: ScrollState,
     playMode: PlayMode,
-    nfcRereadSeconds: Long,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
     onPlayMode: () -> Unit,
-    onReread: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
     onLink: () -> Unit,
@@ -331,12 +320,6 @@ private fun SettingsMenuPane(
                     PlayMode.PROXIMITY -> "Proximity"
                 },
                 onClick = onPlayMode,
-            )
-            MenuRow(
-                icon = Icons.Default.Refresh,
-                title = "Tag re-read wait",
-                subtitle = "$nfcRereadSeconds s until a removed tag pauses",
-                onClick = onReread,
             )
             MenuRow(
                 icon = Icons.Default.LocationOn,
@@ -444,59 +427,6 @@ private fun PlayModePane(
                     selected = playMode == PlayMode.PROXIMITY,
                     onSelect = { viewModel.setPlayMode(PlayMode.PROXIMITY) },
                 )
-            }
-        }
-    }
-}
-
-/** Tag re-read wait: how long a removed tag may go unreported (proximity). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RereadPane(
-    viewModel: LumiViewModel,
-    rereadSeconds: Long,
-    onBack: () -> Unit,
-) {
-    Scaffold(topBar = { PaneTopAppBar("Tag re-read wait", onBack) }) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            SectionCard("Tag re-read wait") {
-                Text(
-                    text = "In proximity mode, how many seconds a tag may go " +
-                        "unreported before its music pauses. The longer the " +
-                        "wait, the more patient the app is with a tag held " +
-                        "still.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Wait", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(
-                        onClick = { viewModel.setNfcRereadSeconds(rereadSeconds - 1) },
-                        enabled = rereadSeconds > 1,
-                    ) {
-                        Text("\u2212")
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Text(
-                        "${rereadSeconds} s",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.setNfcRereadSeconds(rereadSeconds + 1) },
-                        enabled = rereadSeconds < 120,
-                    ) {
-                        Text("+")
-                    }
-                }
             }
         }
     }

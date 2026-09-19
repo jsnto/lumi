@@ -331,9 +331,9 @@ class NfcAlwaysListeningUiTest {
         }
         val controller = startMainActivity()
         val viewModel = viewModelOf(controller.get())
-        // A 7-second wait replaces the 15-second default (settings "Tag
-        // re-read wait"): the Room write is async, so pump the main looper
-        // until the view model's flow settles on it.
+        // A 7-second wait replaces the 15-second default (the
+        // `nfc_reread_seconds` setting): the Room write is async, so pump the
+        // main looper until the view model's flow settles on it.
         viewModel.setNfcRereadSeconds(7L)
         idleUntil({ viewModel.nfcRereadSeconds.value == 7L })
         sendTag(controller, UID_A)
@@ -725,9 +725,9 @@ class NfcAlwaysListeningUiTest {
         const val UID_A = "04A1B2C3"
         const val UID_B = "04DEADBEEF"
 
-        // The default 15s absence window (settings "Tag re-read wait" falls
-        // back to 15 when unset) plus a margin for the 1s poll ticks: the
-        // first tick past the window lands at ~16s.
+        // The default 15s absence window (the `nfc_reread_seconds` setting
+        // falls back to 15 when unset) plus a margin for the 1s poll ticks:
+        // the first tick past the window lands at ~16s.
         private const val PRESENCE_TIMEOUT_MS_OVERSHOOT_MS = 17_000L
     }
 }
