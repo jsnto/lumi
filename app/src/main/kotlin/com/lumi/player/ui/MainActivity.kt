@@ -32,6 +32,7 @@ import com.lumi.player.nfc.PresenceReader
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.ui.theme.LumiTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -379,7 +380,23 @@ class MainActivity : ComponentActivity() {
             } ?: return@launch
             withContext(Dispatchers.IO) {
                 MifarePresencePoller.loop(
-                    readPage0 = { reader.readPage0() },
+                    readPage0 = {
+                        try {
+                            reader.readPage0()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: IOException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // A dead session (NFC service dropped mid-read)
+                            // surfaces a runtime exception, not an
+                            // IOException: treat any read failure as a
+                            // "tag out of range" strike so the loop
+                            // degrades to the absence-timeout fallback
+                            // instead of crashing the app.
+                            throw IOException("presence read failed", e)
+                        }
+                    },
                     onStillPresent = {
                         presenceHandler.post {
                             if (lastSeenUid == uid) {
