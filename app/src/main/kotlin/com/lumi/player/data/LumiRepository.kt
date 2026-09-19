@@ -74,9 +74,9 @@ class LumiRepository(private val db: LumiDatabase) {
      * one Room transaction, so "adding a song onto a tag" never leaves a
      * linked but missing row or a stored but unlinked row. The link order is
      * read through the same join query the rest of the app observes, so the
-     * append lands exactly where the current list ends.
+     * append lands exactly where the current list ends. Returns null when
+     * the tag no longer exists (it was deleted while the pick was in flight).
      */
-    /** Returns null when the tag no longer exists (it was deleted while the pick was in flight). */
     suspend fun addEntryToTag(tagId: Long, type: EntryType, label: String, payload: String): EntryEntity? {
         return db.withTransaction {
             if (dao.tagById(tagId) == null) return@withTransaction null
