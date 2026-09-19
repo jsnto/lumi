@@ -348,7 +348,7 @@ private fun MenuRow(
 /** Shared top bar for the settings sub-screens. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun paneTopAppBar(title: String, onBack: () -> Unit) {
+private fun PaneTopAppBar(title: String, onBack: () -> Unit) {
     TopAppBar(
         title = { Text(title, fontWeight = FontWeight.Bold) },
         navigationIcon = {
@@ -367,7 +367,7 @@ private fun PlayModePane(
     playMode: PlayMode,
     onBack: () -> Unit,
 ) {
-    Scaffold(topBar = { paneTopAppBar("Play mode", onBack) }) { padding ->
+    Scaffold(topBar = { PaneTopAppBar("Play mode", onBack) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -403,7 +403,7 @@ private fun TagsPane(
     onBack: () -> Unit,
     onTagDeleted: (TagEntity) -> Unit,
 ) {
-    Scaffold(topBar = { paneTopAppBar("NFC tags", onBack) }) { padding ->
+    Scaffold(topBar = { PaneTopAppBar("NFC tags", onBack) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -450,7 +450,7 @@ private fun ContentPane(
     onAddContent: () -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
-    Scaffold(topBar = { paneTopAppBar("Content", onBack) }) { padding ->
+    Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -503,7 +503,7 @@ private fun LinkPane(
     linked: List<EntryEntity>,
     onBack: () -> Unit,
 ) {
-    Scaffold(topBar = { paneTopAppBar("Tag to content", onBack) }) { padding ->
+    Scaffold(topBar = { PaneTopAppBar("Tag to content", onBack) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
