@@ -19,6 +19,9 @@ interface LumiDao {
     @Query("SELECT * FROM tags WHERE uid = :uid LIMIT 1")
     suspend fun tagByUid(uid: String): TagEntity?
 
+    @Query("SELECT * FROM tags WHERE id = :id LIMIT 1")
+    suspend fun tagById(id: Long): TagEntity?
+
     @Insert
     suspend fun insertTag(tag: TagEntity): Long
 

@@ -4,6 +4,7 @@ import com.lumi.player.LumiApp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +34,7 @@ class AddSongToTagTest {
         val second = repo.addEntry(EntryType.AUDIO, "Second", "content://second")
         repo.updateTagEntries(tag.id) { listOf(second.id, first.id) }
 
-        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "Third", "content://third")
+        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "Third", "content://third")!!
 
         assertEquals("the new song must be the stored entry", "content://third", added.payload)
         assertEquals(
@@ -48,7 +49,7 @@ class AddSongToTagTest {
         val repo = repository()
         val tag = repo.addTag("UID-B", "Bedroom")!!
 
-        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "New song", "content://new")
+        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "New song", "content://new")!!
 
         // The tag's list now carries the song...
         assertEquals(listOf("New song"), repo.entriesForTag(tag.id).map { it.label })
@@ -84,11 +85,29 @@ class AddSongToTagTest {
     }
 
     @Test
+    fun addEntryToTag_isASafeNoOpWhenTheTagWasDeletedWhilePicking() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("UID-F", "Attic")!!
+        repo.deleteTag(tag)
+
+        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "Ghost", "content://ghost")
+
+        assertNull(
+            "a pick that lands on a deleted tag must be dropped without a crash",
+            added,
+        )
+        assertTrue(
+            "no entry row may be left behind",
+            repo.observeEntries().first().isEmpty(),
+        )
+    }
+
+    @Test
     fun addEntryToTag_blankLabelFallsBackToUntitled() = runBlocking {
         val repo = repository()
         val tag = repo.addTag("UID-E", "Deck")!!
 
-        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "   ", "content://blank")
+        val added = repo.addEntryToTag(tag.id, EntryType.AUDIO, "   ", "content://blank")!!
 
         assertEquals("Untitled", added.label)
         assertEquals(listOf("Untitled"), repo.entriesForTag(tag.id).map { it.label })

@@ -433,8 +433,8 @@ class LumiViewModel(
     fun addSongToTag(uri: Uri, tagId: Long, displayName: String?) {
         viewModelScope.launch {
             if (!persistReadGrant(uri)) return@launch
-            repository.addEntryToTag(tagId, EntryType.AUDIO, displayName ?: "Untitled", uri.toString())
-            event("Song added to the tag")
+            val entry = repository.addEntryToTag(tagId, EntryType.AUDIO, displayName ?: "Untitled", uri.toString())
+            event(if (entry != null) "Song added to the tag" else "Could not add the song to that tag.")
         }
     }
 
