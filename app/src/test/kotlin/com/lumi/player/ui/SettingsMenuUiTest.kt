@@ -129,7 +129,7 @@ class SettingsMenuUiTest {
             .assertDoesNotExist()
         compose.onNodeWithText("Register a tag").assertDoesNotExist()
         compose.onNodeWithText("Add content").assertDoesNotExist()
-        compose.onNodeWithText("Scan a tag to change its song list").assertDoesNotExist()
+        compose.onNodeWithText("Scan a tag to view its song list").assertDoesNotExist()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertDoesNotExist()
     }
 
@@ -184,12 +184,12 @@ class SettingsMenuUiTest {
         // Tag to content: the sub-screen offers the link editor.
         compose.onNodeWithText("Tag to content").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Scan a tag to change its song list").assertIsDisplayed()
+        compose.onNodeWithText("Scan a tag to view its song list").assertIsDisplayed()
         compose.onNodeWithText("Register a tag first, then link content to it.").assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Tag to content").assertExists()
-        compose.onNodeWithText("Scan a tag to change its song list").assertDoesNotExist()
+        compose.onNodeWithText("Scan a tag to view its song list").assertDoesNotExist()
     }
 
     @Test
@@ -240,7 +240,7 @@ class SettingsMenuUiTest {
         compose.waitForIdle()
         // (The pane's top bar and section card both say "Tag to content"; the
         // scan button proves the configuration screen is open.)
-        compose.onNodeWithText("Scan a tag to change its song list").assertIsDisplayed()
+        compose.onNodeWithText("Scan a tag to view its song list").assertIsDisplayed()
 
         // Every tag chip and every content button is *laid out* in the
         // (scrollable) row / editor - none are clipped away by the layout.

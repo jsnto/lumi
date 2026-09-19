@@ -92,7 +92,7 @@ class LinkScanUiTest {
         // started through the view model (same pattern as captureForTest).
         compose.onNodeWithText("Tag to content").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Scan a tag to change its song list").assertExists()
+        compose.onNodeWithText("Scan a tag to view its song list").assertExists()
         viewModel.startTagScan()
         compose.waitForIdle()
         compose.onNodeWithText("Hold the back of the phone against the tag…").assertIsDisplayed()

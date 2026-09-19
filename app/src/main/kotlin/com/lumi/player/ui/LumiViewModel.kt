@@ -417,19 +417,39 @@ class LumiViewModel(
     /** Persist the SAF grant, then store the picked file as an entry. */
     fun addFileEntry(uri: Uri, type: EntryType, displayName: String?) {
         viewModelScope.launch {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            } catch (e: Exception) {
-                event("Could not keep access to that file.")
-                return@launch
-            }
+            if (!persistReadGrant(uri)) return@launch
             repository.addEntry(type, displayName ?: "Untitled", uri.toString())
             event(if (type == EntryType.AUDIO) "Song added!" else "Content added")
         }
     }
+
+    /**
+     * Adds a freshly picked song file onto a tag: persists the SAF grant,
+     * then stores the entry and appends it to the tag's song list in one
+     * transaction, so the tag's list gains the new song with a single pick.
+     * The song list is associated by the tag's UID in the database, so no
+     * tag write is involved.
+     */
+    fun addSongToTag(uri: Uri, tagId: Long, displayName: String?) {
+        viewModelScope.launch {
+            if (!persistReadGrant(uri)) return@launch
+            repository.addEntryToTag(tagId, EntryType.AUDIO, displayName ?: "Untitled", uri.toString())
+            event("Song added to the tag")
+        }
+    }
+
+    /** Keeps the read grant on [uri] forever; false when it cannot. */
+    private suspend fun persistReadGrant(uri: Uri): Boolean =
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            true
+        } catch (e: Exception) {
+            event("Could not keep access to that file.")
+            false
+        }
 
     fun removeEntry(entry: EntryEntity) {
         viewModelScope.launch {

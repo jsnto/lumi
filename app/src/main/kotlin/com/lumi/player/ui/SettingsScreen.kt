@@ -561,9 +561,12 @@ private fun ContentPane(
 }
 
 /**
- * Tag to content: pick a tag, then order and edit the content it plays. The
- * tag chips scroll horizontally and the "add content" buttons flow, so
- * neither list gets clipped no matter how many tags or entries exist.
+ * Tag to content: the scan-first workflow. The user scans the tag (or picks
+ * one), sees the song list currently on that tag, and can add a new song
+ * onto it with the "Add" button: the pick both stores the file and appends
+ * it to the tag's list. The tag chips scroll horizontally and the "add
+ * existing content" buttons flow, so neither list gets clipped no matter
+ * how many tags or entries exist.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -575,6 +578,16 @@ private fun LinkPane(
     linked: List<EntryEntity>,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+    // Picking a file for the "Add" button both stores the entry and links
+    // it to the currently selected tag in one step.
+    val tagSongPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null && effectiveSelectedId != null) {
+            viewModel.addSongToTag(uri, effectiveSelectedId, displayNameFor(context, uri))
+        }
+    }
     Scaffold(topBar = { PaneTopAppBar("Tag to content", onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -586,7 +599,7 @@ private fun LinkPane(
         ) {
             SectionCard("Tag to content") {
                 OutlinedButton(onClick = { viewModel.startTagScan() }) {
-                    Text("Scan a tag to change its song list")
+                    Text("Scan a tag to view its song list")
                 }
                 if (tags.isEmpty()) {
                     Text(
@@ -619,6 +632,11 @@ private fun LinkPane(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
+                        OutlinedButton(onClick = { tagSongPicker.launch(arrayOf("audio/*")) }) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Add song to this tag")
+                        }
                         if (linked.isEmpty()) {
                             Text(
                                 text = "This tag plays nothing yet.",
@@ -680,14 +698,17 @@ private fun onFilePicked(
     uri: Uri,
     type: EntryType,
 ) {
-    val name = context.contentResolver
+    viewModel.addFileEntry(uri, type, displayNameFor(context, uri))
+}
+
+/** The file's display name from its content URI, or null when unknown. */
+private fun displayNameFor(context: Context, uri: Uri): String? =
+    context.contentResolver
         .query(uri, arrayOf("_display_name"), null, null, null)
         ?.use { cursor ->
             val index = cursor.getColumnIndex("_display_name")
             if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
         }
-    viewModel.addFileEntry(uri, type, name)
-}
 
 /**
  * Dialog asking for a friendly name and the preferred play mode for a
