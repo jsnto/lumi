@@ -149,7 +149,8 @@ class LumiViewModel(
 
     /**
      * A tag was detected (reader-mode read in either play mode, a tap
-     * delivered by intent on cold start, or a registration capture).
+     * delivered by intent on cold start, a registration capture, or a
+     * link-editor scan read).
      * [tag] is the raw NFC tag; during registration it is kept (for a
      * later write) and its lumi payload read for form prefill.
      */

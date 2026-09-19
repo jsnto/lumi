@@ -8,6 +8,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
+import com.lumi.player.player.PlayerStateHolder
+import com.lumi.player.player.PlaybackStatus
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -138,6 +141,30 @@ class LinkScanUiTest {
             saved!!.id,
             viewModel.effectiveSelectedTagId.value,
         )
+    }
+
+    @Test
+    fun scan_readMustNotDrivePlayback() {
+        // A read while the scan is in progress settles the scan only: it
+        // must not switch the playback policy or start the player, even
+        // for a known tag that has content linked to it.
+        db {
+            val tag = app().repository.addTag(UID, "Porch")!!
+            val entry = app().repository.addEntry(EntryType.AUDIO, "song", "")
+            app().repository.updateTagEntries(tag.id) { it + entry.id }
+        }
+        val viewModel = openSettings()
+        startScan(viewModel)
+        viewModel.onTagDetected(UID)
+        idleUntil({ !viewModel.scanning.value })
+        pumpMain(300)
+        assertEquals("a read during the scan must not start playback", PlaybackStatus.IDLE, PlayerStateHolder.state.value.status)
+        val policyField = LumiViewModel::class.java.getDeclaredField("policy")
+        policyField.isAccessible = true
+        val policy = policyField.get(viewModel)
+        val activeUid = policy.javaClass.getMethod("getActiveTagUid").invoke(policy)
+        assertNull("a read during the scan must not switch the active tag", activeUid)
+        compose.onNodeWithText("Hold the back of the phone against the tag\u2026").assertDoesNotExist()
     }
 
     @Test
