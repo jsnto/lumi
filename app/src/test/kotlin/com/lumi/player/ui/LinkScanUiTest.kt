@@ -86,10 +86,12 @@ class LinkScanUiTest {
     }
 
     private fun startScan(viewModel: LumiViewModel) {
-        // The link section sits at the bottom of the scrollable settings
-        // menu, so on the small test screen the scan button may be outside
+        // The scan button lives on the tag-to-content sub-screen (its menu
+        // button opens it), and on the small test screen it may be outside
         // the viewport: existence is the layout assertion, and the scan is
         // started through the view model (same pattern as captureForTest).
+        compose.onNodeWithText("Tag to content").performClick()
+        compose.waitForIdle()
         compose.onNodeWithText("Scan a tag to change its song list").assertExists()
         viewModel.startTagScan()
         compose.waitForIdle()

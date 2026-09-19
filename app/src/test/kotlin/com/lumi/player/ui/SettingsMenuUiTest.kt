@@ -22,10 +22,12 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * Behavioral tests for the parent settings menu: all four settings sections
- * (play mode, NFC tags, content, tag-to-content linking) live on one
- * scrollable screen with no tab navigation, and the link section lays out
- * every tag chip and every add-content button (no clipped lists).
+ * Behavioral tests for the settings menu (polex-style): the settings screen
+ * is a list of buttons, one per setting (play mode, NFC tags, content,
+ * tag-to-content linking); clicking a row navigates into that setting's own
+ * configuration screen, and the back arrow / system back unwind it back to
+ * the menu (from the menu, to the player screen). The link configuration
+ * lays out every tag chip and every add-content button (no clipped lists).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -54,6 +56,11 @@ class SettingsMenuUiTest {
         return activity
     }
 
+    private fun systemBack(activity: MainActivity) {
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+    }
+
     private fun seedData(
         tagNames: List<String> = listOf(
             "Bunny", "Fox", "Owl", "Bear", "Whale", "Panda", "Koala", "Otter",
@@ -79,31 +86,85 @@ class SettingsMenuUiTest {
     }
 
     @Test
-    fun settingsShowAllSectionsOnOneScrollableMenu() {
+    fun settingsMenuListsEachSettingAsButton() {
         openSettings()
 
-        // The leading section is fully visible without any tab switching.
+        // Every setting is a button on the settings screen itself.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
-        compose.onNodeWithText("Continuous").assertIsDisplayed()
-        compose.onNodeWithText("Proximity").assertIsDisplayed()
-
-        // The other sections sit below it on the same screen: everything is
-        // laid out at once. On the small test screen later sections may sit
-        // outside the viewport, so existence is the assertion for those.
         compose.onNodeWithText("NFC tags").assertExists()
-        compose.onNodeWithText("Register a tag").assertExists()
-        compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
-            .assertExists()
         compose.onNodeWithText("Content").assertExists()
-        compose.onNodeWithText("Add content").assertExists()
-        compose.onNodeWithText("Nothing here yet. Add a song.")
-            .assertExists()
         compose.onNodeWithText("Tag to content").assertExists()
-        compose.onNodeWithText("Register a tag first, then link content to it.").assertExists()
+
+        // The menu only lists the settings - none of the configuration
+        // content is on it (that lives in the sub-screens).
+        compose.onNodeWithText("Keeps playing until you tap a different tag.")
+            .assertDoesNotExist()
+        compose.onNodeWithText("Register a tag").assertDoesNotExist()
+        compose.onNodeWithText("Add content").assertDoesNotExist()
+        compose.onNodeWithText("Scan a tag to change its song list").assertDoesNotExist()
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertDoesNotExist()
     }
 
     @Test
-    fun linkSectionLaysOutEveryTagAndEveryEntry() {
+    fun eachMenuButtonOpensItsConfigurationScreen() {
+        val activity = openSettings()
+
+        // Play mode: the sub-screen offers the mode selection.
+        compose.onNodeWithText("Play mode").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Keeps playing until you tap a different tag.")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Plays while the tag stays near; stops when it's removed.")
+            .assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").assertExists()
+        compose.onNodeWithText("Keeps playing until you tap a different tag.")
+            .assertDoesNotExist()
+
+        // NFC tags: the sub-screen offers registration and the (empty) list.
+        compose.onNodeWithText("NFC tags").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Register a tag").assertIsDisplayed()
+        compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
+            .assertExists()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("NFC tags").assertExists()
+        compose.onNodeWithText("Register a tag").assertDoesNotExist()
+
+        // Content: the sub-screen offers content management.
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Add content").assertIsDisplayed()
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("Content").assertExists()
+        compose.onNodeWithText("Add content").assertDoesNotExist()
+
+        // Tag to content: the sub-screen offers the link editor.
+        compose.onNodeWithText("Tag to content").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan a tag to change its song list").assertIsDisplayed()
+        compose.onNodeWithText("Register a tag first, then link content to it.").assertExists()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Tag to content").assertExists()
+        compose.onNodeWithText("Scan a tag to change its song list").assertDoesNotExist()
+    }
+
+    @Test
+    fun systemBackFromMenuReturnsToThePlayerScreen() {
+        val activity = openSettings()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        systemBack(activity)
+        // The player screen's top bar is back; the settings menu is gone.
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+        compose.onNodeWithText("NFC tags").assertDoesNotExist()
+    }
+
+    @Test
+    fun linkScreenLaysOutEveryTagAndEveryEntry() {
         val tags = listOf(
             "Bunny", "Fox", "Owl", "Bear", "Whale", "Panda", "Koala", "Otter",
         )
@@ -113,20 +174,25 @@ class SettingsMenuUiTest {
         seedData(tagNames = tags, entryLabels = entries)
         openSettings()
 
+        // Open the link configuration from its menu button.
+        compose.onNodeWithText("Tag to content").performClick()
+        compose.waitForIdle()
+        // (The pane's top bar and section card both say "Tag to content"; the
+        // scan button proves the configuration screen is open.)
+        compose.onNodeWithText("Scan a tag to change its song list").assertIsDisplayed()
+
         // Every tag chip and every content button is *laid out* in the
         // (scrollable) row / editor - none are clipped away by the layout.
-        // The link section sits at the bottom of the settings menu, so on
-        // the small test screen its items may be outside the viewport:
-        // existence is the assertion, and the leading section must still be
-        // visible. Tag names appear in both the tags and the link section,
-        // so at-least-one is the multiplicity assertion.
-        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        // The link screen's items may sit outside the viewport on the small
+        // test screen, so existence is the assertion for those. Tag names
+        // appear once as chips, so at-least-one is the multiplicity
+        // assertion.
         tags.forEach { tag -> check(compose.onAllNodesWithText(tag).fetchSemanticsNodes().isNotEmpty()) { "tag '$tag' not laid out" } }
         compose.onNodeWithText("Add to this tag:").assertExists()
         entries.forEach { label -> compose.onNodeWithText("+ $label").assertExists() }
         compose.waitForIdle()
-        // Sanity: first and last tag chip and the last content button coexist
-        // on the settings menu.
+        // Sanity: first and last tag chip and the last content button
+        // coexist on the link screen.
         check(compose.onAllNodesWithText("Bunny").fetchSemanticsNodes().isNotEmpty())
         check(compose.onAllNodesWithText("Otter").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("+ Twinkle").assertExists()
