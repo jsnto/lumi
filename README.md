@@ -18,6 +18,11 @@ server or account — everything is stored locally on the device.
    content list and starts playing, with a big friendly animated visual
    showing what is up.
 
+The front screen can be soft-locked with the lock button (top right): the
+screen darkens while the app underneath keeps working — music keeps playing.
+A one-time popup first explains how to unlock and offers a
+"Don't show this again" checkbox. Tap the screen 3 times to unlock.
+
 If a tag has been played before, lumi resumes where that tag left off —
 the last played position is remembered per tag, for the three most
 recently played tags.
