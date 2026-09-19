@@ -162,7 +162,6 @@ class SoftLockUiTest {
                 status = PlaybackStatus.PLAYING,
                 currentLabel = "Song A",
                 currentType = "audio",
-                queueSize = 1,
             )
         }
         startMainActivity()

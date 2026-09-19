@@ -29,7 +29,8 @@ class LumiRepository(private val db: LumiDatabase) {
     /** Ordered content list for a tag, updated live as links or entries change. */
     fun observeEntriesForTag(tagId: Long): Flow<List<EntryEntity>> =
         dao.observeLinksForTag(tagId).combine(dao.observeEntries()) { links, entries ->
-            links.mapNotNull { link -> entries.firstOrNull { it.id == link.entryId } }
+            val byId = entries.associateBy { it.id }
+            links.mapNotNull { byId[it.entryId] }
         }
 
     // ---- tags ----
@@ -72,10 +73,7 @@ class LumiRepository(private val db: LumiDatabase) {
 
     // ---- links ----
 
-    suspend fun entriesForTag(tagId: Long): List<EntryEntity> {
-        val links = dao.linksForTag(tagId)
-        return links.mapNotNull { link -> dao.entryById(link.entryId) }
-    }
+    suspend fun entriesForTag(tagId: Long): List<EntryEntity> = dao.entriesForTag(tagId)
 
     /** Reads and replaces the tag's ordered content list in one Room transaction. */
     suspend fun updateTagEntries(tagId: Long, transform: (List<Long>) -> List<Long>): List<Long> {

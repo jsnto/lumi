@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
+import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.ui.theme.LumiTheme
 import kotlinx.coroutines.flow.collectLatest
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var viewModel: LumiViewModel
     private var nfc: NfcAdapter? = null
     private var nfcConfigured = false
+    private var currentMode: PlayMode = PlayMode.CONTINUOUS
 
     // NFC availability for the UI prompt. [nfcMissing] = no NFC hardware;
     // [nfcDisabled] = hardware present but the radio is off. [showNfcPrompt]
@@ -137,7 +139,7 @@ class MainActivity : ComponentActivity() {
                 }
                 launch {
                     PlayerStateHolder.state.collectLatest { state ->
-                        if (state.status == com.lumi.player.player.PlaybackStatus.IDLE) {
+                        if (state.status == PlaybackStatus.IDLE) {
                             viewModel.onPlaybackStopped()
                             // Playback has stopped: tear the presence poll
                             // down so no background work is left running.
@@ -156,8 +158,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    private var currentMode: PlayMode = PlayMode.CONTINUOUS
 
     // Proximity-mode presence tracking. Under foreground dispatch a
     // stationary tag may be delivered only once, so the presence record is

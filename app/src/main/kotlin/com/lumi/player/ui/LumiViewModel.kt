@@ -19,6 +19,7 @@ import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.nfc.TagInspect
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
@@ -27,6 +28,7 @@ import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -60,9 +62,9 @@ class LumiViewModel(
 
     // ---- observed data for the UI ----
 
-    fun observeTags(): kotlinx.coroutines.flow.Flow<List<TagEntity>> = repository.observeTags()
+    fun observeTags(): Flow<List<TagEntity>> = repository.observeTags()
 
-    fun observeEntries(): kotlinx.coroutines.flow.Flow<List<EntryEntity>> = repository.observeEntries()
+    fun observeEntries(): Flow<List<EntryEntity>> = repository.observeEntries()
 
     // ---- NFC registration flow ----
 
@@ -148,8 +150,8 @@ class LumiViewModel(
     // ---- NFC events from the activity ----
 
     /**
-     * A tag was detected (reader-mode read in either play mode, a tap
-     * delivered by intent on cold start, a registration capture, or a
+     * A tag was detected (a foreground-dispatch read in either play mode,
+     * a tap delivered by intent on cold start, a registration capture, or a
      * link-editor scan read).
      * [tag] is the raw NFC tag; during registration it is kept (for a
      * later write) and its lumi payload read for form prefill.
@@ -200,9 +202,10 @@ class LumiViewModel(
                 // paused it: reading overrides the pause.
                 NfcAction.Resume -> command(PlayerService.ACTION_RESUME)
 
-                NfcAction.Ignore -> Unit
-                NfcAction.PausePlayback -> Unit
-                NfcAction.StopPlayback -> Unit
+                // No-op outcomes for a read: a re-read of the tag already
+                // playing (Ignore), or a proximity pause (handled via
+                // [onTagLost] instead of the read path).
+                NfcAction.Ignore, NfcAction.PausePlayback -> Unit
             }
         }
     }
@@ -309,14 +312,13 @@ class LumiViewModel(
             return
         }
         viewModelScope.launch {
-            val data = withContext(Dispatchers.IO) { tagReader(tag) }
-            if (_capturedUid.value != uid) return@launch
-            _capturedTagData.value = data
-            val writable = withContext(Dispatchers.IO) {
-                LumiTagNdef.canWritePayload(tag, data ?: LumiTagData(name = "", mode = playMode.value))
+            // One NDEF session reads the payload and the writability.
+            val inspected = withContext(Dispatchers.IO) {
+                tagInspector(tag, LumiTagData(name = "", mode = playMode.value))
             }
             if (_capturedUid.value != uid) return@launch
-            _capturedTagWritable.value = writable
+            _capturedTagData.value = inspected.data
+            _capturedTagWritable.value = inspected.writable
         }
     }
 
@@ -333,9 +335,12 @@ class LumiViewModel(
         LumiTagNdef.write(tag, data)
     }
 
-    /** Test seam: the physical tag payload read, replaced in unit tests. */
-    internal var tagReader: (Tag?) -> LumiTagData? = { tag ->
-        LumiTagNdef.readFromTag(tag)
+    /**
+     * Test seam: the physical tag inspect (payload + writability in one
+     * NDEF session), replaced in unit tests.
+     */
+    internal var tagInspector: (Tag?, LumiTagData) -> TagInspect = { tag, fallback ->
+        LumiTagNdef.inspect(tag, fallback)
     }
 
     fun discardCaptured() {
@@ -454,10 +459,6 @@ class LumiViewModel(
 
     private fun EntryEntity.toSpec(): EntrySpec =
         EntrySpec(type = type, label = label, payload = payload)
-
-    override fun onCleared() {
-        super.onCleared()
-    }
 }
 
 /** Factory: the app instance supplies the repository. */

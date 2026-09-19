@@ -1,5 +1,6 @@
 package com.lumi.player.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -473,7 +474,7 @@ private fun ContentPane(
                 }
                 entries.forEach { entry ->
                     SettingRow(
-                        leading = emojiFor(entry.type),
+                        leading = EntryPresentation.emoji(EntryType.fromStorage(entry.type)),
                         title = entry.label,
                         detail = detailFor(entry.type, entry.payload),
                         trailing = {
@@ -555,7 +556,7 @@ private fun LinkPane(
                         }
                         linked.forEachIndexed { index, entry ->
                             SettingRow(
-                                leading = emojiFor(entry.type),
+                                leading = EntryPresentation.emoji(EntryType.fromStorage(entry.type)),
                                 title = entry.label,
                                 trailing = {
                                     IconButton(
@@ -604,7 +605,7 @@ private fun LinkPane(
 
 private fun onFilePicked(
     viewModel: LumiViewModel,
-    context: android.content.Context,
+    context: Context,
     uri: Uri,
     type: EntryType,
 ) {
@@ -763,12 +764,6 @@ private fun SettingRow(
         }
         trailing?.invoke()
     }
-}
-
-private fun emojiFor(type: String): String = when (EntryType.fromStorage(type)) {
-    EntryType.AUDIO -> "🎵"
-    EntryType.VIDEO -> "🎬"
-    EntryType.URL -> "🔗"
 }
 
 private fun detailFor(type: String, payload: String): String =

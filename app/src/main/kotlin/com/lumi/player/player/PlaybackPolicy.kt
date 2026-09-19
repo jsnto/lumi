@@ -16,8 +16,6 @@ sealed interface NfcAction {
     /** Pause playback (proximity mode: the tag left the reader range). */
     data object PausePlayback : NfcAction
 
-    /** Stop playback (the session ends; a later tag read starts fresh). */
-    data object StopPlayback : NfcAction
 }
 
 /**
