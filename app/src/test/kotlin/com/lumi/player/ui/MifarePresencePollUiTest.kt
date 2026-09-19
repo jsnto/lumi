@@ -273,6 +273,30 @@ class MifarePresencePollUiTest {
     }
 
     @Test
+    fun proximityMode_deadSessionReadFailureIsTreatedAsStrike_notACrash() {
+        setupDb(mode = PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        val activity = controller.get()
+        // A live read can fail with a non-IO runtime exception when the
+        // NFC session dies mid-read (e.g. the NFC service drops while the
+        // app stays in the foreground). The read seam must map that to a
+        // "tag out of range" strike so the loop degrades to the two-strike
+        // pause path instead of escaping the poll (and crashing the app).
+        withSessionReader(activity, PresenceReader { throw RuntimeException("dead session") })
+        sendTag(controller, UID_A)
+        val intent = nextServiceIntent(3_000)
+        assertNotNull(
+            "a dead-session read failure must degrade to the two-strike pause " +
+                "path instead of killing the poll",
+            intent,
+        )
+        assertEquals(PlayerService.ACTION_PAUSE, intent!!.action)
+    }
+
+    @Test
     fun newTagPresentation_cancelsThePreviousTagsPoll() {
         setupDb(mode = PlayMode.PROXIMITY)
         PlayerStateHolder.update {
