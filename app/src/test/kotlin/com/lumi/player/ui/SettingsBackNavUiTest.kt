@@ -72,7 +72,7 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Tag to content").performScrollTo()
         compose.onNodeWithText("Tag to content").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Scan a tag to change its song list").assertIsDisplayed()
+        compose.onNodeWithText("Scan a tag to view its song list").assertIsDisplayed()
 
         // ...and come back via the system back gesture.
         systemBack(activity)
