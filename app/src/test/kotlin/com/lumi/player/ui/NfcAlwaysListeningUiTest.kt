@@ -301,8 +301,9 @@ class NfcAlwaysListeningUiTest {
         // ignored by the policy (no restart) but refreshes the presence
         // record; the tag is still physically in range.
         // The tag leaves range: reports stop. The 1-second presence poll
-        // must derive tag loss and PAUSE playback - the session (and the
-        // active tag) is kept, not torn down.
+        // must derive tag loss once the absence outlives the grace period
+        // and PAUSE playback - the session (and the active tag) is kept,
+        // not torn down.
         ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
         val intent = nextServiceIntent(1_000)
         assertNotNull(
@@ -359,17 +360,17 @@ class NfcAlwaysListeningUiTest {
 
     @Test
     fun proximityMode_presencePollChecksOnAOneSecondCadence() {
-        // Pins the intent's "poll every 1 second": for a FRESH tag the
-        // presence record is seeded in the tagActivated collector at the
-        // same instant the first poll tick is scheduled, so the tick grid
-        // is anchored to the tag's last report: ticks at +1s, +2s, +3s.
-        // The 2s absence timeout passes at the +3s tick - nothing may pause
-        // earlier (a held-still tag is reported only once per presentation
-        // and must not be paused before the timeout window is actually past
-        // a full tick), and the loss must be reported by ~3s, not on a
-        // slower cadence. A 500ms cadence would pause at +2.5s (caught by
-        // the first window) and a 2s cadence would pause at +4s (not
-        // caught by the second window), so this pins the 1s period.
+        // Pins the "poll every 1 second" cadence with the 15s grace period:
+        // for a FRESH tag the presence record is seeded in the tagActivated
+        // collector at the same instant the first poll tick is scheduled, so
+        // the tick grid is anchored to the tag's last report: ticks at +1s,
+        // +2s, ..., +16s. The 15s absence grace passes at the +16s tick -
+        // nothing may pause earlier (a held-still tag is reported only once
+        // per presentation and must keep playing the whole grace period,
+        // and the first tick strictly past the grace is +16s), and the loss
+        // must be reported by ~16s, not on a slower cadence. A 2s cadence
+        // would land its first post-grace tick at +18s (not caught by the
+        // second window), so this pins the 1s period.
         setupDb(mode = PlayMode.PROXIMITY)
         val controller = startMainActivity()
         sendTag(controller, UID_A)
@@ -377,24 +378,86 @@ class NfcAlwaysListeningUiTest {
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
         // The tag now leaves range after its single report. No tick may
-        // report the loss inside this window (it ends just past the 2s
-        // timeout, well before the +3s tick a 1s cadence lands on).
-        ShadowLooper.idleMainLooper(2_600, TimeUnit.MILLISECONDS)
+        // report the loss inside this window (it ends just past the 15s
+        // grace, well before the +16s tick a 1s cadence lands on).
+        ShadowLooper.idleMainLooper(15_600, TimeUnit.MILLISECONDS)
         assertNull(
             "the presence poll must not pause before a full tick period has " +
-                "elapsed past the 2s absence timeout",
+                "elapsed past the 15s grace period",
             shadowOf(app() as Application).nextStartedService,
         )
-        // One more tick period: the +3s tick of the 1s cadence must report
+        // One more tick period: the +16s tick of the 1s cadence must report
         // the loss and pause.
         ShadowLooper.idleMainLooper(1_000, TimeUnit.MILLISECONDS)
         val pause = nextServiceIntent(500)
         assertNotNull(
             "the 1s-cadence presence poll must report the loss at the first " +
-                "tick past the 2s timeout (~3s), not on a slower schedule",
+                "tick past the 15s grace (~16s), not on a slower schedule",
             pause,
         )
         assertEquals(PlayerService.ACTION_PAUSE, pause!!.action)
+    }
+
+    @Test
+    fun proximityMode_stationaryTag_keepsPlayingWellPastTheOldTwoSecondTimeout() {
+        // The reported bug: a tag held still is delivered once per
+        // presentation and then goes quiet, so the absence-based removal
+        // signal fires even though the tag is still physically in range.
+        // With the old 2s grace the poll paused at ~3s; with the 15s grace
+        // the same stationary tag must keep playing far past where the
+        // pause used to land.
+        setupDb(mode = PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // the tag's report while it is presented
+        // The tag is held still: no further reports arrive, but the tag is
+        // still physically in range. Ten seconds elapse - far past the old
+        // 2s timeout (which paused at ~3s) - and nothing may pause.
+        ShadowLooper.idleMainLooper(10_000, TimeUnit.MILLISECONDS)
+        assertNull(
+            "a stationary tag in range must keep playing: the 15s grace " +
+                "period must outlive the old 2s false-fire",
+            shadowOf(app() as Application).nextStartedService,
+        )
+        assertEquals(PlaybackStatus.PLAYING, PlayerStateHolder.state.value.status)
+        // The tag then leaves range: once the absence outlives the grace
+        // the poll must derive the loss and pause.
+        ShadowLooper.idleMainLooper(7_000, TimeUnit.MILLISECONDS)
+        val pause = nextServiceIntent(1_000)
+        assertNotNull(
+            "the stationary tag that then leaves range must still pause " +
+                "playback once the absence outlives the grace period",
+            pause,
+        )
+        assertEquals(PlayerService.ACTION_PAUSE, pause!!.action)
+    }
+
+    @Test
+    fun proximityMode_reReportedStationaryTag_refreshesGraceAndKeepsPlaying() {
+        // A still-present tag re-reports when it moves or is re-presented:
+        // each re-read of the active tag refreshes the presence record, so
+        // as long as reports arrive within the 15s grace the tag counts as
+        // present and playback never pauses.
+        setupDb(mode = PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
+        }
+        val controller = startMainActivity()
+        sendTag(controller, UID_A) // presentation: seeds the record
+        ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
+        sendTag(controller, UID_A) // the tag wobbles: re-reported, record refreshes
+        ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
+        sendTag(controller, UID_A) // another re-report, still in range
+        ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
+        // 18s since the first report, but each 6s gap is inside the grace:
+        // the tag never left range, so nothing may have paused.
+        assertNull(
+            "re-reported tags keep the presence record fresh: playback must " +
+                "keep going as long as reports arrive within the grace period",
+            shadowOf(app() as Application).nextStartedService,
+        )
     }
 
     @Test
@@ -630,8 +693,8 @@ class NfcAlwaysListeningUiTest {
         const val UID_A = "04A1B2C3"
         const val UID_B = "04DEADBEEF"
 
-        // MainActivity PRESENCE_TIMEOUT_MS (2s) plus a margin for the 1s
-        // poll ticks: the first tick past the timeout lands at ~3s.
-        private const val PRESENCE_TIMEOUT_MS_OVERSHOOT_MS = 4_000L
+        // MainActivity PRESENCE_TIMEOUT_MS (15s grace) plus a margin for the
+        // 1s poll ticks: the first tick past the grace lands at ~16s.
+        private const val PRESENCE_TIMEOUT_MS_OVERSHOOT_MS = 17_000L
     }
 }

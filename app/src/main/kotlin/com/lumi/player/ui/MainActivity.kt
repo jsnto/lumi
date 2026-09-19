@@ -45,14 +45,18 @@ import kotlinx.coroutines.launch
  *   where foreground dispatch worked.
  * - CONTINUOUS: the music keeps playing after the tag is removed; tag loss
  *   is never reported.
- * - PROXIMITY: "tag lost" is derived, conservatively, from a short absence
- *   of reports on the active tag, checked by a presence poll every second.
- *   Foreground dispatch may deliver a stationary tag only once per
- *   presentation, so "no further reports" is the only removal signal
- *   available — a held-still tag may trigger the timeout early; verifying
- *   pause-on-removal timing on a real device is the first on-device
- *   validation item. Loss PAUSES playback (the session and the active tag
- *   are kept), so a re-read of the same tag resumes it.
+ * - PROXIMITY: "tag lost" is derived, conservatively, from a sustained
+ *   absence of reports on the active tag, checked by a presence poll every
+ *   second. Foreground dispatch may deliver a stationary tag only once per
+ *   presentation, so a held-still tag goes quiet quickly and "no further
+ *   reports" is the only removal signal available. The absence window is
+ *   therefore a generous grace period ([PRESENCE_TIMEOUT_MS]): a tag that is
+ *   still in range is re-reported when it moves (or re-presented), which
+ *   refreshes the record; only an absence that outlives the grace period
+ *   counts as removal. Verifying pause-on-removal timing on a real device
+ *   is the first on-device validation item. Loss PAUSES playback (the
+ *   session and the active tag are kept), so a re-read of the same tag
+ *   resumes it.
  * - Tag registration: the same foreground dispatch, with the view model in
  *   capture mode, so any tag type can be registered.
  */
@@ -160,9 +164,10 @@ class MainActivity : ComponentActivity() {
     }
 
     // Proximity-mode presence tracking. Under foreground dispatch a
-    // stationary tag may be delivered only once, so the presence record is
-    // the only proxy for "still in range"; a short absence of reports is
-    // treated as removal. Only the ACTIVE tag's reads touch the record, so
+    // stationary tag may be delivered only once per presentation, so the
+    // presence record is the only proxy for "still in range"; only an
+    // absence of reports that outlives the grace period is treated as
+    // removal. Only the ACTIVE tag's reads touch the record, so
     // an unrelated tag read can never mask the active tag's removal.
     // Only proximity mode watches for tag loss; continuous keeps playing.
     private val presenceHandler = Handler(Looper.getMainLooper())
@@ -178,10 +183,11 @@ class MainActivity : ComponentActivity() {
             presenceHandler.postDelayed(this, PRESENCE_CHECK_MS)
         }
     }
-    // The poll asks every PRESENCE_CHECK_MS whether the active tag is still
-    // being reported; PRESENCE_TIMEOUT_MS of absence counts as removal. The
-    // timeout stays longer than one poll period because a stationary tag
-    // may be reported only once per presentation.
+    // The poll asks every PRESENCE_CHECK_MS whether the active tag has been
+    // reported within the last PRESENCE_TIMEOUT_MS. A stationary tag may be
+    // reported only once per presentation, so the grace period must be long
+    // enough that a still-present tag (which re-reports when it moves) keeps
+    // playback going; only a sustained absence counts as removal.
 
     /**
      * Re-check NFC availability and keep the prompt in sync: raised while the
@@ -319,6 +325,11 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val PRESENCE_CHECK_MS = 1_000L
-        private const val PRESENCE_TIMEOUT_MS = 2_000L
+        // Grace period: absence of reports on the active tag for this long
+        // counts as removal. Kept long because a stationary tag is reported
+        // only once per presentation (foreground dispatch is edge-triggered)
+        // — a short window (2s was the old value) false-fired and paused
+        // playback while the tag was still held close.
+        private const val PRESENCE_TIMEOUT_MS = 15_000L
     }
 }
