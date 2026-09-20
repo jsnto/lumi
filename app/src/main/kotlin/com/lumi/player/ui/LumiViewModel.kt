@@ -567,9 +567,12 @@ class LumiViewModel(
      * the confirmation with the song count - or with a plain "the tree can
      * no longer be read" notice when the walk fails. The dialog is
      * state-driven ([folderRemovalPreview]), so the async walk settles
-     * before the confirmation appears.
+     * before the confirmation appears. A request made while the preview is
+     * open is ignored; cancel or confirm clears it before a new removal can
+     * be requested.
      */
     fun requestFolderRemoval(folder: FolderEntity) {
+        if (_folderRemovalPreview.value != null) return
         viewModelScope.launch {
             val walked: List<ScannedSong>? = try {
                 withContext(Dispatchers.IO) {

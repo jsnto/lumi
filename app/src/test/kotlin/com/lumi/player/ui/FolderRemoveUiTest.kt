@@ -25,6 +25,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import java.io.FileNotFoundException
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Behavioral coverage for removing an added folder: the Content pane's
@@ -262,8 +263,68 @@ class FolderRemoveUiTest {
         )
     }
 
+    @Test
+    fun aRemovalRequestWhileThePreviewIsOpenIsIgnored() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+        val bTreeQueries = AtomicInteger(0)
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI_B) bTreeQueries.incrementAndGet()
+            when (folderUri.toString()) {
+                TREE_URI_A -> listOf(file("song-a.mp3", "c://x/a"))
+                TREE_URI_B -> listOf(file("song-b.mp3", "c://x/b"))
+                else -> emptyList()
+            }
+        }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI_A))
+        idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
+        viewModel.addFolderEntry(Uri.parse(TREE_URI_B))
+        idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
+
+        val folders = dbAndGet { app().repository.observeFolders().first() }
+        val folderA = folders.single { it.uri == TREE_URI_A }
+        val folderB = folders.single { it.uri == TREE_URI_B }
+
+        viewModel.requestFolderRemoval(folderA)
+        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        val previewA = viewModel.folderRemovalPreview.value!!
+        assertEquals(TREE_URI_A, previewA.folder.uri)
+        assertEquals(setOf("c://x/a"), previewA.importedPayloads)
+        assertEquals(1, previewA.songCount)
+
+        // A second removal request while the first preview is open is
+        // ignored: B's tree is not re-walked and the open preview is not
+        // overwritten, so the destructive confirm still names A.
+        val bQueriesBefore = bTreeQueries.get()
+        viewModel.requestFolderRemoval(folderB)
+        val deadline = System.currentTimeMillis() + 500
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+        val preview = viewModel.folderRemovalPreview.value!!
+        assertEquals(TREE_URI_A, preview.folder.uri)
+        assertEquals(setOf("c://x/a"), preview.importedPayloads)
+        assertEquals(1, preview.songCount)
+        assertEquals(
+            "B's tree is not re-walked while A's preview is open",
+            bQueriesBefore,
+            bTreeQueries.get(),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithText(
+            "and its 1 imported song will be removed from the content list",
+            substring = true,
+        ).assertExists()
+    }
+
     companion object {
         /** A documents tree uri (the shape the SAF picker returns). */
         const val TREE_URI = "content://docs/document/audio%3A1:tree"
+
+        /** Two distinct documents tree uris for the two-folder case. */
+        const val TREE_URI_A = "content://docsA/document/audio%3A1:tree"
+        const val TREE_URI_B = "content://docsB/document/audio%3A2:tree"
     }
 }
