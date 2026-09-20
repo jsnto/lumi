@@ -185,6 +185,24 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: keep screen on ----
+
+    /**
+     * Whether the user wants the screen to stay on while the app is open.
+     * Unset or invalid stored values fall back to off - the default: the
+     * screen follows the system timeout while the app is open.
+     */
+    fun observeKeepScreenOn(): Flow<Boolean> =
+        dao.observeSettings().map { rows ->
+            rows.any { it.key == SettingsEntity.KEEP_SCREEN_ON && it.value == "1" }
+        }
+
+    suspend fun setKeepScreenOn(on: Boolean) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.KEEP_SCREEN_ON, if (on) "1" else "0"),
+        )
+    }
+
     companion object {
         /** Default absence window (seconds) before a removed tag pauses playback. */
         const val NFC_REREAD_SECONDS_DEFAULT = 15L

@@ -116,6 +116,22 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermissionIfNeeded()
         refreshNfcState()
 
+        // The keep-screen-on setting can change while the app is open (the
+        // settings checkbox), so apply/clear the window flag on every change
+        // while the activity is started; onResume/onPause keep the flag in
+        // sync with the foreground for the setting's current value.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.keepScreenOn.collectLatest { on ->
+                    if (on) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+            }
+        }
+
         setContent {
             LumiTheme {
                 LumiRoot(
@@ -556,10 +572,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Keep the screen on for the activity's lifetime so NFC reads and
-        // playback are never interrupted by the screen locking, sleeping, or
-        // going dark while the app is open.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Keep the screen on for the activity's lifetime when the user
+        // enabled the keep-screen-on setting (cleared in onPause); otherwise
+        // the screen follows the system timeout while the app is open.
+        if (viewModel.keepScreenOn.value) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         nfcConfigured = true
         reconfigureNfc()
         refreshNfcState()
