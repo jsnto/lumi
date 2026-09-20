@@ -1,11 +1,16 @@
 package com.lumi.player.ui
 
+import android.content.ClipData
 import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.draganddrop.dragAndDropSource
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -56,6 +61,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -564,7 +573,7 @@ private fun ContentPane(
  * existing content" buttons flow, so neither list gets clipped no matter
  * how many tags or entries exist.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun LinkPane(
     viewModel: LumiViewModel,
@@ -630,10 +639,80 @@ private fun LinkPane(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
+                        if (linked.size > 1) {
+                            Text(
+                                text = "Drag a song to reorder.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        // Drag reordering: every row is a drag source (a long press
+                        // lifts it, the platform drag ghost follows the finger) and
+                        // a drop target. On drop, the target row's index becomes
+                        // the dragged row's new position, persisted through the
+                        // same updateTagEntries path as the up/down buttons. The
+                        // dragged row is tracked in [dragIndex]: the drop event
+                        // only exposes the payload's mime types, not the source.
+                        var dragIndex by remember { mutableStateOf<Int?>(null) }
+                        var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
+                        val dragGhostColor = MaterialTheme.colorScheme.primary
                         linked.forEachIndexed { index, entry ->
+                            val transferData = remember(entry.id) {
+                                DragAndDropTransferData(
+                                    clipData = ClipData.newPlainText("lumi-entry", entry.label),
+                                    localState = entry.id,
+                                )
+                            }
                             SettingRow(
                                 leading = EntryPresentation.emoji(EntryType.fromStorage(entry.type)),
                                 title = entry.label,
+                                modifier = Modifier
+                                    .dragAndDropSource(
+                                        drawDragDecoration = {
+                                            drawCircle(
+                                                color = dragGhostColor,
+                                                radius = 24.dp.toPx(),
+                                            )
+                                        },
+                                    ) {
+                                        if (dragIndex == null) dragIndex = index
+                                        startTransfer(transferData)
+                                    }
+                                    .dragAndDropTarget(
+                                        shouldStartDragAndDrop = { true },
+                                        target = object : DragAndDropTarget {
+                                            override fun onEntered(event: DragAndDropEvent) {
+                                                dropTargetIndex = index
+                                            }
+
+                                            override fun onExited(event: DragAndDropEvent) {
+                                                if (dropTargetIndex == index) dropTargetIndex = null
+                                            }
+
+                                            override fun onDrop(event: DragAndDropEvent): Boolean {
+                                                val from = dragIndex
+                                                if (from != null && from != index) {
+                                                    viewModel.reorderLinked(effectiveId, from, index)
+                                                }
+                                                if (from != null) {
+                                                    dragIndex = null
+                                                    dropTargetIndex = null
+                                                }
+                                                return from != null
+                                            }
+
+                                            override fun onEnded(event: DragAndDropEvent) {
+                                                if (dropTargetIndex == index) dropTargetIndex = null
+                                                if (dragIndex == index) dragIndex = null
+                                            }
+                                        },
+                                    )
+                                    .background(
+                                        if (dropTargetIndex == index) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            Color.Transparent
+                                        },
+                                    ),
                                 trailing = {
                                     IconButton(
                                         onClick = { viewModel.moveLinked(effectiveId, index, -1) },
