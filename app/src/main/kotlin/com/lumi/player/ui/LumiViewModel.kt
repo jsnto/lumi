@@ -495,7 +495,12 @@ class LumiViewModel(
             }
             event(
                 when {
-                    fresh == 0 -> "All ${scanned.size} songs from the folder are already in your content list."
+                    fresh == 0 ->
+                        if (scanned.size == 1) {
+                            "The song from the folder is already in your content list."
+                        } else {
+                            "All ${scanned.size} songs from the folder are already in your content list."
+                        }
                     fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
                     else -> "Added ${scanned.size} ${if (scanned.size == 1) "song" else "songs"} from the folder."
                 },
@@ -630,7 +635,7 @@ class LumiViewModel(
     private fun folderDisplayName(treeUri: Uri): String =
         try {
             context.contentResolver
-                .query(treeUri, arrayOf("_display_name"), null, null, null)
+                .query(canonicalTreeUri(treeUri), arrayOf("_display_name"), null, null, null)
                 ?.use { cursor ->
                     if (!cursor.moveToFirst()) return@use null
                     cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
@@ -668,17 +673,22 @@ class LumiViewModel(
      * directory flag value 1.
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
+        // A tree uri's ":openable" picker suffix (if the picker appends one)
+        // rides in its last path segment: the provider answers only the
+        // canonical ":tree" shape, so query it and derive the tree segment
+        // (root-row skip + child-uri treeId) from the canonical form.
+        val queryUri = canonicalTreeUri(folderUri)
         context.contentResolver
-            .query(folderUri, null, null, null, null)
+            .query(queryUri, null, null, null, null)
             ?.use { cursor ->
                 val docId = cursor.getColumnIndexOrThrow("_id")
                 val name = cursor.getColumnIndexOrThrow("_display_name")
                 val flags = cursor.getColumnIndexOrThrow("_flags")
                 // The tree's own document-id segment (with its ":tree"
-                // suffix): path segment 2 of both the tree uri
-                // (/tree/<seg>) and the child uri (/child/<seg>/<parentId>)
-                // this seam recurses with.
-                val treeSeg = folderUri.pathSegments.getOrNull(1)
+                // suffix, no ":openable"): path segment 2 of both the
+                // tree uri (/tree/<seg>) and the child uri
+                // (/child/<seg>/<parentId>) this seam recurses with.
+                val treeSeg = queryUri.pathSegments.getOrNull(1)
                 val listingTheTree = folderUri.pathSegments.getOrNull(0) == "tree"
                 buildList {
                     while (cursor.moveToNext()) {
@@ -710,6 +720,18 @@ class LumiViewModel(
                 }
             }
             ?: emptyList()
+    }
+
+    /** A tree uri's canonical form: a trailing ":openable" on its last path segment (the picker's suffix, which android.net.Uri keeps in the path) stripped so the provider receives the `:tree` shape. Non-tree uris and tree uris without the suffix pass through unchanged; the ":tree" suffix is never stripped. */
+    private fun canonicalTreeUri(treeUri: Uri): Uri {
+        if (treeUri.pathSegments.getOrNull(0) != "tree") return treeUri
+        val lastSegment = treeUri.pathSegments.lastOrNull() ?: return treeUri
+        if (!lastSegment.endsWith(":openable")) return treeUri
+        return Uri.Builder()
+            .scheme(treeUri.scheme)
+            .authority(treeUri.authority)
+            .encodedPath("/tree/${Uri.encode(lastSegment.removeSuffix(":openable"), null)}")
+            .build()
     }
 
     /** A file's document uri `scheme://authority/document/<docId>` built from [folderUri]'s scheme + authority, the docId percent-encoded into a single path segment. */

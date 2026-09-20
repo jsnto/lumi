@@ -173,6 +173,48 @@ class FolderTreeReadFixUiTest {
     }
 
     /**
+     * The picker may append ":openable" to the tree uri's last path segment
+     * (after the ":tree" suffix - android.net.Uri has no ':'-fragment
+     * parsing, so it rides in the path). The strict provider answers ONLY
+     * the canonical ":tree" shape - the tree query and the subfolder's
+     * child uri are both refused unless the seam strips the suffix before
+     * querying and before building the child uri - so this imports only if
+     * the normalization happens. The folders table still stores the picker
+     * uri verbatim (normalization is at query time only), and the label
+     * read goes through the canonical shape too (a raw query would be
+     * refused and the label would fall back to the uri string).
+     */
+    @Test
+    fun aTreeUriWithAnOpenableSuffixImportsThroughTheCanonicalShape() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+
+        ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = true))
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI_OPENABLE))
+        idleUntil({ events.any { it == "Added 3 songs from the folder." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            listOf("track 01.mp3", "track 02.mp3", "track 03.mp3"),
+            entries.map { it.label },
+        )
+        assertEquals(
+            "content://docs/document/primary%3AMusic%2Ftrack%2001.mp3",
+            entries.first().payload,
+        )
+        val payload = Uri.parse(entries.first().payload)
+        assertEquals(2, payload.pathSegments.size)
+
+        // The folder row stores the picker uri verbatim; the label is the
+        // folder's own name, read through the canonical ":tree" shape.
+        val folders = dbAndGet { app().repository.observeFolders().first() }
+        assertEquals(1, folders.size)
+        assertEquals(TREE_URI_OPENABLE, folders.single().uri)
+        assertEquals("Music", folders.single().label)
+    }
+
+    /**
      * The rescan goes through the same uri grammar: a rescan of the unchanged
      * folder answers the tree and child listings again and adds nothing.
      */
@@ -328,5 +370,8 @@ class FolderTreeReadFixUiTest {
     companion object {
         /** The documents tree uri in the shape the SAF picker returns. */
         const val TREE_URI = "content://docs/tree/primary%3AMusic:tree"
+
+        /** The same tree with the picker's ":openable" suffix on the last segment. */
+        const val TREE_URI_OPENABLE = "content://docs/tree/primary%3AMusic%3Atree:openable"
     }
 }
