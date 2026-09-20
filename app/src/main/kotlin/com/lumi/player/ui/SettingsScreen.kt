@@ -36,6 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -113,6 +114,7 @@ private enum class SettingsPane {
     Tags,
     Content,
     Link,
+    TagDetail,
 }
 
 /**
@@ -157,6 +159,11 @@ fun SettingsScreen(
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
+
+    // The tag whose detail page is showing (set when a tag row in the NFC
+    // tags pane is tapped, cleared when the tag is removed or the page
+    // leaves it).
+    var tagDetailId by remember { mutableStateOf<Long?>(null) }
 
     // The settings menu's now-playing strip (D-06): the current entry and
     // the active play mode, so parents never have to go back to the player
@@ -223,6 +230,10 @@ fun SettingsScreen(
             tags = tags,
             onBack = { pane = SettingsPane.Menu },
             onTagDeleted = { deleteTag = it },
+            onTagOpened = { tag ->
+                tagDetailId = tag.id
+                pane = SettingsPane.TagDetail
+            },
         )
         SettingsPane.Content -> ContentPane(
             entries = entries,
@@ -249,6 +260,31 @@ fun SettingsScreen(
                 audioPicker.launch(arrayOf("audio/*"))
             },
         )
+        SettingsPane.TagDetail -> {
+            // The tag may have been removed while the page is open (the
+            // danger zone's own confirm does this); when it is gone, fall
+            // back to the menu rather than hold a page for a tag that no
+            // longer exists.
+            val tag = tags.firstOrNull { it.id == tagDetailId }
+            if (tag == null) {
+                LaunchedEffect(Unit) {
+                    tagDetailId = null
+                    pane = SettingsPane.Menu
+                }
+            } else {
+                TagDetailPane(
+                    viewModel = viewModel,
+                    tag = tag,
+                    linked = linked,
+                    onBack = { pane = SettingsPane.Menu },
+                    onAddSong = { tagId ->
+                        pendingTagPickId = tagId
+                        audioPicker.launch(arrayOf("audio/*"))
+                    },
+                    onDelete = { deleteTag = it },
+                )
+            }
+        }
     }
 
     // ---------- dialogs (overlay any pane) ----------
@@ -715,7 +751,11 @@ private fun PlayModePane(
     }
 }
 
-/** NFC tags: register and manage tags. */
+/**
+ * NFC tags: register and manage tags. The row body opens the tapped tag's
+ * detail page (the trailing delete icon keeps its own click and still
+ * deletes the tag in place).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TagsPane(
@@ -723,6 +763,7 @@ private fun TagsPane(
     tags: List<TagEntity>,
     onBack: () -> Unit,
     onTagDeleted: (TagEntity) -> Unit,
+    onTagOpened: (TagEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("NFC tags", onBack) }) { padding ->
         Column(
@@ -748,6 +789,11 @@ private fun TagsPane(
                 }
                 tags.forEach { tag ->
                     SettingRow(
+                        // The row body is the detail page's entry point: the
+                        // click rides the row's own node (the trailing delete
+                        // icon keeps its own, deeper click, so tapping the
+                        // icon still deletes in place).
+                        modifier = Modifier.clickable { onTagOpened(tag) },
                         leading = {
                             IconChip(
                                 icon = Icons.Filled.Label,
@@ -765,6 +811,136 @@ private fun TagsPane(
                             )
                         },
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One registered tag, opened by tapping its row in the NFC tags pane. The
+ * page shows the tag's details (name + UID), its current song list with an
+ * add-song action aimed at THIS tag, and ends in a danger zone whose delete
+ * removes the tag - and only the tag and its links.
+ *
+ * The song list reuses the link editor's selection plumbing: opening the
+ * page selects the tag, so [linked] (the selected tag's entries) is this
+ * tag's list, and the add-song pick goes through the same
+ * [LumiViewModel.addSongToTag] path the link editor uses.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TagDetailPane(
+    viewModel: LumiViewModel,
+    tag: TagEntity,
+    linked: List<EntryEntity>,
+    onBack: () -> Unit,
+    onAddSong: (Long) -> Unit,
+    onDelete: (TagEntity) -> Unit,
+) {
+    // Pointing the shared selection at this tag makes the observed [linked]
+    // list this tag's song list - the same plumbing the link editor's tag
+    // chips drive.
+    LaunchedEffect(tag.id) { viewModel.selectTag(tag.id) }
+    val scheme = MaterialTheme.colorScheme
+    Scaffold(topBar = { PaneTopAppBar(tag.name.ifEmpty { "Tag" }, onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard("Tag details") {
+                SettingRow(
+                    leading = {
+                        IconChip(
+                            icon = Icons.Filled.Label,
+                            background = scheme.secondaryContainer,
+                            content = scheme.onSecondaryContainer,
+                        )
+                    },
+                    title = tag.name.ifEmpty { "Tag" },
+                    detail = tag.uid,
+                )
+            }
+            // The + button on this section's title row adds a song to THIS
+            // tag: the pick stores the file and appends it to the tag's
+            // list in one transaction (the link editor's add-song path).
+            SectionCard(
+                title = "Songs",
+                addLabel = "Add song",
+                onAdd = { onAddSong(tag.id) },
+            ) {
+                if (linked.isEmpty()) {
+                    Text(
+                        text = "This tag plays nothing yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                linked.forEach { entry ->
+                    SettingRow(
+                        leading = {
+                            IconChip(
+                                icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                background = scheme.primaryContainer,
+                                content = scheme.onPrimaryContainer,
+                            )
+                        },
+                        title = entry.label,
+                        detail = detailFor(entry.type, entry.payload),
+                    )
+                }
+            }
+            // The danger zone: a visually separated, clearly destructive
+            // section. The detail copy states the effect the confirm will
+            // carry out - the tag and its song links go; the songs stay in
+            // the content list (deleteTag never deletes entries).
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = scheme.errorContainer),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "Danger zone",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onErrorContainer,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconChip(
+                            icon = Icons.Default.Delete,
+                            background = scheme.error,
+                            content = scheme.onError,
+                            size = 36.dp,
+                            iconSize = 19.dp,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Delete tag",
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                color = scheme.onErrorContainer,
+                            )
+                            Text(
+                                "Removes the tag and its song links. Its songs stay in the content list.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onErrorContainer,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        DestructivePillButton("Delete", onClick = { onDelete(tag) })
+                    }
                 }
             }
         }
