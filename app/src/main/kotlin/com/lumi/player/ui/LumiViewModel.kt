@@ -612,16 +612,16 @@ class LumiViewModel(
     fun moveLinked(tagId: Long, index: Int, by: Int) {
         viewModelScope.launch {
             repository.updateTagEntries(tagId) { current ->
-                val target = index + by
-                if (index !in current.indices || target !in current.indices) {
-                    current
-                } else {
-                    val moved = current[index]
-                    current.toMutableList().apply {
-                        removeAt(index)
-                        add(target, moved)
-                    }
-                }
+                reorderEntryIds(current, index, index + by)
+            }
+        }
+    }
+
+    /** Drag reorder: move the entry at [fromIndex] to [toIndex] (no-op when they match). */
+    fun reorderLinked(tagId: Long, fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch {
+            repository.updateTagEntries(tagId) { current ->
+                reorderEntryIds(current, fromIndex, toIndex)
             }
         }
     }
