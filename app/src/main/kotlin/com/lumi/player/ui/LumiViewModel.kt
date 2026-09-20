@@ -564,7 +564,7 @@ class LumiViewModel(
                             FolderChild(
                                 displayName = cursor.getString(name) ?: "",
                                 isDirectory = (cursor.getLong(flags) and DOCUMENT_FLAG_DIR) != 0L,
-                                // A fresh builder: the parent's ":tree" fragment must
+                                // A fresh builder: the parent's ":tree" suffix must
                                 // not leak into the child's document uri.
                                 childUri = Uri.Builder()
                                     .scheme(folderUri.scheme)
