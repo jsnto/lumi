@@ -533,10 +533,11 @@ class LumiViewModel(
     /**
      * Test seam: the documents provider's folder listing (a folder uri to
      * its direct children), replaced in unit tests with a fake tree.
-     * The SAF DocumentsContract class is absent from this project's stub
-     * SDK, so the document-provider protocol constants are inlined verbatim:
-     * the "_id" / "_display_name" / "_flags" columns, the directory flag
-     * value 1, and the child uri shape `scheme://authority/document/<docId>`.
+     * The document-provider protocol constants below are kept as inline
+     * literals on purpose (the stub jar now carries `DocumentsContract`,
+     * see AGENTS.md): the "_id" / "_display_name" / "_flags" columns, the
+     * directory flag value 1, and the child uri shape
+     * `scheme://authority/document/<docId>`.
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
         context.contentResolver
@@ -656,5 +657,5 @@ fun lumiViewModelFactory(app: LumiApp): ViewModelProvider.Factory = object : Vie
         LumiViewModel(app, app.repository) as T
 }
 
-/** DocumentsContract.Document.FLAG_DIR_DIR (the stub SDK lacks the class). */
+/** DocumentsContract.Document.FLAG_DIR_DIR (kept as an inline literal; see AGENTS.md). */
 private const val DOCUMENT_FLAG_DIR = 1L
