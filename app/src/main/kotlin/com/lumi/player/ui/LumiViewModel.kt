@@ -445,7 +445,11 @@ class LumiViewModel(
      * audio file found as an AUDIO entry - skipping files whose content uri
      * is already stored, so re-adding a folder (or a folder whose songs were
      * added earlier) adds no duplicate rows. A folder without supported audio
-     * adds nothing and reports so.
+     * adds nothing and reports so. The walk is guarded the way [rescanFolder]
+     * guards its own: when the tree can no longer be read (e.g. the SAF grant
+     * was revoked after the add) the add must report the failure, not crash
+     * the app process over an uncaught provider exception - the folder row
+     * is already stored by then, so the Rescan affordance stays available.
      */
     fun addFolderEntry(treeUri: Uri) {
         viewModelScope.launch {
@@ -454,7 +458,15 @@ class LumiViewModel(
             // The label query is a ContentResolver read, so keep it off the main thread.
             val label = withContext(Dispatchers.IO) { folderDisplayName(treeUri) }
             repository.rememberFolder(treeUri.toString(), label)
-            val scanned = withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
+            val scanned = try {
+                withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
+            } catch (_: Exception) {
+                null
+            }
+            if (scanned == null) {
+                event("Couldn't read that folder's songs.")
+                return@launch
+            }
             if (scanned.isEmpty()) {
                 event("No songs found in that folder.")
                 return@launch
