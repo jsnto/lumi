@@ -10,27 +10,37 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,16 +53,21 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BrightnessHigh
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,12 +81,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
@@ -80,6 +104,7 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.player.PlayerStateHolder
 
 /** Which settings sub-screen the settings screen shows. */
 private enum class SettingsPane {
@@ -132,6 +157,11 @@ fun SettingsScreen(
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
 
+    // The settings menu's now-playing strip (D-06): the current entry and
+    // the active play mode, so parents never have to go back to the player
+    // to know what is playing. IDLE (no entry loaded) shows no strip.
+    val playState by PlayerStateHolder.state.collectAsState()
+
     // One shared OpenDocument launcher: both "Add content" (Content pane) and
     // "Add song to this tag" (Link pane) launch it, and the pending tag id
     // set right before the launch decides which side receives the result.
@@ -172,6 +202,8 @@ fun SettingsScreen(
             playMode = playMode,
             keepScreenOn = keepScreenOn,
             onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
+            nowPlayingLabel = playState.currentLabel,
+            isPlaying = playState.isPlaying,
             tags = tags,
             entries = entries,
             onPlayMode = { pane = SettingsPane.PlayMode },
@@ -222,7 +254,15 @@ fun SettingsScreen(
     if (scanning) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagScan() },
-            title = { Text("Point a tag at a song list") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            icon = { NfcAnchor() },
+            title = {
+                Text(
+                    "Point a tag at a song list",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+            },
             text = { Text("Hold the back of the phone against the tag…") },
             confirmButton = {
                 TextButton(onClick = { viewModel.cancelTagScan() }) { Text("Cancel") }
@@ -233,7 +273,12 @@ fun SettingsScreen(
     if (registering) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagRegistration() },
-            title = { Text("Register a tag") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            icon = { NfcAnchor() },
+            title = {
+                Text("Register a tag", style = MaterialTheme.typography.headlineSmall)
+            },
             text = { Text("Hold the back of the phone against any NFC tag…") },
             confirmButton = {
                 TextButton(onClick = { viewModel.cancelTagRegistration() }) { Text("Cancel") }
@@ -256,13 +301,20 @@ fun SettingsScreen(
     deleteTag?.let { tag ->
         AlertDialog(
             onDismissRequest = { deleteTag = null },
-            title = { Text("Remove tag?") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = {
+                Text("Remove tag?", style = MaterialTheme.typography.headlineSmall)
+            },
             text = { Text("“${tag.name.ifEmpty { tag.uid }}” and its links will be removed.") },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.removeTag(tag)
-                    deleteTag = null
-                }) { Text("Remove") }
+                DestructivePillButton(
+                    label = "Remove",
+                    onClick = {
+                        viewModel.removeTag(tag)
+                        deleteTag = null
+                    },
+                )
             },
             dismissButton = {
                 TextButton(onClick = { deleteTag = null }) { Text("Cancel") }
@@ -273,13 +325,20 @@ fun SettingsScreen(
     deleteEntry?.let { entry ->
         AlertDialog(
             onDismissRequest = { deleteEntry = null },
-            title = { Text("Remove content?") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = {
+                Text("Remove content?", style = MaterialTheme.typography.headlineSmall)
+            },
             text = { Text("“${entry.label}” will be removed from the app and from every tag.") },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.removeEntry(entry)
-                    deleteEntry = null
-                }) { Text("Remove") }
+                DestructivePillButton(
+                    label = "Remove",
+                    onClick = {
+                        viewModel.removeEntry(entry)
+                        deleteEntry = null
+                    },
+                )
             },
             dismissButton = {
                 TextButton(onClick = { deleteEntry = null }) { Text("Cancel") }
@@ -293,6 +352,7 @@ fun SettingsScreen(
 /**
  * The settings menu: one clickable row per setting plus an app-version
  * footer. Clicking a row navigates into that setting's configuration screen.
+ * The now-playing strip (D-06) tops the list while an entry is loaded.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -301,6 +361,8 @@ private fun SettingsMenuPane(
     playMode: PlayMode,
     keepScreenOn: Boolean,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    nowPlayingLabel: String?,
+    isPlaying: Boolean,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
     onPlayMode: () -> Unit,
@@ -309,10 +371,13 @@ private fun SettingsMenuPane(
     onLink: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                title = {
+                    Text("Settings", style = MaterialTheme.typography.titleLarge)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -327,10 +392,19 @@ private fun SettingsMenuPane(
                 .padding(padding)
                 .verticalScroll(scrollState)
                 .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (nowPlayingLabel != null) {
+                NowPlayingStrip(
+                    label = nowPlayingLabel,
+                    isPlaying = isPlaying,
+                    mode = playMode,
+                )
+            }
             MenuRow(
                 icon = Icons.Default.PlayArrow,
+                chipBackground = scheme.primaryContainer,
+                chipContent = scheme.onPrimaryContainer,
                 title = "Play mode",
                 subtitle = when (playMode) {
                     PlayMode.CONTINUOUS -> "Continuous"
@@ -339,19 +413,25 @@ private fun SettingsMenuPane(
                 onClick = onPlayMode,
             )
             MenuRow(
-                icon = Icons.Default.LocationOn,
+                icon = Icons.Filled.Nfc,
+                chipBackground = scheme.secondaryContainer,
+                chipContent = scheme.onSecondaryContainer,
                 title = "NFC tags",
                 subtitle = if (tags.isEmpty()) "No tags yet" else "${tags.size} registered",
                 onClick = onTags,
             )
             MenuRow(
-                icon = Icons.Default.List,
+                icon = Icons.Filled.Folder,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
                 title = "Content",
                 subtitle = if (entries.isEmpty()) "No songs yet" else "${entries.size} songs",
                 onClick = onContent,
             )
             MenuRow(
-                icon = Icons.Default.Star,
+                icon = Icons.Default.LocationOn,
+                chipBackground = scheme.secondaryContainer,
+                chipContent = scheme.onSecondaryContainer,
                 title = "Tag to content",
                 subtitle = "Choose what each tag plays",
                 onClick = onLink,
@@ -369,32 +449,46 @@ private fun SettingsMenuPane(
     }
 }
 
-/** A settings button: icon, title, subtitle, chevron (polex-style row). */
+/**
+ * A settings button: a tonal icon chip, title, subtitle, chevron — a quiet
+ * color-coding of the app's four jobs (D-03): play = peach, tags = teal,
+ * content = violet, link = teal. 56+ dp min height, 48 dp targets (D-08).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MenuRow(
     icon: ImageVector,
+    chipBackground: Color,
+    chipContent: Color,
     title: String,
     subtitle: String,
     onClick: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
     ) {
         Row(
-            Modifier.padding(14.dp),
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, contentDescription = null)
+            IconChip(
+                icon = icon,
+                background = chipBackground,
+                content = chipContent,
+            )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = scheme.onSurfaceVariant,
                 )
             }
             Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
@@ -405,14 +499,14 @@ private fun MenuRow(
 /**
  * The keep-screen-on toggle: a checkbox row instead of the menu's chevron
  * rows, because the setting is a single on/off choice with no configuration
- * sub-screen. The emoji leads like the sub-screens' setting rows - the
- * project's pruned icon set has no brightness/display icon.
+ * sub-screen.
  */
 @Composable
 private fun KeepScreenOnRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -421,14 +515,20 @@ private fun KeepScreenOnRow(
             Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("🔆", style = MaterialTheme.typography.titleMedium)
+            IconChip(
+                icon = Icons.Filled.BrightnessHigh,
+                background = scheme.primaryContainer,
+                content = scheme.onPrimaryContainer,
+                size = 36.dp,
+                iconSize = 18.dp,
+            )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("Keep screen on", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Keep the display on while the app is open.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = scheme.onSurfaceVariant,
                 )
             }
             Checkbox(
@@ -440,6 +540,84 @@ private fun KeepScreenOnRow(
     }
 }
 
+/**
+ * The now-playing strip (D-06): a one-line context reminder at the top of
+ * the settings menu — what's playing, whether it is, and in which mode.
+ */
+@Composable
+private fun NowPlayingStrip(label: String, isPlaying: Boolean, mode: PlayMode) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(scheme.surfaceContainerLow, RoundedCornerShape(18.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconChip(
+            icon = Icons.Filled.MusicNote,
+            background = scheme.primaryContainer,
+            content = scheme.onPrimaryContainer,
+            size = 36.dp,
+            iconSize = 19.dp,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = scheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(if (isPlaying) scheme.secondary else scheme.outlineVariant, CircleShape),
+        )
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .background(scheme.secondaryContainer, RoundedCornerShape(500.dp))
+                .padding(horizontal = 9.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text = when (mode) {
+                    PlayMode.CONTINUOUS -> "CONTINUOUS"
+                    PlayMode.PROXIMITY -> "PROXIMITY"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSecondaryContainer,
+                letterSpacing = 0.5.sp,
+            )
+        }
+    }
+}
+
+/** A tonal icon chip: the settled treatment for list/menu row icons (D-03). */
+@Composable
+private fun IconChip(
+    icon: ImageVector,
+    background: Color,
+    content: Color,
+    size: Dp = 40.dp,
+    iconSize: Dp = 22.dp,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(background, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(iconSize),
+            tint = content,
+        )
+    }
+}
+
 // ---------- sub-screens (one per setting) ----------
 
 /** Shared top bar for the settings sub-screens. */
@@ -447,7 +625,7 @@ private fun KeepScreenOnRow(
 @Composable
 private fun PaneTopAppBar(title: String, onBack: () -> Unit) {
     TopAppBar(
-        title = { Text(title, fontWeight = FontWeight.Bold) },
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -524,13 +702,21 @@ private fun TagsPane(
                 }
                 tags.forEach { tag ->
                     SettingRow(
-                        leading = "🏷️",
+                        leading = {
+                            IconChip(
+                                icon = Icons.Filled.Label,
+                                background = MaterialTheme.colorScheme.secondaryContainer,
+                                content = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        },
                         title = tag.name.ifEmpty { "Tag" },
                         detail = tag.uid,
                         trailing = {
-                            IconButton(onClick = { onTagDeleted(tag) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete tag")
-                            }
+                            SoftIconButton(
+                                icon = Icons.Default.Delete,
+                                contentDescription = "Delete tag",
+                                onClick = { onTagDeleted(tag) },
+                            )
                         },
                     )
                 }
@@ -567,11 +753,6 @@ private fun ContentPane(
                 addLabel = "Add content",
                 onAdd = onAddContent,
             ) {
-                // Text-only on purpose: the project depends on the icons-core
-                // set, which has no Folder icon (Folder lives in icons-extended).
-                OutlinedButton(onClick = onAddFolder) {
-                    Text("Add folder")
-                }
                 if (entries.isEmpty()) {
                     Text(
                         text = "Nothing here yet. Add a song.",
@@ -580,18 +761,33 @@ private fun ContentPane(
                 }
                 entries.forEach { entry ->
                     SettingRow(
-                        leading = EntryPresentation.emoji(EntryType.fromStorage(entry.type)),
+                        leading = {
+                            IconChip(
+                                icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                background = MaterialTheme.colorScheme.primaryContainer,
+                                content = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        },
                         title = entry.label,
                         detail = detailFor(entry.type, entry.payload),
                         trailing = {
-                            IconButton(onClick = { onEntryDeleted(entry) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete")
-                            }
+                            SoftIconButton(
+                                icon = Icons.Default.Delete,
+                                contentDescription = "Delete",
+                                onClick = { onEntryDeleted(entry) },
+                            )
                         },
                     )
                 }
             }
-            SectionCard("Folders") {
+            // "Add folder" joins its section's title row as the + button
+            // (the settled design moves it off the standalone button), and
+            // the folder rows get the violet folder chip (D-03).
+            SectionCard(
+                title = "Folders",
+                addLabel = "Add folder",
+                onAdd = onAddFolder,
+            ) {
                 if (folders.isEmpty()) {
                     Text(
                         text = "No folders added yet. Use “Add folder” above.",
@@ -600,14 +796,32 @@ private fun ContentPane(
                 }
                 folders.forEach { folder ->
                     SettingRow(
-                        leading = "📁",
+                        leading = {
+                            IconChip(
+                                icon = Icons.Filled.Folder,
+                                background = MaterialTheme.colorScheme.tertiaryContainer,
+                                content = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
+                        },
                         title = folder.label,
                         detail = "Rescan to pick up new songs.",
                         trailing = {
-                            OutlinedButton(onClick = { onRescanFolder(folder) }) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Rescan")
+                            FilledTonalButton(
+                                onClick = { onRescanFolder(folder) },
+                                shape = RoundedCornerShape(500.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Rescan", fontSize = 13.sp)
                             }
                         },
                     )
@@ -659,6 +873,12 @@ private fun LinkPane(
                 },
             ) {
                 OutlinedButton(onClick = { viewModel.startTagScan() }) {
+                    Icon(
+                        Icons.Filled.Nfc,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text("Scan a tag to view its song list")
                 }
                 if (tags.isEmpty()) {
@@ -720,8 +940,33 @@ private fun LinkPane(
                                     localState = entry.id,
                                 )
                             }
+                            // Captured here (composable scope) because the
+                            // drawWithContent lambda below runs at draw time,
+                            // where MaterialTheme is not reachable.
+                            val linkRowColors = MaterialTheme.colorScheme
                             SettingRow(
-                                leading = EntryPresentation.emoji(EntryType.fromStorage(entry.type)),
+                                leading = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // Visible drag handle (D-07): the
+                                        // row's reordering is now legible at a
+                                        // glance instead of hidden in a long
+                                        // press.
+                                        Icon(
+                                            imageVector = Icons.Filled.DragHandle,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(22.dp),
+                                            tint = MaterialTheme.colorScheme.outline,
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        IconChip(
+                                            icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                            background = MaterialTheme.colorScheme.primaryContainer,
+                                            content = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            size = 36.dp,
+                                            iconSize = 19.dp,
+                                        )
+                                    }
+                                },
                                 title = entry.label,
                                 modifier = Modifier
                                     .dragAndDropSource(
@@ -766,27 +1011,66 @@ private fun LinkPane(
                                     )
                                     .background(
                                         if (dropTargetIndex == index) {
-                                            MaterialTheme.colorScheme.primaryContainer
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                                         } else {
                                             Color.Transparent
                                         },
-                                    ),
+                                        RoundedCornerShape(16.dp),
+                                    )
+                                    // The settled drop-target state: a dashed
+                                    // primary outline over the peach wash.
+                                    .drawWithContent {
+                                        drawContent()
+                                        if (dropTargetIndex == index) {
+                                            // The pruned compose mirror has no
+                                            // PathEffect (no dashes) and no
+                                            // bordered drawRoundRect, so the
+                                            // drop-target outline is a solid
+                                            // 2 dp primary stroke over the
+                                            // same rounded rect.
+                                            drawRoundRect(
+                                                color = linkRowColors.primary,
+                                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                                                    16.dp.toPx(),
+                                                    16.dp.toPx(),
+                                                ),
+                                                style = Stroke(
+                                                    2.dp.toPx(),
+                                                    4f,
+                                                    StrokeCap.Butt,
+                                                    StrokeJoin.Miter,
+                                                    null,
+                                                ),
+                                            )
+                                        }
+                                    },
                                 trailing = {
-                                    IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveId, index, -1) },
-                                        enabled = index > 0,
+                                    // Stacked up/down (D-07): compact, one
+                                    // above the other, keeping the row's
+                                    // height down.
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
                                     ) {
-                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
+                                        MoveIconButton(
+                                            icon = Icons.Filled.KeyboardArrowUp,
+                                            contentDescription = "Move up",
+                                            enabled = index > 0,
+                                            onClick = { viewModel.moveLinked(effectiveId, index, -1) },
+                                        )
+                                        MoveIconButton(
+                                            icon = Icons.Filled.KeyboardArrowDown,
+                                            contentDescription = "Move down",
+                                            enabled = index < linked.size - 1,
+                                            onClick = { viewModel.moveLinked(effectiveId, index, 1) },
+                                        )
                                     }
-                                    IconButton(
-                                        onClick = { viewModel.moveLinked(effectiveId, index, 1) },
-                                        enabled = index < linked.size - 1,
-                                    ) {
-                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
-                                    }
-                                    IconButton(onClick = { viewModel.removeLinked(effectiveId, entry.id) }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Remove")
-                                    }
+                                    Spacer(Modifier.width(6.dp))
+                                    SoftIconButton(
+                                        icon = Icons.Default.Close,
+                                        contentDescription = "Remove",
+                                        onClick = { viewModel.removeLinked(effectiveId, entry.id) },
+                                    )
                                 },
                             )
                         }
@@ -863,7 +1147,9 @@ private fun TagNameDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Tag captured") },
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(28.dp),
+        title = { Text("Tag captured", style = MaterialTheme.typography.headlineSmall) },
         text = {
             Column {
                 Text("ID: $uid", style = MaterialTheme.typography.bodySmall)
@@ -902,13 +1188,14 @@ private fun TagNameDialog(
         confirmButton = {
             if (writable) {
                 Row {
-                    TextButton(onClick = { onSave(name, mode) }) { Text("Save") }
-                    TextButton(onClick = { onSaveAndWrite(name, mode) }) {
-                        Text("Save and write to tag")
-                    }
+                    TonalPillButton("Save", onClick = { onSave(name, mode) })
+                    TonalPillButton(
+                        "Save and write to tag",
+                        onClick = { onSaveAndWrite(name, mode) },
+                    )
                 }
             } else {
-                TextButton(onClick = { onSave(name, mode) }) { Text("Save") }
+                TonalPillButton("Save", onClick = { onSave(name, mode) })
             }
         },
         dismissButton = {
@@ -931,6 +1218,7 @@ private fun SectionCard(
     onAdd: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -952,8 +1240,31 @@ private fun SectionCard(
                     modifier = Modifier.weight(1f),
                 )
                 if (onAdd != null && addLabel != null) {
+                    // The section's single add action: a 40 dp peach circle on
+                    // the title row (the settled treatment for the section +
+                    // buttons), inside the 48 dp tap target. The click and the
+                    // content description live on the 40 dp circle's own node
+                    // (a nested semantics node would otherwise hide the
+                    // button's click from matchers), so that node's bounds are
+                    // the button's for the layout tests.
                     IconButton(onClick = onAdd) {
-                        Icon(Icons.Default.Add, contentDescription = addLabel)
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(scheme.primaryContainer, CircleShape)
+                                .semantics(mergeDescendants = true) {
+                                    contentDescription = addLabel
+                                }
+                                .clickable { onAdd() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = scheme.onPrimaryContainer,
+                            )
+                        }
                     }
                 }
             }
@@ -970,7 +1281,8 @@ private fun SectionCard(
 internal val playModeItemBorderColor = Color.Transparent
 internal val playModeItemBorder = BorderStroke(1.dp, playModeItemBorderColor)
 
-/** A selectable play-mode row. */
+/** A selectable play-mode row: borderless item, explicit peach + check when
+ * selected (the settled look), 56+ dp tall. */
 @Composable
 private fun ModeRow(
     title: String,
@@ -978,42 +1290,132 @@ private fun ModeRow(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     FilterChip(
         selected = selected,
         onClick = onSelect,
         border = playModeItemBorder,
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = scheme.surfaceContainerLow,
+            labelColor = scheme.onSurface,
+            selectedContainerColor = scheme.primaryContainer,
+            selectedLabelColor = scheme.onPrimaryContainer,
+        ),
         label = {
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                Text(detail, style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                    Text(detail, style = MaterialTheme.typography.bodySmall)
+                }
+                if (selected) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = scheme.onPrimaryContainer,
+                    )
+                }
             }
         },
         modifier = Modifier.fillMaxWidth(),
     )
 }
 
-/** A settings row: emoji, title, optional detail, trailing actions. */
+/**
+ * A settings row: a tonal icon chip (via [leading]), title, optional detail,
+ * trailing actions. 56 dp min height (D-08); row titles are 16 sp Bold
+ * (D-02).
+ */
 @Composable
 private fun SettingRow(
-    leading: String,
+    leading: @Composable () -> Unit,
     title: String,
     modifier: Modifier = Modifier,
     detail: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(leading, style = MaterialTheme.typography.titleMedium)
+        leading()
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
             if (detail != null) {
                 Text(detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
         }
         trailing?.invoke()
+    }
+}
+
+/**
+ * A 48 dp action button whose visual is a 40 dp soft circle (surface
+ * container high) around a 20 dp icon: the settled treatment for row-level
+ * delete / remove actions.
+ */
+@Composable
+private fun SoftIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    IconButton(onClick = onClick) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(scheme.surfaceContainerHigh, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp),
+                tint = scheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * One half of the link editor's stacked move control (D-07): a compact 34 x
+ * 26 dp target (smaller than the 48 dp rule on purpose — two of them stack
+ * in the row's trailing slot). Disabled at reduced opacity at the list
+ * ends. The content description and the enabled/disabled state are the
+ * semantic contract the reorder tests drive.
+ */
+@Composable
+private fun MoveIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(width = 34.dp, height = 26.dp)
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription
+            }
+            .background(
+                scheme.surfaceContainerHigh.copy(alpha = if (enabled) 1f else 0.45f),
+                RoundedCornerShape(10.dp),
+            )
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = if (enabled) scheme.onSurfaceVariant else scheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
     }
 }
 

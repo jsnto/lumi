@@ -131,11 +131,24 @@ class PlayModeItemUiTest {
 
         compose.onNodeWithContentDescription("Add content").assertHasClickAction()
         val addContent = compose.onNodeWithContentDescription("Add content").fetchSemanticsNode()
-        val addFolder = compose.onNodeWithText("Add folder").fetchSemanticsNode()
         assertFlushRight(addContent, screenRight, density, 36 + 4)
-        assertOnTitleRow(addContent, "Content", addFolder)
-        // The text-only "Add folder" pill is not a + pill and keeps its spot.
-        compose.onNodeWithText("Add folder").assertExists()
+        assertOnTitleRow(
+            addContent,
+            "Content",
+            compose.onNodeWithText("Nothing here yet. Add a song.").fetchSemanticsNode(),
+        )
+
+        // "Add folder" moved to the Folders section's title row (the settled
+        // design), so it is now a + button found by its content description,
+        // flush right on that section's title row just like "Add content".
+        compose.onNodeWithContentDescription("Add folder").assertHasClickAction()
+        val addFolder = compose.onNodeWithContentDescription("Add folder").fetchSemanticsNode()
+        assertFlushRight(addFolder, screenRight, density, 36 + 4)
+        assertOnTitleRow(
+            addFolder,
+            "Folders",
+            compose.onNodeWithText("No folders added yet", substring = true).fetchSemanticsNode(),
+        )
     }
 
     @Test

@@ -17,28 +17,30 @@ import androidx.compose.ui.unit.sp
 /**
  * Warm, playful palette (lumi's sun-blob identity) with modern Material 3
  * tonal roles: soft containers, rounded surfaces, plenty of whitespace.
+ * The light scheme is the settled "Sunlit amber" palette (D-01): a cleaner,
+ * sunnier push of the same warm family.
  */
 private val LightColors = lightColorScheme(
-    primary = Color(0xFFE8590C),
+    primary = Color(0xFFF5761E),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFFFDDBF),
-    onPrimaryContainer = Color(0xFF3B1500),
+    primaryContainer = Color(0xFFFFE3C8),
+    onPrimaryContainer = Color(0xFF381502),
     secondary = Color(0xFF2F6D68),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFB9E9E0),
+    secondaryContainer = Color(0xFFC9EBE1),
     onSecondaryContainer = Color(0xFF00342F),
-    tertiary = Color(0xFF6750A4),
+    tertiary = Color(0xFF7A5BC0),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFE8DEFF),
+    tertiaryContainer = Color(0xFFE9E1FB),
     onTertiaryContainer = Color(0xFF21005D),
-    background = Color(0xFFFFF9F0),
-    onBackground = Color(0xFF231A12),
-    surface = Color(0xFFFFFDFA),
-    onSurface = Color(0xFF231A12),
-    surfaceContainerLow = Color(0xFFF9F2E9),
-    surfaceContainer = Color(0xFFF4ECE1),
-    surfaceContainerHigh = Color(0xFFF0E7DB),
-    onSurfaceVariant = Color(0xFF53443A),
+    background = Color(0xFFFFFBF2),
+    onBackground = Color(0xFF221810),
+    surface = Color(0xFFFFFEFB),
+    onSurface = Color(0xFF221810),
+    surfaceContainerLow = Color(0xFFFAF3E7),
+    surfaceContainer = Color(0xFFF4EBDC),
+    surfaceContainerHigh = Color(0xFFEDE2CF),
+    onSurfaceVariant = Color(0xFF5B4B3F),
     outline = Color(0xFF857164),
     outlineVariant = Color(0xFFD4BFAF),
 )
@@ -77,7 +79,12 @@ private val LumiShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
-/** Friendly typography: semibold display styles, roomy body. */
+/**
+ * Friendly typography with a pushed weight hierarchy (D-02, settled): the
+ * wordmark and the player label run ExtraBold, dialog titles and top-bar
+ * titles Bold, row titles Bold. Sizes are unchanged so layouts keep their
+ * current geometry.
+ */
 private val LumiTypography = Typography().copy(
     headlineLarge = TextStyle(
         fontWeight = FontWeight.Bold,
@@ -85,22 +92,22 @@ private val LumiTypography = Typography().copy(
         lineHeight = 40.sp,
     ),
     headlineMedium = TextStyle(
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.ExtraBold,
         fontSize = 28.sp,
         lineHeight = 36.sp,
     ),
     headlineSmall = TextStyle(
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Bold,
         fontSize = 24.sp,
         lineHeight = 32.sp,
     ),
     titleLarge = TextStyle(
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.ExtraBold,
         fontSize = 20.sp,
         lineHeight = 28.sp,
     ),
     titleMedium = TextStyle(
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Bold,
         fontSize = 16.sp,
         lineHeight = 24.sp,
     ),
