@@ -139,11 +139,11 @@ class TagPickerDispatchUiTest {
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
 
-        // Tap "Add content": the pending target resets to null and the
-        // shared picker launches.
-        compose.onNodeWithText("Add content").performScrollTo()
+        // Tap the "Add content" + button: the pending target resets to null
+        // and the shared picker launches.
+        compose.onNodeWithContentDescription("Add content").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithText("Add content").performClick()
+        compose.onNodeWithContentDescription("Add content").performClick()
         compose.waitForIdle()
 
         val diag = deliverPick(activity, Uri.parse("content://fake/plain-song"))
@@ -189,9 +189,9 @@ class TagPickerDispatchUiTest {
         val viewModel = field.get(activity) as LumiViewModel
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
-        compose.onNodeWithText("Add song to this tag").performScrollTo()
+        compose.onNodeWithContentDescription("Add song to this tag").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithText("Add song to this tag").performClick()
+        compose.onNodeWithContentDescription("Add song to this tag").performClick()
         compose.waitForIdle()
 
         deliverPick(activity, Uri.parse("content://fake/second-song"))

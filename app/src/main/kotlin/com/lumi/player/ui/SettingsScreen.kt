@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -460,11 +461,6 @@ private fun TagsPane(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SectionCard("NFC tags") {
-                OutlinedButton(onClick = { viewModel.startTagRegistration() }) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Register a tag")
-                }
                 if (tags.isEmpty()) {
                     Text(
                         text = "No tags yet. Tap a tag on the back of the phone to register it.",
@@ -483,6 +479,12 @@ private fun TagsPane(
                         },
                     )
                 }
+                // The old outlined "+ Register a tag" pill, now a + button on
+                // the bottom right of the section.
+                SectionAddButton(
+                    onClick = { viewModel.startTagRegistration() },
+                    label = "Register a tag",
+                )
             }
         }
     }
@@ -510,11 +512,6 @@ private fun ContentPane(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SectionCard("Content") {
-                OutlinedButton(onClick = onAddContent) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Add content")
-                }
                 // Text-only on purpose: the project depends on the icons-core
                 // set, which has no Folder icon (Folder lives in icons-extended).
                 OutlinedButton(onClick = onAddFolder) {
@@ -538,6 +535,9 @@ private fun ContentPane(
                         },
                     )
                 }
+                // The old outlined "+ Add content" pill, now a + button on the
+                // bottom right of the section.
+                SectionAddButton(onClick = onAddContent, label = "Add content")
             }
             SectionCard("Folders") {
                 if (folders.isEmpty()) {
@@ -628,11 +628,6 @@ private fun LinkPane(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
-                        OutlinedButton(onClick = { onAddSong(effectiveId) }) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Add song to this tag")
-                        }
                         if (linked.isEmpty()) {
                             Text(
                                 text = "This tag plays nothing yet.",
@@ -751,6 +746,12 @@ private fun LinkPane(
                                 }
                             }
                         }
+                        // The old outlined "+ Add song to this tag" pill, now a
+                        // + button on the bottom right of the section.
+                        SectionAddButton(
+                            onClick = { onAddSong(effectiveId) },
+                            label = "Add song to this tag",
+                        )
                     }
                 }
             }
@@ -878,6 +879,14 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
+/**
+ * Border of the play-mode items: a transparent stroke the width [FilterChip]
+ * would draw its default outline at, so the items render without a visible
+ * border.
+ */
+internal val playModeItemBorderColor = Color.Transparent
+internal val playModeItemBorder = BorderStroke(1.dp, playModeItemBorderColor)
+
 /** A selectable play-mode row. */
 @Composable
 private fun ModeRow(
@@ -889,6 +898,7 @@ private fun ModeRow(
     FilterChip(
         selected = selected,
         onClick = onSelect,
+        border = playModeItemBorder,
         label = {
             Column {
                 Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
@@ -897,6 +907,23 @@ private fun ModeRow(
         },
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/**
+ * A "+" button pinned to the bottom right of a section card. Replaces the
+ * outlined "+ ..." pill buttons for the sections whose add action is a single
+ * unambiguous operation (register a tag, add content, add a song to the tag).
+ */
+@Composable
+private fun SectionAddButton(onClick: () -> Unit, label: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        IconButton(onClick = onClick) {
+            Icon(Icons.Default.Add, contentDescription = label)
+        }
+    }
 }
 
 /** A settings row: emoji, title, optional detail, trailing actions. */

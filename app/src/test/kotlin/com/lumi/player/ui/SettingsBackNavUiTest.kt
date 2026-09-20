@@ -94,14 +94,18 @@ class SettingsBackNavUiTest {
         // Open the tags sub-screen from the (top) of the menu.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Register a tag").assertIsDisplayed()
+        // The "+ Register a tag" pill is now a + button on the bottom right
+        // of the section card (found by content description); on the small
+        // test screen it may sit below the viewport, so existence is the
+        // layout assertion.
+        compose.onNodeWithContentDescription("Register a tag").assertExists()
 
         // The first back unwinds the sub-screen to the menu; it must NOT pop
         // settings away.
         systemBack(activity)
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("NFC tags").assertIsDisplayed()
-        compose.onNodeWithText("Register a tag").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
 
         // The second back leaves the menu entirely and returns to the
         // player screen.

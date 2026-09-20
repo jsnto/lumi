@@ -90,7 +90,7 @@ class SettingsAudioOnlyUiTest {
         // The content column is taller than the tiny Robolectric display and
         // performClick injects real touch input at the node's screen position,
         // so scroll the button into view first.
-        compose.onNodeWithText("Add content").performScrollTo()
+        compose.onNodeWithContentDescription("Add content").performScrollTo()
         compose.waitForIdle()
 
         // The old "Audio / Video / Link" chooser dialog and the link-entry
@@ -100,7 +100,7 @@ class SettingsAudioOnlyUiTest {
         compose.onNodeWithText("Link / URL").assertDoesNotExist()
         compose.onNodeWithText("Add a link").assertDoesNotExist()
 
-        compose.onNodeWithText("Add content").performClick()
+        compose.onNodeWithContentDescription("Add content").performClick()
         compose.waitForIdle()
 
         // Tapping the button launches the document picker directly, filtered
