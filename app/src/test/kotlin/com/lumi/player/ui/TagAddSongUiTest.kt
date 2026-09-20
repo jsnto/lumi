@@ -98,11 +98,10 @@ class TagAddSongUiTest {
 
         val viewModel = openLinkPane()
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        // The + button sits at the bottom right of the section card, below
-        // the scan button, the chip row and the song list: on the small
-        // test screen it may be outside the viewport, so existence is the
-        // layout assertion (same clipped-bottom pattern as the front
-        // screen). The tag's current list must be shown for the selection.
+        // The + button is on the section's title row (next to the "Tag to
+        // content" title): on the small test screen it may be outside the
+        // viewport, so existence is the layout assertion. The tag's current
+        // list must be shown for the selection.
         compose.onNodeWithContentDescription("Add song to this tag").assertExists()
         compose.onNodeWithText("First song").assertExists()
     }

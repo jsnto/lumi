@@ -126,10 +126,10 @@ class SettingsMenuUiTest {
         // NFC tags: the sub-screen offers registration and the (empty) list.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        // The "+ Register a tag" pill is now a + button on the bottom right
-        // of the section card (found by content description); on the small
-        // test screen it may sit below the viewport, so existence is the
-        // layout assertion.
+        // The "+ Register a tag" pill is now the + button on the section's
+        // title row (found by content description); on the small test screen
+        // it may sit below the viewport, so existence is the layout
+        // assertion.
         compose.onNodeWithContentDescription("Register a tag").assertExists()
         compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
             .assertExists()
@@ -141,9 +141,9 @@ class SettingsMenuUiTest {
         // Content: the sub-screen offers content management.
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
-        // The "+ Add content" pill is now a + button on the bottom right of
-        // the section card (found by content description); existence is the
-        // layout assertion (it may sit below the viewport).
+        // The "+ Add content" pill is now the + button on the section's title
+        // row (found by content description); existence is the layout
+        // assertion (it may sit below the viewport).
         compose.onNodeWithContentDescription("Add content").assertExists()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
         systemBack(activity)
