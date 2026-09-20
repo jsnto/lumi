@@ -25,16 +25,16 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The Content pane ("Add content") and the Link pane ("Add song to this tag")
+ * The Content pane ("Add content") and the tag detail page ("Add song")
  * share ONE OpenDocument launcher: whichever button was tapped stores the
  * pending target right before the launch, and the shared callback dispatches
- * the picked URI to that target. Visiting the Link pane replaces the shared
- * callback entry while the pane is composed and removes it on dispose, so a
- * pick that lands after a Link-pane visit must still reach the Content path
- * (a second, same-contract launcher in the Link pane used to drop that
- * result entirely). The real SAF picker cannot run under Robolectric, so the
- * pick is delivered straight through the activity's result registry - the
- * same callback slot the system's picker result would use.
+ * the picked URI to that target. Visiting the tag detail page sets the
+ * pending tag id while the page is composed and the Content pane's add
+ * resets it to null, so a pick that lands after a detail-page visit must
+ * still reach the plain content path. The real SAF picker cannot run under
+ * Robolectric, so the pick is delivered straight through the activity's
+ * result registry - the same callback slot the system's picker result would
+ * use.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -123,17 +123,20 @@ class TagPickerDispatchUiTest {
     }
 
     @Test
-    fun contentPick_afterVisitingTheLinkPane_storesPlainContentWithoutLinking() {
+    fun contentPick_afterVisitingTheTagDetailPage_storesPlainContentWithoutLinking() {
         val tagId = dbAndGet { app().repository.addTag(UID, "Porch")?.id ?: 0L }
 
-        // Compose (and dispose) the Link pane's launcher registration first,
-        // the exact sequence that used to leave the shared request key with
-        // no callback.
+        // Compose the tag detail page (its "Add song" shares the one
+        // OpenDocument launcher) and leave it for the Content pane: the
+        // page's visit must not steer a later Content-pane pick at the tag.
         val activity = openMainActivity()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Tag to content").performClick()
+        compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
+        compose.onNodeWithText("Porch").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()
@@ -146,21 +149,13 @@ class TagPickerDispatchUiTest {
         compose.onNodeWithContentDescription("Add content").performClick()
         compose.waitForIdle()
 
-        val diag = deliverPick(activity, Uri.parse("content://fake/plain-song"))
+        deliverPick(activity, Uri.parse("content://fake/plain-song"))
 
         // The entry must land as plain content (visible in the Content pane)
         // and must NOT be linked to the seeded tag - the pick was not for a
-        // tag, and no callback may be missing.
-        val deadline = System.currentTimeMillis() + 5_000
-        var ok = false
-        while (System.currentTimeMillis() < deadline && !ok) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            ok = entryCount() == 1
-            Thread.sleep(10)
-        }
-        val toast = org.robolectric.shadows.ShadowToast.getTextOfLatestToast()
-        check(ok) { "the pick never reached the Content path; toast=$toast; $diag" }
+        // tag, and no callback may be missing (the pick is delivered through
+        // the registry slot the real picker would use).
+        idleUntil({ entryCount() == 1 })
         compose.waitForIdle()
         compose.onNodeWithText("Untitled").assertExists()
         val linked = tagLinks(tagId).map { it.id }
@@ -172,7 +167,7 @@ class TagPickerDispatchUiTest {
     }
 
     @Test
-    fun linkPanePick_appendsTheSongToThePickedTagsList() {
+    fun tagDetailPagePick_appendsTheSongToThePickedTagsList() {
         val tagId = dbAndGet { app().repository.addTag(UID, "Porch")?.id ?: 0L }
         val existingId = dbAndGet {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
@@ -182,16 +177,18 @@ class TagPickerDispatchUiTest {
         val activity = openMainActivity()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Tag to content").performClick()
+        compose.onNodeWithText("NFC tags").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Porch").performClick()
         compose.waitForIdle()
         val field = MainActivity::class.java.getDeclaredField("viewModel")
         field.isAccessible = true
         val viewModel = field.get(activity) as LumiViewModel
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
-        compose.onNodeWithContentDescription("Add song to this tag").performScrollTo()
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithContentDescription("Add song to this tag").performClick()
+        compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
 
         deliverPick(activity, Uri.parse("content://fake/second-song"))

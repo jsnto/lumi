@@ -142,8 +142,7 @@ class FolderRemoveUiTest {
         // deleted entry is observable.
         val tag = checkNotNull(dbAndGet { app().repository.addTag("uid-1", "Test tag") })
         val entryA = dbAndGet { app().repository.observeEntries().first() }.first { it.label == "song-a.mp3" }
-        viewModel.addLinked(tag.id, entryA.id)
-        idleUntil({ dbAndGet { app().repository.entriesForTag(tag.id) }.size == 1 })
+        dbAndGet { app().repository.updateTagEntries(tag.id) { it + entryA.id } }
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)

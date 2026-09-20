@@ -12,15 +12,13 @@ server or account — everything is stored locally on the device.
    and a writable tag can optionally store that on the tag itself so
    re-registering it later pre-fills the form), register content (pick an
    audio file from the device, or a whole folder to add every song in it and
-   its subfolders), and link
-   a tag to one or more entries in the order you want them played. The
-   tag-to-content section is scan-first: scan the tag (or pick one from its
-   chips) to see the songs currently on it — then edit the list, or add a
-   brand-new song straight onto the tag with one pick (no data is written
-   to the tag). The NFC tags section lists the registered tags; tapping
-   one opens its own page — the tag's details, its song list (with an
-   add-song button), and a danger zone to delete the tag (its songs stay
-   in the content list).
+   its subfolders), and link a tag to the songs it should play. The NFC
+   tags section lists the registered tags; its "Scan NFC" row opens a
+   scanned tag's details for editing, and tapping a tag opens its own page
+   — the tag's details (its name, which can be edited, and its read-only
+   ID), its song list (songs are added straight onto the tag with one pick;
+   no data is written to the tag), and a danger zone to delete the tag (its
+   songs stay in the content list).
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual
