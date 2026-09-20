@@ -597,13 +597,13 @@ private fun LinkPane(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // The old outlined "+ Add song to this tag" pill is now the +
-            // button on the section's title row, shown while a tag is the
-            // effective selection (same condition as before the move).
+            // button on the section's title row, shown only while a tag
+            // exists and one is the effective selection.
             val effectiveId = effectiveSelectedId
             SectionCard(
                 title = "Tag to content",
-                addLabel = if (effectiveId != null) "Add song to this tag" else null,
-                onAdd = if (effectiveId != null) {
+                addLabel = if (tags.isNotEmpty() && effectiveId != null) "Add song to this tag" else null,
+                onAdd = if (tags.isNotEmpty() && effectiveId != null) {
                     { onAddSong(effectiveId) }
                 } else {
                     null

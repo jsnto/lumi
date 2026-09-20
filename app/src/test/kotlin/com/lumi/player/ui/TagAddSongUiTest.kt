@@ -42,6 +42,8 @@ class TagAddSongUiTest {
     @get:Rule
     val compose = createEmptyComposeRule()
 
+    private lateinit var activity: MainActivity
+
     @Before
     fun setUp() {
         NfcTestState.reset()
@@ -51,7 +53,8 @@ class TagAddSongUiTest {
     private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
 
     private fun openLinkPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        activity = controller.get()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
@@ -60,6 +63,11 @@ class TagAddSongUiTest {
         val field = MainActivity::class.java.getDeclaredField("viewModel")
         field.isAccessible = true
         return field.get(activity) as LumiViewModel
+    }
+
+    private fun systemBack() {
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
     }
 
     /** Runs a suspend block on the app's database and returns its result. */
@@ -111,6 +119,38 @@ class TagAddSongUiTest {
         openLinkPane()
         compose.onNodeWithContentDescription("Add song to this tag").assertDoesNotExist()
         compose.onNodeWithText("Register a tag first, then link content to it.").assertIsDisplayed()
+    }
+
+    @Test
+    fun addSongButton_hidesForAStaleSelectionWithNoTags() {
+        val tagId = dbAndGet { app().repository.addTag(UID, "Porch")?.id ?: 0L }
+
+        val viewModel = openLinkPane()
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.onNodeWithContentDescription("Add song to this tag").assertExists()
+
+        // Delete the only tag through the NFC tags pane and come back: the
+        // pane shows the "register a tag" hint and no + button.
+        systemBack()
+        compose.onNodeWithText("NFC tags").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Delete tag").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Remove").performClick()
+        compose.waitForIdle()
+        systemBack()
+        compose.onNodeWithText("Tag to content").performClick()
+        waitForText("Register a tag first, then link content to it.")
+        compose.onNodeWithContentDescription("Add song to this tag").assertDoesNotExist()
+
+        // A stale selection id (selectTag never validates against the tag
+        // list) must not bring the button back: with no tags at all there
+        // is nothing to add a song to.
+        viewModel.selectTag(999_999L)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == 999_999L })
+        compose.waitForIdle()
+        compose.onNodeWithText("Register a tag first, then link content to it.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add song to this tag").assertDoesNotExist()
     }
 
     @Test
