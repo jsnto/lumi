@@ -180,6 +180,36 @@ class FolderAddUiTest {
     }
 
     @Test
+    fun reAddingASingleSongFolderUsesTheSingularCopyAndAddsNoDuplicateRow() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            if (folderUri.toString() == TREE_URI) {
+                listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
+            } else {
+                emptyList()
+            }
+        }
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "Added 1 song from the folder." } })
+
+        // Re-picking the one-song folder keeps the copy singular in both
+        // branches: the add event and the already-stored event.
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "The song from the folder is already in your content list." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(
+            "the one song appears once, not twice, after the second pick",
+            listOf("song-a.mp3"),
+            entries.map { it.label },
+        )
+    }
+
+    @Test
     fun folderContainingAnAlreadyAddedFileAddsNoDuplicateRow() {
         val viewModel = openContentPane()
         // song-a was already added through the file picker; the later folder

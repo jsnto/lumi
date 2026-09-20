@@ -91,7 +91,11 @@ the video/URL actions later does not require reworking storage.
   read grant is persisted per file / folder. Re-adding a file or folder
   already in the list adds no duplicates. An added folder can be rescanned
   (Settings → Content → Folders) to pick up songs added to the folder or its
-  subfolders since the last scan; rescanning an unchanged folder adds nothing.
+  subfolders since the last scan; rescanning an unchanged folder adds
+  nothing. An added folder can also be removed (Settings → Content →
+  Folders): after a confirmation that names the effect, the folder and the
+  songs imported from it leave the content list while the music files
+  themselves stay on the phone.
 
 ## Building
 

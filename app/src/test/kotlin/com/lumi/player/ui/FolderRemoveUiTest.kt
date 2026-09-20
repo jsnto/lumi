@@ -265,6 +265,44 @@ class FolderRemoveUiTest {
         )
     }
 
+    /**
+     * The PR's on-device checklist (c): re-adding a removed folder
+     * re-imports it - the folder row's unique uri was freed by the removal,
+     * so the remember + walk + store runs like a fresh add, and the songs
+     * (whose rows the removal deleted) come back exactly once.
+     */
+    @Test
+    fun reAddingARemovedFolderReimportsIt() {
+        val viewModel = openContentPane()
+        swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a"), file("song-b.mp3", "c://x/b")))
+        val events = eventsOf(viewModel)
+        addFolder(viewModel, events, "Added 2 songs from the folder.")
+
+        // The removal: the folder row and its imported songs leave.
+        val folder = dbAndGet { app().repository.observeFolders().first() }.single()
+        viewModel.requestFolderRemoval(folder)
+        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        viewModel.confirmFolderRemoval()
+        idleUntil({ events.any { it == "Removed the folder and 2 imported songs." } })
+        assertTrue(dbAndGet { app().repository.observeFolders().first() }.isEmpty())
+        assertTrue(dbAndGet { app().repository.observeEntries().first() }.isEmpty())
+
+        // Picking the same folder again re-imports it like a fresh add.
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.count { it == "Added 2 songs from the folder." } == 2 })
+
+        assertEquals(
+            "the folder is remembered once again",
+            listOf(TREE_URI),
+            dbAndGet { app().repository.observeFolders().first() }.map { it.uri },
+        )
+        assertEquals(
+            "the songs are imported again, exactly once",
+            listOf("song-a.mp3", "song-b.mp3"),
+            dbAndGet { app().repository.observeEntries().first() }.map { it.label },
+        )
+    }
+
     @Test
     fun aRemovalRequestWhileThePreviewIsOpenIsIgnored() {
         val viewModel = openContentPane()

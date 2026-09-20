@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.util.Log
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -17,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.FileNotFoundException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -28,6 +30,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowLog
 import org.robolectric.shadows.ShadowLooper
 
 /**
@@ -259,6 +262,57 @@ class FolderTreeReadFixUiTest {
         assertThrows(FileNotFoundException::class.java) {
             provider.query(Uri.parse("content://docs/document/primary%3AMusic%3Atree"), null, null, null, null)
         }
+    }
+
+    /**
+     * Checklist (d): when a folder can't be read, logcat carries the
+     * attribution line - TAG "LumiViewModel" naming the failing folder uri
+     * together with the exception - while the user-facing event keeps its
+     * pinned generic copy. Driven through the production cursor path
+     * against a provider that denies the listing (a revoked grant).
+     */
+    @Test
+    fun aFailedFolderReadIsAttributedInTheLog() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+
+        ShadowContentResolver.registerProviderInternal(
+            "docs",
+            object : ContentProvider() {
+                override fun onCreate(): Boolean = true
+                override fun query(
+                    uri: Uri,
+                    projection: Array<out String>?,
+                    selection: String?,
+                    selectionArgs: Array<out String>?,
+                    sortOrder: String?,
+                ): Cursor? = throw SecurityException("grant revoked")
+                override fun getType(uri: Uri): String? = null
+                override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+                override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+                override fun update(
+                    uri: Uri,
+                    values: ContentValues?,
+                    selection: String?,
+                    selectionArgs: Array<out String>?,
+                ): Int = 0
+            },
+        )
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "Couldn't read that folder's songs." } })
+
+        // The per-node attribution names the failing folder uri AND carries
+        // the exception (the top-level line names the tree uri too).
+        val perNode = ShadowLog.getLogsForTag("LumiViewModel")
+            .firstOrNull { it.msg == "Failed to list the children of $TREE_URI" }
+        assertNotNull("the log names the failing folder uri", perNode)
+        assertEquals("grant revoked", perNode!!.throwable?.message)
+        assertEquals(Log.ERROR, perNode.type)
+        assertTrue(
+            "the top-level line names the tree uri too",
+            ShadowLog.getLogsForTag("LumiViewModel").any { it.msg == "Failed to read the songs of folder $TREE_URI" },
+        )
     }
 
     /**
