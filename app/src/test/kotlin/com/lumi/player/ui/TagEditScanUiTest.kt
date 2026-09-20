@@ -229,6 +229,41 @@ class TagEditScanUiTest {
         assertNull("an unknown scan must not capture the tag", viewModel.capturedUid.value)
     }
 
+    @Test
+    fun scansDoNotStack_armingOneScanCancelsTheOther() {
+        seedTag(REGISTERED_UID, "Porch")
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
+        openNfcTagsPane()
+
+        // Arm the edit scan, then arm a registration: only one scan may be
+        // armed - the registration wins and the edit scan is dropped.
+        compose.onNodeWithText("Scan NFC").performClick()
+        compose.waitForIdle()
+        assertTrue("tapping the row must arm the edit scan", viewModel.editScanActive.value)
+        viewModel.startTagRegistration()
+        compose.waitForIdle()
+        assertFalse("arming a registration must cancel the edit scan", viewModel.editScanActive.value)
+        assertTrue("the registration must be armed", viewModel.registering.value)
+
+        // A read that now lands settles the REGISTRATION (it is captured),
+        // not a stale edit scan (which would open the edit dialog instead).
+        sendTag(controller, REGISTERED_UID)
+        idleUntil({ viewModel.capturedUid.value == REGISTERED_UID })
+        assertNull("a stale edit scan must not have resolved a tag", viewModel.pendingEditTag.value)
+        compose.onNodeWithText("Edit tag").assertDoesNotExist()
+
+        // The reverse: arming an edit scan while a registration is armed
+        // cancels the registration.
+        viewModel.startTagRegistration()
+        compose.waitForIdle()
+        assertTrue("the registration must be armed again", viewModel.registering.value)
+        viewModel.startTagEditScan()
+        compose.waitForIdle()
+        assertFalse("arming an edit scan must cancel the registration", viewModel.registering.value)
+        assertTrue("the edit scan must be armed", viewModel.editScanActive.value)
+    }
+
     companion object {
         const val REGISTERED_UID = "04A1B2C3"
         const val UNREGISTERED_UID = "04DEADBEEF"
