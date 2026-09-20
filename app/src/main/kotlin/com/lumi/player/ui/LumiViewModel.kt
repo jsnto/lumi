@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.nfc.Tag
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -33,6 +34,7 @@ import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -475,7 +477,10 @@ class LumiViewModel(
             repository.rememberFolder(treeUri.toString(), label)
             val scanned = try {
                 withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // The per-node attribution (which folder uri threw) is logged
+                // by scanFolderAudioFiles' seam; this is the top-level name.
+                Log.e(TAG, "Failed to read the songs of folder $treeUri", e)
                 null
             }
             if (scanned == null) {
@@ -491,9 +496,14 @@ class LumiViewModel(
             }
             event(
                 when {
-                    fresh == 0 -> "All ${scanned.size} songs from the folder are already in your content list."
+                    fresh == 0 ->
+                        if (scanned.size == 1) {
+                            "The song from the folder is already in your content list."
+                        } else {
+                            "All ${scanned.size} songs from the folder are already in your content list."
+                        }
                     fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
-                    else -> "Added ${scanned.size} songs from the folder."
+                    else -> "Added ${scanned.size} ${if (scanned.size == 1) "song" else "songs"} from the folder."
                 },
             )
         }
@@ -513,10 +523,11 @@ class LumiViewModel(
             val newSongs = try {
                 withContext(Dispatchers.IO) {
                     rescanNewSongs(folder.uri, stored) { folderUri ->
-                        folderChildren(Uri.parse(folderUri))
+                        folderChildrenAttributed(Uri.parse(folderUri))
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to rescan folder ${folder.uri}", e)
                 emptyList()
             }
             newSongs.forEach {
@@ -532,13 +543,97 @@ class LumiViewModel(
         }
     }
 
+    // ---- settings: folder removal ----
+
+    /**
+     * A folder awaiting its removal confirmation: the payloads of the songs
+     * imported from it (identified by re-walking the tree - the rescan
+     * precedent, minus the new-only filter - so the removal matches exactly
+     * what the add stored) plus how many of those are still stored, or
+     * nulls when the tree can no longer be read and the song count is
+     * undeterminable - then only the folder row itself can be removed.
+     */
+    data class FolderRemovalPreview(
+        val folder: FolderEntity,
+        val importedPayloads: Set<String>?,
+        val songCount: Int?,
+    )
+
+    private val _folderRemovalPreview = MutableStateFlow<FolderRemovalPreview?>(null)
+    val folderRemovalPreview: StateFlow<FolderRemovalPreview?> = _folderRemovalPreview.asStateFlow()
+
+    private var removalJob: Job? = null
+
+    /**
+     * Prepares the removal confirmation for [folder]: re-walks its tree to
+     * identify the imported songs (the same walk the add used), then opens
+     * the confirmation with the song count - or with a plain "the tree can
+     * no longer be read" notice when the walk fails. The dialog is
+     * state-driven ([folderRemovalPreview]), so the async walk settles
+     * before the confirmation appears. A request made while a walk is in
+     * flight or the preview is open is ignored; cancel or confirm clears
+     * the preview before a new removal can be requested.
+     */
+    fun requestFolderRemoval(folder: FolderEntity) {
+        if (_folderRemovalPreview.value != null || removalJob?.isActive == true) return
+        removalJob = viewModelScope.launch {
+            val walked: List<ScannedSong>? = try {
+                withContext(Dispatchers.IO) {
+                    collectAudioFiles(folder.uri) { folderUri ->
+                        folderChildrenAttributed(Uri.parse(folderUri))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read the songs of folder ${folder.uri} for removal", e)
+                null
+            }
+            _folderRemovalPreview.value =
+                if (walked == null) {
+                    FolderRemovalPreview(folder, null, null)
+                } else {
+                    val payloads = walked.map { it.uri }.toSet()
+                    FolderRemovalPreview(folder, payloads, repository.countEntriesByPayloads(payloads))
+                }
+        }
+    }
+
+    /**
+     * Confirms a folder removal prepared by [requestFolderRemoval]: the
+     * folder row and the imported songs (the stored rows the walk
+     * identified) leave the app in one transaction. When the tree could not
+     * be read, only the folder row is removed - the songs that can no longer
+     * be identified stay. No grants are released: folder-imported songs
+     * never held per-entry grants (only the tree's own grant was persisted
+     * at add time), and the data model tracks none per entry.
+     */
+    fun confirmFolderRemoval() {
+        val preview = _folderRemovalPreview.value ?: return
+        _folderRemovalPreview.value = null
+        viewModelScope.launch {
+            val removed = repository.removeFolder(preview.folder, preview.importedPayloads.orEmpty())
+            event(
+                when {
+                    preview.importedPayloads == null ->
+                        "Removed the folder. Its songs couldn't be read, so they were left in place."
+                    removed == 0 -> "Removed the folder."
+                    else -> "Removed the folder and $removed imported song${if (removed == 1) "" else "s"}."
+                },
+            )
+        }
+    }
+
+    fun cancelFolderRemoval() {
+        _folderRemovalPreview.value = null
+    }
+
     /**
      * The label for a picked folder: the first `_display_name` row of the
-     * tree query (which lists the root's children, so for a non-empty folder
-     * this is the first child's name - a known cosmetic quirk), or the uri
-     * itself when no name can be read. Querying a SAF tree uri lists the
-     * root's children, so an empty root (no direct children) yields a
-     * zero-row cursor - reading it unguarded threw
+     * tree query, or the uri itself when no name can be read. On the real
+     * documents provider a `:tree` listing includes the tree's own root row
+     * first, so the label is the folder's own name (a provider that lists no
+     * root row yields the first child's name instead - cosmetic). Querying
+     * a SAF tree uri lists the root's children, so an empty root (no direct
+     * children) yields a zero-row cursor - reading it unguarded threw
      * (CursorIndexOutOfBoundsException) and crashed the add, so the read is
      * guarded and any provider failure falls back to the uri string instead
      * of aborting the add.
@@ -546,7 +641,7 @@ class LumiViewModel(
     private fun folderDisplayName(treeUri: Uri): String =
         try {
             context.contentResolver
-                .query(treeUri, arrayOf("_display_name"), null, null, null)
+                .query(canonicalTreeUri(treeUri), arrayOf("_display_name"), null, null, null)
                 ?.use { cursor ->
                     if (!cursor.moveToFirst()) return@use null
                     cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
@@ -560,33 +655,71 @@ class LumiViewModel(
     /**
      * Test seam: the documents provider's folder listing (a folder uri to
      * its direct children), replaced in unit tests with a fake tree.
-     * The document-provider protocol constants below are kept as inline
-     * literals on purpose (the stub jar now carries `DocumentsContract`,
-     * see AGENTS.md): the "_id" / "_display_name" / "_flags" columns, the
-     * directory flag value 1, and the child uri shape
-     * `scheme://authority/document/<docId>`.
+     *
+     * The documents provider's uri grammar is strict, and a picked tree's
+     * docIds contain `/` and `:` (e.g. `primary:Music/Album/song.mp3`), so
+     * every uri this seam builds must carry the docId percent-encoded into
+     * ONE path segment:
+     * - a file's document uri is `scheme://authority/document/<docId>` with
+     *   exactly two path segments - a raw docId splits the path into extra
+     *   segments, the provider's uri parse throws
+     *   (`IllegalArgumentException: Invalid document id`), and a stored
+     *   payload would be a uri the player cannot open;
+     * - a subfolder's children are listed at the tree's CHILD uri
+     *   `scheme://authority/child/<treeSeg>:tree/<docId>`, never at the
+     *   subfolder's document uri (which answers with the folder's own single
+     *   row, not its children);
+     * - querying the tree uri itself lists the root's children AND the
+     *   tree's own root row (`_id` = the tree's own segment, dir flag) -
+     *   that row is skipped: its children are the very rows of the listing,
+     *   so recursing into it would re-list the root through an invalid uri.
+     * The document-provider protocol constants are kept as inline literals
+     * on purpose (the stub jar now carries `DocumentsContract`, see
+     * AGENTS.md): the "_id" / "_display_name" / "_flags" columns and the
+     * directory flag value 1.
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
+        // A tree uri's ":openable" picker suffix (if the picker appends one)
+        // rides in its last path segment: the provider answers only the
+        // canonical ":tree" shape, so query it and derive the tree segment
+        // (root-row skip + child-uri treeId) from the canonical form.
+        val queryUri = canonicalTreeUri(folderUri)
         context.contentResolver
-            .query(folderUri, null, null, null, null)
+            .query(queryUri, null, null, null, null)
             ?.use { cursor ->
                 val docId = cursor.getColumnIndexOrThrow("_id")
                 val name = cursor.getColumnIndexOrThrow("_display_name")
                 val flags = cursor.getColumnIndexOrThrow("_flags")
+                // The tree's own document-id segment (with its ":tree"
+                // suffix, no ":openable"): path segment 2 of both the
+                // tree uri (/tree/<seg>) and the child uri
+                // (/child/<seg>/<parentId>) this seam recurses with.
+                val treeSeg = queryUri.pathSegments.getOrNull(1)
+                val listingTheTree = folderUri.pathSegments.getOrNull(0) == "tree"
                 buildList {
                     while (cursor.moveToNext()) {
+                        val rawDocId = cursor.getString(docId)
+                        // The tree's own root row: listed with the root's
+                        // children, but its children are those same rows -
+                        // recursing into it is both invalid and a loop.
+                        if (rawDocId == null || (listingTheTree && rawDocId == treeSeg)) continue
+                        val isDirectory = (cursor.getLong(flags) and DOCUMENT_FLAG_DIR) != 0L
                         add(
                             FolderChild(
                                 displayName = cursor.getString(name) ?: "",
-                                isDirectory = (cursor.getLong(flags) and DOCUMENT_FLAG_DIR) != 0L,
-                                // A fresh builder: the parent's ":tree" suffix must
-                                // not leak into the child's document uri.
-                                childUri = Uri.Builder()
-                                    .scheme(folderUri.scheme)
-                                    .authority(folderUri.authority)
-                                    .path("document/${cursor.getString(docId)}")
-                                    .build()
-                                    .toString(),
+                                isDirectory = isDirectory,
+                                childUri = if (isDirectory) {
+                                    // A subfolder's children are listed at the
+                                    // tree's child uri, never at the
+                                    // subfolder's document uri (which answers
+                                    // with the folder's own single row).
+                                    childDocumentsUri(folderUri, treeSeg, rawDocId)
+                                } else {
+                                    // A fresh builder: the parent's ":tree"
+                                    // suffix must not leak into the child's
+                                    // document uri.
+                                    documentUri(folderUri, rawDocId)
+                                },
                             ),
                         )
                     }
@@ -595,10 +728,54 @@ class LumiViewModel(
             ?: emptyList()
     }
 
-    /** Walks [treeUri] through [folderChildren], keeping the supported audio only. */
+    /** A tree uri's canonical form: a trailing ":openable" on its last path segment (the picker's suffix, which android.net.Uri keeps in the path) stripped so the provider receives the `:tree` shape. Non-tree uris and tree uris without the suffix pass through unchanged; the ":tree" suffix is never stripped. */
+    private fun canonicalTreeUri(treeUri: Uri): Uri {
+        if (treeUri.pathSegments.getOrNull(0) != "tree") return treeUri
+        val lastSegment = treeUri.pathSegments.lastOrNull() ?: return treeUri
+        if (!lastSegment.endsWith(":openable")) return treeUri
+        return Uri.Builder()
+            .scheme(treeUri.scheme)
+            .authority(treeUri.authority)
+            .encodedPath("/tree/${Uri.encode(lastSegment.removeSuffix(":openable"), null)}")
+            .build()
+    }
+
+    /** A file's document uri `scheme://authority/document/<docId>` built from [folderUri]'s scheme + authority, the docId percent-encoded into a single path segment. */
+    private fun documentUri(folderUri: Uri, docId: String): String =
+        Uri.Builder()
+            .scheme(folderUri.scheme)
+            .authority(folderUri.authority)
+            .encodedPath("/document/${Uri.encode(docId, null)}")
+            .build()
+            .toString()
+
+    /** A folder-children listing uri `scheme://authority/child/<treeSeg>:tree/<docId>` for the folder [docId] inside [folderUri]'s tree, the docId percent-encoded into a single path segment. */
+    private fun childDocumentsUri(folderUri: Uri, treeSeg: String?, docId: String): String =
+        Uri.Builder()
+            .scheme(folderUri.scheme)
+            .authority(folderUri.authority)
+            .encodedPath("/child/${Uri.encode(treeSeg.orEmpty(), null)}/${Uri.encode(docId, null)}")
+            .build()
+            .toString()
+
+    /**
+     * The [folderChildren] seam with per-node failure attribution: a query
+     * that throws names the folder uri that failed and the exception, so a
+     * scan or rescan failure is diagnosable from the log instead of a bare
+     * generic event. The exception is rethrown unchanged.
+     */
+    private fun folderChildrenAttributed(folderUri: Uri): List<FolderChild> =
+        try {
+            folderChildren(folderUri)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to list the children of $folderUri", e)
+            throw e
+        }
+
+    /** Walks [treeUri] through the attributed [folderChildren] seam, keeping the supported audio only. */
     private fun scanFolderAudioFiles(treeUri: Uri): List<ScannedSong> =
         collectAudioFiles(treeUri.toString()) { folderUri ->
-            folderChildren(Uri.parse(folderUri))
+            folderChildrenAttributed(Uri.parse(folderUri))
         }
 
     /**
@@ -686,3 +863,6 @@ fun lumiViewModelFactory(app: LumiApp): ViewModelProvider.Factory = object : Vie
 
 /** DocumentsContract.Document.FLAG_DIR_DIR (kept as an inline literal; see AGENTS.md). */
 private const val DOCUMENT_FLAG_DIR = 1L
+
+/** Log tag: folder read failures are attributed here (the failing uri + the exception). */
+private const val TAG = "LumiViewModel"

@@ -118,6 +118,37 @@ class LumiRepository(private val db: LumiDatabase) {
     /** The set of every stored entry's payload (content uris). */
     suspend fun storedEntryPayloads(): Set<String> = dao.allEntryPayloads().toSet()
 
+    /**
+     * The number of stored content rows whose payload is in [payloads] - the
+     * rows a folder removal would delete (the same payload match the rescan
+     * uses for its "already stored" filter). An empty set counts as zero
+     * without a query.
+     */
+    suspend fun countEntriesByPayloads(payloads: Set<String>): Int =
+        payloads
+            .chunked(PAYLOAD_QUERY_BATCH)
+            .sumOf { chunk -> dao.countEntriesByPayloads(chunk.toSet()) }
+
+    /**
+     * Removes a remembered folder and the content rows imported from it in
+     * ONE Room transaction, so a partial failure can't leave the folder
+     * gone with its songs still stored (or the songs gone with the folder
+     * still rescannable). [importedPayloads] are the content uris the
+     * folder's walk identified - rows the folder didn't identify are
+     * untouched - and tag links to the deleted rows cascade off them the
+     * same way a single-entry removal does. Returns the number of content
+     * rows deleted (0 for an empty set - e.g. a folder whose tree can no
+     * longer be read, where only the folder row is removed).
+     */
+    suspend fun removeFolder(folder: FolderEntity, importedPayloads: Set<String>): Int =
+        db.withTransaction {
+            val removed = importedPayloads
+                .chunked(PAYLOAD_QUERY_BATCH)
+                .sumOf { chunk -> dao.deleteEntriesByPayloads(chunk.toSet()) }
+            dao.deleteFolder(folder)
+            removed
+        }
+
     // ---- links ----
 
     /** The tag's current song list in link order (the scan-first read). */
@@ -209,5 +240,8 @@ class LumiRepository(private val db: LumiDatabase) {
 
         /** Inclusive range the re-read wait (seconds) is allowed to take. */
         val NFC_REREAD_SECONDS_RANGE = 1L..120L
+
+        /** Payload-set queries go in batches this large: SQLite before 3.32 (Android <= 11) caps bound variables at 999. */
+        const val PAYLOAD_QUERY_BATCH = 900
     }
 }
