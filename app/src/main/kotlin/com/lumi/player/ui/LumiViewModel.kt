@@ -279,6 +279,21 @@ class LumiViewModel(
         viewModelScope.launch { repository.setLockPopupSuppressed(suppressed) }
     }
 
+    // ---- settings: keep screen on ----
+
+    /**
+     * Whether the user wants the screen to stay on while the app is open.
+     * Off by default: the screen follows the system timeout while the app
+     * is open.
+     */
+    val keepScreenOn: StateFlow<Boolean> =
+        repository.observeKeepScreenOn()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setKeepScreenOn(on: Boolean) {
+        viewModelScope.launch { repository.setKeepScreenOn(on) }
+    }
+
     // ---- settings: nfc re-read wait ----
 
     /**

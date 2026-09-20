@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -68,6 +69,7 @@ import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lumi.player.BuildConfig
@@ -118,6 +120,7 @@ fun SettingsScreen(
     val entries by viewModel.observeEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
+    val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
     val registering by viewModel.registering.collectAsState(false)
     val scanning by viewModel.scanning.collectAsState(false)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
@@ -167,6 +170,8 @@ fun SettingsScreen(
         SettingsPane.Menu -> SettingsMenuPane(
             scrollState = menuScroll,
             playMode = playMode,
+            keepScreenOn = keepScreenOn,
+            onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
             tags = tags,
             entries = entries,
             onPlayMode = { pane = SettingsPane.PlayMode },
@@ -294,6 +299,8 @@ fun SettingsScreen(
 private fun SettingsMenuPane(
     scrollState: ScrollState,
     playMode: PlayMode,
+    keepScreenOn: Boolean,
+    onKeepScreenOnChange: (Boolean) -> Unit,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
     onPlayMode: () -> Unit,
@@ -349,6 +356,10 @@ private fun SettingsMenuPane(
                 subtitle = "Choose what each tag plays",
                 onClick = onLink,
             )
+            KeepScreenOnRow(
+                checked = keepScreenOn,
+                onCheckedChange = onKeepScreenOnChange,
+            )
             Text(
                 text = "lumi v${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
@@ -387,6 +398,44 @@ private fun MenuRow(
                 )
             }
             Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+        }
+    }
+}
+
+/**
+ * The keep-screen-on toggle: a checkbox row instead of the menu's chevron
+ * rows, because the setting is a single on/off choice with no configuration
+ * sub-screen. The emoji leads like the sub-screens' setting rows - the
+ * project's pruned icon set has no brightness/display icon.
+ */
+@Composable
+private fun KeepScreenOnRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("🔆", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Keep screen on", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Keep the display on while the app is open.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.testTag("keep-screen-on"),
+            )
         }
     }
 }

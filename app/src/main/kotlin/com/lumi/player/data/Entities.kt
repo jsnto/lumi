@@ -91,5 +91,8 @@ data class SettingsEntity(
          * that count as the tag having been removed; "15" by default.
          */
         const val NFC_REREAD_SECONDS = "nfc_reread_seconds"
+
+        /** "1" when the user wants the screen to stay on while the app is open. */
+        const val KEEP_SCREEN_ON = "keep_screen_on"
     }
 }
