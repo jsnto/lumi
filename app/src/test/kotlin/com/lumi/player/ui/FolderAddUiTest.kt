@@ -84,10 +84,12 @@ class FolderAddUiTest {
     @Test
     fun contentPaneOffersAnAddFolderButtonBesideAddContent() {
         openContentPane()
-        compose.onNodeWithText("Add content").assertExists()
-        // The folder button is right under the content button in the same
-        // card; on the small test screen it may sit below the viewport, so
-        // existence is the layout assertion.
+        // The "Add content" pill is now the + button on the bottom right of
+        // the section card, so it is found by its content description.
+        compose.onNodeWithContentDescription("Add content").assertExists()
+        // The folder button is at the top of the same card; on the small
+        // test screen it may sit below the viewport, so existence is the
+        // layout assertion.
         compose.onNodeWithText("Add folder").assertExists()
     }
 

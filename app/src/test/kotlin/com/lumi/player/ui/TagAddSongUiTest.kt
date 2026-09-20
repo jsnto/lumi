@@ -98,18 +98,19 @@ class TagAddSongUiTest {
 
         val viewModel = openLinkPane()
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        // The button sits below the scan button and the chip row: on the
-        // small test screen it may be outside the viewport, so existence is
-        // the layout assertion (same clipped-bottom pattern as the front
+        // The + button sits at the bottom right of the section card, below
+        // the scan button, the chip row and the song list: on the small
+        // test screen it may be outside the viewport, so existence is the
+        // layout assertion (same clipped-bottom pattern as the front
         // screen). The tag's current list must be shown for the selection.
-        compose.onNodeWithText("Add song to this tag").assertExists()
+        compose.onNodeWithContentDescription("Add song to this tag").assertExists()
         compose.onNodeWithText("First song").assertExists()
     }
 
     @Test
     fun addSongButton_hiddenWithoutRegisteredTags() {
         openLinkPane()
-        compose.onNodeWithText("Add song to this tag").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add song to this tag").assertDoesNotExist()
         compose.onNodeWithText("Register a tag first, then link content to it.").assertIsDisplayed()
     }
 
@@ -121,7 +122,7 @@ class TagAddSongUiTest {
 
         val viewModel = openLinkPane()
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        compose.onNodeWithText("Add song to this tag").assertExists()
+        compose.onNodeWithContentDescription("Add song to this tag").assertExists()
 
         // The pick lands: the view model persists the grant, stores the
         // entry, and appends it to the tag's list in one transaction.

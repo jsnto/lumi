@@ -101,8 +101,8 @@ class SettingsMenuUiTest {
             .assertDoesNotExist()
         compose.onNodeWithText("In proximity mode, how many seconds a tag may go ", substring = true)
             .assertDoesNotExist()
-        compose.onNodeWithText("Register a tag").assertDoesNotExist()
-        compose.onNodeWithText("Add content").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add content").assertDoesNotExist()
         compose.onNodeWithText("Scan a tag to view its song list").assertDoesNotExist()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertDoesNotExist()
     }
@@ -126,22 +126,29 @@ class SettingsMenuUiTest {
         // NFC tags: the sub-screen offers registration and the (empty) list.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Register a tag").assertIsDisplayed()
+        // The "+ Register a tag" pill is now a + button on the bottom right
+        // of the section card (found by content description); on the small
+        // test screen it may sit below the viewport, so existence is the
+        // layout assertion.
+        compose.onNodeWithContentDescription("Register a tag").assertExists()
         compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
             .assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("NFC tags").assertExists()
-        compose.onNodeWithText("Register a tag").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
 
         // Content: the sub-screen offers content management.
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Add content").assertIsDisplayed()
+        // The "+ Add content" pill is now a + button on the bottom right of
+        // the section card (found by content description); existence is the
+        // layout assertion (it may sit below the viewport).
+        compose.onNodeWithContentDescription("Add content").assertExists()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
         systemBack(activity)
         compose.onNodeWithText("Content").assertExists()
-        compose.onNodeWithText("Add content").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add content").assertDoesNotExist()
 
         // Tag to content: the sub-screen offers the link editor.
         compose.onNodeWithText("Tag to content").performClick()
