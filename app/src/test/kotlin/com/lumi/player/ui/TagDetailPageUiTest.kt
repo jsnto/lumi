@@ -260,6 +260,35 @@ class TagDetailPageUiTest {
         }
     }
 
+    // ---------- back navigation: the page unwinds to the tags menu ----------
+
+    @Test
+    fun systemBackFromTheTagPageReturnsToTheTagsMenu() {
+        dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+
+        val activity = openTagPage("Porch")
+        waitForText("Tag details")
+
+        // The page is a sub-screen, so the screen's BackHandler (enabled
+        // while any pane is showing) must answer the first system back and
+        // settle on the menu - exactly like every other sub-screen - with
+        // the menu row intact and the page gone. It must not pop settings
+        // away in one step.
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("NFC tags").assertIsDisplayed()
+        compose.onNodeWithText("Tag details").assertDoesNotExist()
+        compose.onNodeWithText("Danger zone").assertDoesNotExist()
+
+        // The second back leaves the menu entirely and returns to the
+        // player screen (the settings hop pops only from the menu).
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        compose.onNodeWithText("NFC tags").assertDoesNotExist()
+    }
+
     companion object {
         const val TAG_UID = "04:CA:FE:00:00"
         const val BUNNY_UID = "04:CA:FE:00:01"
