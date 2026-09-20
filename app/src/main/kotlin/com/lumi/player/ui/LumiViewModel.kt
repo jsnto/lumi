@@ -505,25 +505,39 @@ class LumiViewModel(
         }
     }
 
-    /** The tree uri's display name (the folder's name), or the uri itself. */
+    /**
+     * The label for a picked folder: the first `_display_name` row of the
+     * tree query (which lists the root's children, so for a non-empty folder
+     * this is the first child's name - a known cosmetic quirk), or the uri
+     * itself when no name can be read. Querying a SAF tree uri lists the
+     * root's children, so an empty root (no direct children) yields a
+     * zero-row cursor - reading it unguarded threw
+     * (CursorIndexOutOfBoundsException) and crashed the add, so the read is
+     * guarded and any provider failure falls back to the uri string instead
+     * of aborting the add.
+     */
     private fun folderDisplayName(treeUri: Uri): String =
-        context.contentResolver
-            .query(treeUri, arrayOf("_display_name"), null, null, null)
-            ?.use { cursor ->
-                cursor.moveToFirst()
-                val name = cursor.getColumnIndexOrThrow("_display_name")
-                cursor.getString(name)
-            }
-            ?.ifEmpty { null }
-            ?: treeUri.toString()
+        try {
+            context.contentResolver
+                .query(treeUri, arrayOf("_display_name"), null, null, null)
+                ?.use { cursor ->
+                    if (!cursor.moveToFirst()) return@use null
+                    cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
+                }
+                ?.ifEmpty { null }
+                ?: treeUri.toString()
+        } catch (_: Exception) {
+            treeUri.toString()
+        }
 
     /**
      * Test seam: the documents provider's folder listing (a folder uri to
      * its direct children), replaced in unit tests with a fake tree.
-     * The SAF DocumentsContract class is absent from this project's stub
-     * SDK, so the document-provider protocol constants are inlined verbatim:
-     * the "_id" / "_display_name" / "_flags" columns, the directory flag
-     * value 1, and the child uri shape `scheme://authority/document/<docId>`.
+     * The document-provider protocol constants below are kept as inline
+     * literals on purpose (the stub jar now carries `DocumentsContract`,
+     * see AGENTS.md): the "_id" / "_display_name" / "_flags" columns, the
+     * directory flag value 1, and the child uri shape
+     * `scheme://authority/document/<docId>`.
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
         context.contentResolver
@@ -643,5 +657,5 @@ fun lumiViewModelFactory(app: LumiApp): ViewModelProvider.Factory = object : Vie
         LumiViewModel(app, app.repository) as T
 }
 
-/** DocumentsContract.Document.FLAG_DIR_DIR (the stub SDK lacks the class). */
+/** DocumentsContract.Document.FLAG_DIR_DIR (kept as an inline literal; see AGENTS.md). */
 private const val DOCUMENT_FLAG_DIR = 1L
