@@ -31,7 +31,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +57,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -308,12 +306,7 @@ private fun LockPromptDialog(
             }
         },
         confirmButton = {
-            FilledTonalButton(
-                onClick = { onConfirm(donShowAgain) },
-                shape = RoundedCornerShape(500.dp),
-            ) {
-                Text("Lock", fontWeight = FontWeight.Bold)
-            }
+            TonalPillButton("Lock", onClick = { onConfirm(donShowAgain) })
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

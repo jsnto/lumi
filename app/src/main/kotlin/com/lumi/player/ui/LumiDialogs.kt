@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,7 +56,15 @@ fun NfcAnchor() {
 /** A tonal peach pill button: the settled shape for a dialog's primary action. */
 @Composable
 fun TonalPillButton(label: String, onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick, shape = RoundedCornerShape(500.dp)) {
+    val scheme = MaterialTheme.colorScheme
+    FilledTonalButton(
+        onClick = onClick,
+        shape = RoundedCornerShape(500.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = scheme.primaryContainer,
+            contentColor = scheme.onPrimaryContainer,
+        ),
+    ) {
         Text(label, fontWeight = FontWeight.Bold)
     }
 }

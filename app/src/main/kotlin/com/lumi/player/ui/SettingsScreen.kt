@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -91,6 +92,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -565,6 +567,7 @@ private fun NowPlayingStrip(label: String, isPlaying: Boolean, mode: PlayMode) {
             style = MaterialTheme.typography.labelLarge,
             color = scheme.onSurface,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Box(
@@ -806,6 +809,10 @@ private fun ContentPane(
                             FilledTonalButton(
                                 onClick = { onRescanFolder(folder) },
                                 shape = RoundedCornerShape(500.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                             ) {
                                 Icon(
