@@ -89,8 +89,8 @@ class FolderAddUiTest {
     @Test
     fun contentPaneOffersAnAddFolderButtonBesideAddContent() {
         openContentPane()
-        // The "Add content" pill is now the + button on the bottom right of
-        // the section card, so it is found by its content description.
+        // The "Add content" pill is now the + button on the section's title
+        // row, so it is found by its content description.
         compose.onNodeWithContentDescription("Add content").assertExists()
         // The folder button is at the top of the same card; on the small
         // test screen it may sit below the viewport, so existence is the

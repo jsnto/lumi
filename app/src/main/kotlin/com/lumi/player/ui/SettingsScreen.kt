@@ -460,7 +460,13 @@ private fun TagsPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SectionCard("NFC tags") {
+            // The old outlined "+ Register a tag" pill is now the + button on
+            // the section's title row.
+            SectionCard(
+                title = "NFC tags",
+                addLabel = "Register a tag",
+                onAdd = { viewModel.startTagRegistration() },
+            ) {
                 if (tags.isEmpty()) {
                     Text(
                         text = "No tags yet. Tap a tag on the back of the phone to register it.",
@@ -479,12 +485,6 @@ private fun TagsPane(
                         },
                     )
                 }
-                // The old outlined "+ Register a tag" pill, now a + button on
-                // the bottom right of the section.
-                SectionAddButton(
-                    onClick = { viewModel.startTagRegistration() },
-                    label = "Register a tag",
-                )
             }
         }
     }
@@ -511,7 +511,13 @@ private fun ContentPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SectionCard("Content") {
+            // The old outlined "+ Add content" pill is now the + button on
+            // the section's title row.
+            SectionCard(
+                title = "Content",
+                addLabel = "Add content",
+                onAdd = onAddContent,
+            ) {
                 // Text-only on purpose: the project depends on the icons-core
                 // set, which has no Folder icon (Folder lives in icons-extended).
                 OutlinedButton(onClick = onAddFolder) {
@@ -535,9 +541,6 @@ private fun ContentPane(
                         },
                     )
                 }
-                // The old outlined "+ Add content" pill, now a + button on the
-                // bottom right of the section.
-                SectionAddButton(onClick = onAddContent, label = "Add content")
             }
             SectionCard("Folders") {
                 if (folders.isEmpty()) {
@@ -593,7 +596,19 @@ private fun LinkPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SectionCard("Tag to content") {
+            // The old outlined "+ Add song to this tag" pill is now the +
+            // button on the section's title row, shown only while a tag
+            // exists and one is the effective selection.
+            val effectiveId = effectiveSelectedId
+            SectionCard(
+                title = "Tag to content",
+                addLabel = if (tags.isNotEmpty() && effectiveId != null) "Add song to this tag" else null,
+                onAdd = if (tags.isNotEmpty() && effectiveId != null) {
+                    { onAddSong(effectiveId) }
+                } else {
+                    null
+                },
+            ) {
                 OutlinedButton(onClick = { viewModel.startTagScan() }) {
                     Text("Scan a tag to view its song list")
                 }
@@ -621,7 +636,6 @@ private fun LinkPane(
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    val effectiveId = effectiveSelectedId
                     if (effectiveId == null) {
                         Text(
                             text = "Pick a tag above.",
@@ -746,12 +760,6 @@ private fun LinkPane(
                                 }
                             }
                         }
-                        // The old outlined "+ Add song to this tag" pill, now a
-                        // + button on the bottom right of the section.
-                        SectionAddButton(
-                            onClick = { onAddSong(effectiveId) },
-                            label = "Add song to this tag",
-                        )
                     }
                 }
             }
@@ -860,9 +868,20 @@ private fun TagNameDialog(
     )
 }
 
-/** Card with a bold section title and its content. */
+/**
+ * Card with a bold section title and its content. When [addLabel] and [onAdd]
+ * are given, a "+" button sits at the right end of the section's title row:
+ * the section's single add action, kept one tap away and visually tied to
+ * the section it adds to (the same title-left / action-right row language the
+ * menu rows and setting rows use).
+ */
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
+private fun SectionCard(
+    title: String,
+    addLabel: String? = null,
+    onAdd: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -873,7 +892,22 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onAdd != null && addLabel != null) {
+                    IconButton(onClick = onAdd) {
+                        Icon(Icons.Default.Add, contentDescription = addLabel)
+                    }
+                }
+            }
             content()
         }
     }
@@ -907,23 +941,6 @@ private fun ModeRow(
         },
         modifier = Modifier.fillMaxWidth(),
     )
-}
-
-/**
- * A "+" button pinned to the bottom right of a section card. Replaces the
- * outlined "+ ..." pill buttons for the sections whose add action is a single
- * unambiguous operation (register a tag, add content, add a song to the tag).
- */
-@Composable
-private fun SectionAddButton(onClick: () -> Unit, label: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-    ) {
-        IconButton(onClick = onClick) {
-            Icon(Icons.Default.Add, contentDescription = label)
-        }
-    }
 }
 
 /** A settings row: emoji, title, optional detail, trailing actions. */

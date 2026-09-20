@@ -94,10 +94,10 @@ class SettingsBackNavUiTest {
         // Open the tags sub-screen from the (top) of the menu.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        // The "+ Register a tag" pill is now a + button on the bottom right
-        // of the section card (found by content description); on the small
-        // test screen it may sit below the viewport, so existence is the
-        // layout assertion.
+        // The "+ Register a tag" pill is now the + button on the section's
+        // title row (found by content description); on the small test screen
+        // it may sit below the viewport, so existence is the layout
+        // assertion.
         compose.onNodeWithContentDescription("Register a tag").assertExists()
 
         // The first back unwinds the sub-screen to the menu; it must NOT pop
