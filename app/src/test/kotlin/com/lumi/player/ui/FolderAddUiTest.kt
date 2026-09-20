@@ -31,8 +31,9 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * Behavioral coverage for adding a whole folder: the content pane offers an
- * "Add folder" button (next to "Add content"), and picking a folder tree
+ * Behavioral coverage for adding a whole folder: the content pane's
+ * Folders section offers an "Add folder" + button on its title row, and
+ * picking a folder tree
  * stores every supported audio file found at any subfolder depth as an
  * AUDIO entry, one per file, with the file's own document uri as the
  * payload. A folder without supported audio adds nothing.
