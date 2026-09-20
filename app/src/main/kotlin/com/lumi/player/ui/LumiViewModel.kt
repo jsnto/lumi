@@ -81,6 +81,16 @@ class LumiViewModel(
     private val _registering = MutableStateFlow(false)
     val registering: StateFlow<Boolean> = _registering.asStateFlow()
 
+    // ---- edit scan: the "Scan NFC" row of the NFC tags pane ----
+
+    /** Whether an edit scan (a scan aimed at an EXISTING tag's details) is in progress. */
+    private val _editScanActive = MutableStateFlow(false)
+    val editScanActive: StateFlow<Boolean> = _editScanActive.asStateFlow()
+
+    /** The tag a settled edit scan resolved to; consumed by the settings screen (it opens the edit dialog). */
+    private val _pendingEditTag = MutableStateFlow<TagEntity?>(null)
+    val pendingEditTag: StateFlow<TagEntity?> = _pendingEditTag.asStateFlow()
+
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
 
@@ -99,12 +109,6 @@ class LumiViewModel(
     // fails the write and the tag is still saved.
     private var capturedTag: Tag? = null
 
-    // ---- link editor: scan a tag to point it at a song list ----
-
-    /** Whether a "point a tag at a song list" scan is in progress. */
-    private val _scanning = MutableStateFlow(false)
-    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
-
     // ---- transient UI events (toasts/snackbars) ----
 
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -121,7 +125,7 @@ class LumiViewModel(
     private val _tagActivated = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val tagActivated: SharedFlow<String> = _tagActivated
 
-    // ---- link editor: selected tag + its live entry list ----
+    // ---- tag detail page: selected tag + its live entry list ----
 
     private val _selectedTagId = MutableStateFlow<Long?>(null)
     val selectedTagId: StateFlow<Long?> = _selectedTagId.asStateFlow()
@@ -160,27 +164,26 @@ class LumiViewModel(
     // ---- NFC events from the activity ----
 
     /**
-     * A tag was detected (a foreground-dispatch read in either play mode,
-     * a tap delivered by intent on cold start, a registration capture, or a
-     * link-editor scan read).
+     * A tag was detected (a foreground-dispatch read in either play mode
+     * or a tap delivered by intent on cold start, a registration capture,
+     * or an edit-scan read).
      * [tag] is the raw NFC tag; during registration it is kept (for a
      * later write) and its lumi payload read for form prefill.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
-        if (_scanning.value) {
-            // A scan was in progress: settle it. A known tag is selected in
-            // the link editor so its song list can be re-pointed; an unknown
-            // tag is captured for registration first (the registration
-            // dialog then lands in the link editor too). Either way the
-            // scan is over, so further reads are normal playback reads.
-            _scanning.value = false
+        if (_editScanActive.value) {
+            // An edit scan was in progress: settle it. A registered tag
+            // resolves to its edit flow (the settings screen consumes
+            // [pendingEditTag] and opens the edit dialog); an unknown one
+            // reports without starting a registration. Either way the scan
+            // is over, so further reads are normal playback reads.
+            _editScanActive.value = false
             viewModelScope.launch {
                 val existing = repository.tagByUid(uid)
                 if (existing != null) {
-                    _selectedTagId.value = existing.id
-                    event("Pointing “${existing.name.ifEmpty { "this tag" }}” - edit its song list below.")
+                    _pendingEditTag.value = existing
                 } else {
-                    capture(uid, tag)
+                    event("That tag isn't registered yet.")
                 }
             }
             return
@@ -318,6 +321,7 @@ class LumiViewModel(
 
     fun startTagRegistration() {
         _capturedUid.value = null
+        _editScanActive.value = false
         _registering.value = true
     }
 
@@ -326,19 +330,25 @@ class LumiViewModel(
     }
 
     /**
-     * Starts a scan from the link editor: the next tag read settles the
-     * scan instead of driving playback - a known tag is selected there so
-     * its song list can be re-pointed, an unknown tag goes through the
-     * registration capture first. No tag write happens: the song list is
-     * associated by the tag's UID in the database, not in the tag payload.
+     * Starts an edit scan (the NFC tags pane's "Scan NFC" row): the next
+     * tag read resolves to a registered tag's edit flow instead of driving
+     * playback or a registration capture. Reuses the read path registration
+     * already uses - the foreground-dispatch read into [onTagDetected] - so
+     * only the flag checked there differs. Starting here cancels a
+     * registration scan in flight.
      */
-    fun startTagScan() {
-        _capturedUid.value = null
-        _scanning.value = true
+    fun startTagEditScan() {
+        _registering.value = false
+        _editScanActive.value = true
     }
 
-    fun cancelTagScan() {
-        _scanning.value = false
+    fun cancelTagEditScan() {
+        _editScanActive.value = false
+    }
+
+    /** Consumes the resolved edit-scan target (the settings screen has opened the edit dialog). */
+    fun consumePendingEditTag() {
+        _pendingEditTag.value = null
     }
 
     /**
@@ -434,6 +444,14 @@ class LumiViewModel(
             repository.deleteTag(tag)
             if (_selectedTagId.value == tag.id) _selectedTagId.value = null
             event("Tag removed")
+        }
+    }
+
+    /** Renames a registered tag (the tag detail page's edit dialog). */
+    fun renameTag(tag: TagEntity, name: String) {
+        viewModelScope.launch {
+            repository.renameTag(tag.uid, name)
+            event("Tag renamed")
         }
     }
 
@@ -810,37 +828,6 @@ class LumiViewModel(
         viewModelScope.launch {
             repository.deleteEntry(entry)
             event("Removed ${entry.label}")
-        }
-    }
-
-    // ---- settings: links ----
-
-    fun addLinked(tagId: Long, entryId: Long) {
-        viewModelScope.launch {
-            repository.updateTagEntries(tagId) { current -> current + entryId }
-        }
-    }
-
-    fun removeLinked(tagId: Long, entryId: Long) {
-        viewModelScope.launch {
-            repository.updateTagEntries(tagId) { current -> current.filter { it != entryId } }
-        }
-    }
-
-    fun moveLinked(tagId: Long, index: Int, by: Int) {
-        viewModelScope.launch {
-            repository.updateTagEntries(tagId) { current ->
-                reorderEntryIds(current, index, index + by)
-            }
-        }
-    }
-
-    /** Drag reorder: move the entry at [fromIndex] to [toIndex] (no-op when they match). */
-    fun reorderLinked(tagId: Long, fromIndex: Int, toIndex: Int) {
-        viewModelScope.launch {
-            repository.updateTagEntries(tagId) { current ->
-                reorderEntryIds(current, fromIndex, toIndex)
-            }
         }
     }
 

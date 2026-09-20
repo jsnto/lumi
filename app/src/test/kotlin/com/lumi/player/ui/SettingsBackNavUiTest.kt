@@ -68,11 +68,11 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("lumi v0.1.0").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertIsNotDisplayed()
 
-        // Leave the menu for the link sub-screen...
-        compose.onNodeWithText("Tag to content").performScrollTo()
-        compose.onNodeWithText("Tag to content").performClick()
+        // Leave the menu for the content sub-screen...
+        compose.onNodeWithText("Content").performScrollTo()
+        compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Scan a tag to view its song list").assertIsDisplayed()
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertIsDisplayed()
 
         // ...and come back via the system back gesture.
         systemBack(activity)

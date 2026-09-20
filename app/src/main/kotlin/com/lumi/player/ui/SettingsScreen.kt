@@ -1,24 +1,17 @@
 package com.lumi.player.ui
 
-import android.content.ClipData
 import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.draganddrop.dragAndDropSource
-import androidx.compose.foundation.draganddrop.dragAndDropTarget
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,7 +38,6 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -58,14 +50,11 @@ import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Label
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.ModeEdit
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -79,14 +68,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.DragAndDropTransferData
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -113,15 +95,14 @@ private enum class SettingsPane {
     PlayMode,
     Tags,
     Content,
-    Link,
     TagDetail,
 }
 
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
- * screen is a list of buttons, one per setting (play mode, NFC tags, content,
- * tag-to-content linking); clicking a row navigates into that setting's own
- * configuration screen.
+ * screen is a list of buttons, one per setting (play mode, NFC tags,
+ * content); clicking a row navigates into that setting's own configuration
+ * screen.
  *
  * Back navigation unwinds one level at a time: system back and the back arrow
  * take a sub-screen back to the menu, and from the menu the host's back
@@ -149,16 +130,31 @@ fun SettingsScreen(
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
     val registering by viewModel.registering.collectAsState(false)
-    val scanning by viewModel.scanning.collectAsState(false)
+    val editScan by viewModel.editScanActive.collectAsState(false)
+    val pendingEditTag by viewModel.pendingEditTag.collectAsState(null)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
-    val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
+    // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
+    // The tag whose edit dialog is showing (set by the tag detail page's
+    // edit action on the Tag details section, or by a settled edit scan -
+    // the "Scan NFC" row of the NFC tags pane).
+    var editTag by remember { mutableStateOf<TagEntity?>(null) }
+
+    // A settled edit scan hands its resolved tag to the edit dialog (which
+    // overlays any pane); the result is consumed so a later scan can
+    // re-trigger.
+    LaunchedEffect(pendingEditTag) {
+        pendingEditTag?.let {
+            editTag = it
+            viewModel.consumePendingEditTag()
+        }
+    }
 
     // The tag whose detail page is showing (set when a tag row in the NFC
     // tags pane is tapped, cleared when the tag is removed or the page
@@ -171,7 +167,7 @@ fun SettingsScreen(
     val playState by PlayerStateHolder.state.collectAsState()
 
     // One shared OpenDocument launcher: both "Add content" (Content pane) and
-    // "Add song to this tag" (Link pane) launch it, and the pending tag id
+    // "Add song" (the tag detail page) launch it, and the pending tag id
     // set right before the launch decides which side receives the result.
     var pendingTagPickId by rememberSaveable { mutableStateOf<Long?>(null) }
 
@@ -217,7 +213,6 @@ fun SettingsScreen(
             onPlayMode = { pane = SettingsPane.PlayMode },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
-            onLink = { pane = SettingsPane.Link },
             onBack = onBack,
         )
         SettingsPane.PlayMode -> PlayModePane(
@@ -229,7 +224,6 @@ fun SettingsScreen(
             viewModel = viewModel,
             tags = tags,
             onBack = { pane = SettingsPane.Menu },
-            onTagDeleted = { deleteTag = it },
             onTagOpened = { tag ->
                 tagDetailId = tag.id
                 pane = SettingsPane.TagDetail
@@ -247,18 +241,6 @@ fun SettingsScreen(
             onRescanFolder = { viewModel.rescanFolder(it) },
             onRemoveFolder = { viewModel.requestFolderRemoval(it) },
             onEntryDeleted = { deleteEntry = it },
-        )
-        SettingsPane.Link -> LinkPane(
-            viewModel = viewModel,
-            tags = tags,
-            entries = entries,
-            effectiveSelectedId = effectiveSelectedId,
-            linked = linked,
-            onBack = { pane = SettingsPane.Menu },
-            onAddSong = { tagId ->
-                pendingTagPickId = tagId
-                audioPicker.launch(arrayOf("audio/*"))
-            },
         )
         SettingsPane.TagDetail -> {
             // The tag may have been removed while the page is open (the
@@ -281,6 +263,7 @@ fun SettingsScreen(
                         pendingTagPickId = tagId
                         audioPicker.launch(arrayOf("audio/*"))
                     },
+                    onEdit = { editTag = it },
                     onDelete = { deleteTag = it },
                 )
             }
@@ -289,21 +272,18 @@ fun SettingsScreen(
 
     // ---------- dialogs (overlay any pane) ----------
 
-    if (scanning) {
+    if (editScan) {
         AlertDialog(
-            onDismissRequest = { viewModel.cancelTagScan() },
+            onDismissRequest = { viewModel.cancelTagEditScan() },
             containerColor = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(28.dp),
             icon = { NfcAnchor() },
             title = {
-                Text(
-                    "Point a tag at a song list",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
+                Text("Scan a tag", style = MaterialTheme.typography.headlineSmall)
             },
-            text = { Text("Hold the back of the phone against the tag…") },
+            text = { Text("Hold the back of the phone against a registered tag…") },
             confirmButton = {
-                TextButton(onClick = { viewModel.cancelTagScan() }) { Text("Cancel") }
+                TextButton(onClick = { viewModel.cancelTagEditScan() }) { Text("Cancel") }
             },
         )
     }
@@ -333,6 +313,22 @@ fun SettingsScreen(
             onDismiss = { viewModel.discardCaptured() },
             onSave = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = false) },
             onSaveAndWrite = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = true) },
+        )
+    }
+
+    // The tag's edit dialog (the tag detail page's edit action): the name
+    // is the only stored detail - the UID is hardware-derived and stays
+    // read-only. Saving goes through the view model's rename path, the same
+    // one the tag payload write uses.
+    editTag?.let { tag ->
+        TagEditDialog(
+            uid = tag.uid,
+            initialName = tag.name,
+            onDismiss = { editTag = null },
+            onSave = { name ->
+                viewModel.renameTag(tag, name)
+                editTag = null
+            },
         )
     }
 
@@ -450,7 +446,6 @@ private fun SettingsMenuPane(
     onPlayMode: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
-    onLink: () -> Unit,
     onBack: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -510,14 +505,6 @@ private fun SettingsMenuPane(
                 subtitle = if (entries.isEmpty()) "No songs yet" else "${entries.size} songs",
                 onClick = onContent,
             )
-            MenuRow(
-                icon = Icons.Default.LocationOn,
-                chipBackground = scheme.secondaryContainer,
-                chipContent = scheme.onSecondaryContainer,
-                title = "Tag to content",
-                subtitle = "Choose what each tag plays",
-                onClick = onLink,
-            )
             KeepScreenOnRow(
                 checked = keepScreenOn,
                 onCheckedChange = onKeepScreenOnChange,
@@ -533,8 +520,8 @@ private fun SettingsMenuPane(
 
 /**
  * A settings button: a tonal icon chip, title, subtitle, chevron — a quiet
- * color-coding of the app's four jobs (D-03): play = peach, tags = teal,
- * content = violet, link = teal. 56+ dp min height, 48 dp targets (D-08).
+ * color-coding of the app's jobs (D-03): play = peach, tags = teal,
+ * content = violet. 56+ dp min height, 48 dp targets (D-08).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -752,9 +739,11 @@ private fun PlayModePane(
 }
 
 /**
- * NFC tags: register and manage tags. The row body opens the tapped tag's
- * detail page (the trailing delete icon keeps its own click and still
- * deletes the tag in place).
+ * NFC tags: register and manage tags. A "Scan NFC" row arms an edit scan:
+ * the next tag read opens that tag's edit dialog if it is registered (or
+ * reports that it isn't). Tapping a tag row's body opens the tapped tag's
+ * detail page (the per-tag page where the tag can also be deleted, from its
+ * danger zone).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -762,7 +751,6 @@ private fun TagsPane(
     viewModel: LumiViewModel,
     tags: List<TagEntity>,
     onBack: () -> Unit,
-    onTagDeleted: (TagEntity) -> Unit,
     onTagOpened: (TagEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("NFC tags", onBack) }) { padding ->
@@ -781,6 +769,21 @@ private fun TagsPane(
                 addLabel = "Register a tag",
                 onAdd = { viewModel.startTagRegistration() },
             ) {
+                // The "Scan NFC" row: a row in the pane's own pattern that
+                // arms an edit scan - the next read opens a registered
+                // tag's edit dialog (the same read path registration uses).
+                SettingRow(
+                    modifier = Modifier.clickable { viewModel.startTagEditScan() },
+                    leading = {
+                        IconChip(
+                            icon = Icons.Filled.Nfc,
+                            background = MaterialTheme.colorScheme.secondaryContainer,
+                            content = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    },
+                    title = "Scan NFC",
+                    detail = "Scan a registered tag to open its details",
+                )
                 if (tags.isEmpty()) {
                     Text(
                         text = "No tags yet. Tap a tag on the back of the phone to register it.",
@@ -789,10 +792,7 @@ private fun TagsPane(
                 }
                 tags.forEach { tag ->
                     SettingRow(
-                        // The row body is the detail page's entry point: the
-                        // click rides the row's own node (the trailing delete
-                        // icon keeps its own, deeper click, so tapping the
-                        // icon still deletes in place).
+                        // The row body is the detail page's entry point.
                         modifier = Modifier.clickable { onTagOpened(tag) },
                         leading = {
                             IconChip(
@@ -803,13 +803,6 @@ private fun TagsPane(
                         },
                         title = tag.name.ifEmpty { "Tag" },
                         detail = tag.uid,
-                        trailing = {
-                            SoftIconButton(
-                                icon = Icons.Default.Delete,
-                                contentDescription = "Delete tag",
-                                onClick = { onTagDeleted(tag) },
-                            )
-                        },
                     )
                 }
             }
@@ -819,14 +812,16 @@ private fun TagsPane(
 
 /**
  * One registered tag, opened by tapping its row in the NFC tags pane. The
- * page shows the tag's details (name + UID), its current song list with an
- * add-song action aimed at THIS tag, and ends in a danger zone whose delete
- * removes the tag - and only the tag and its links.
+ * page shows the tag's details (name + UID) with an edit action that opens
+ * the edit dialog (the name is the only editable detail; the UID is
+ * hardware-derived and read-only), its current song list with an add-song
+ * action aimed at THIS tag, and ends in a danger zone whose delete removes
+ * the tag - and only the tag and its links.
  *
- * The song list reuses the link editor's selection plumbing: opening the
- * page selects the tag, so [linked] (the selected tag's entries) is this
- * tag's list, and the add-song pick goes through the same
- * [LumiViewModel.addSongToTag] path the link editor uses.
+ * The song list reuses the shared selection plumbing: opening the page
+ * selects the tag, so [linked] (the selected tag's entries) is this tag's
+ * list, and the add-song pick goes through the same
+ * [LumiViewModel.addSongToTag] path.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -836,11 +831,11 @@ private fun TagDetailPane(
     linked: List<EntryEntity>,
     onBack: () -> Unit,
     onAddSong: (Long) -> Unit,
+    onEdit: (TagEntity) -> Unit,
     onDelete: (TagEntity) -> Unit,
 ) {
     // Pointing the shared selection at this tag makes the observed [linked]
-    // list this tag's song list - the same plumbing the link editor's tag
-    // chips drive.
+    // list this tag's song list.
     LaunchedEffect(tag.id) { viewModel.selectTag(tag.id) }
     val scheme = MaterialTheme.colorScheme
     Scaffold(topBar = { PaneTopAppBar(tag.name.ifEmpty { "Tag" }, onBack) }) { padding ->
@@ -852,7 +847,20 @@ private fun TagDetailPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SectionCard("Tag details") {
+            // The edit action sits on the section's title row (the settled
+            // title-row action language, like the Songs section's add
+            // button) and opens the edit dialog: the name is the only
+            // stored detail, the UID is hardware-derived and read-only.
+            SectionCard(
+                title = "Tag details",
+                trailing = {
+                    SoftIconButton(
+                        icon = Icons.Filled.ModeEdit,
+                        contentDescription = "Edit tag",
+                        onClick = { onEdit(tag) },
+                    )
+                },
+            ) {
                 SettingRow(
                     leading = {
                         IconChip(
@@ -867,7 +875,7 @@ private fun TagDetailPane(
             }
             // The + button on this section's title row adds a song to THIS
             // tag: the pick stores the file and appends it to the tag's
-            // list in one transaction (the link editor's add-song path).
+            // list in one transaction (the shared add-song path).
             SectionCard(
                 title = "Songs",
                 addLabel = "Add song",
@@ -1066,275 +1074,6 @@ private fun ContentPane(
     }
 }
 
-/**
- * Tag to content: the scan-first workflow. The user scans the tag (or picks
- * one), sees the song list currently on that tag, and can add a new song
- * onto it with the "Add" button: the pick both stores the file and appends
- * it to the tag's list. The tag chips scroll horizontally and the "add
- * existing content" buttons flow, so neither list gets clipped no matter
- * how many tags or entries exist.
- */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
-@Composable
-private fun LinkPane(
-    viewModel: LumiViewModel,
-    tags: List<TagEntity>,
-    entries: List<EntryEntity>,
-    effectiveSelectedId: Long?,
-    linked: List<EntryEntity>,
-    onBack: () -> Unit,
-    onAddSong: (Long) -> Unit,
-) {
-    Scaffold(topBar = { PaneTopAppBar("Tag to content", onBack) }) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            // The old outlined "+ Add song to this tag" pill is now the +
-            // button on the section's title row, shown only while a tag
-            // exists and one is the effective selection.
-            val effectiveId = effectiveSelectedId
-            SectionCard(
-                title = "Tag to content",
-                addLabel = if (tags.isNotEmpty() && effectiveId != null) "Add song to this tag" else null,
-                onAdd = if (tags.isNotEmpty() && effectiveId != null) {
-                    { onAddSong(effectiveId) }
-                } else {
-                    null
-                },
-            ) {
-                OutlinedButton(onClick = { viewModel.startTagScan() }) {
-                    Icon(
-                        Icons.Filled.Nfc,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Scan a tag to view its song list")
-                }
-                if (tags.isEmpty()) {
-                    Text(
-                        text = "Register a tag first, then link content to it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(bottom = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        tags.forEach { tag ->
-                            FilterChip(
-                                selected = tag.id == effectiveSelectedId,
-                                onClick = { viewModel.selectTag(tag.id) },
-                                label = {
-                                    Text(tag.name.ifEmpty { tag.uid.takeLast(4) })
-                                },
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    if (effectiveId == null) {
-                        Text(
-                            text = "Pick a tag above.",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    } else {
-                        if (linked.isEmpty()) {
-                            Text(
-                                text = "This tag plays nothing yet.",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        if (linked.size > 1) {
-                            Text(
-                                text = "Drag a song to reorder.",
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                        // Drag reordering: every row is a drag source (a long press
-                        // lifts it, the platform drag ghost follows the finger) and
-                        // a drop target. On drop, the target row's index becomes
-                        // the dragged row's new position, persisted through the
-                        // same updateTagEntries path as the up/down buttons. The
-                        // dragged row is tracked in [dragIndex]: the drop event
-                        // only exposes the payload's mime types, not the source.
-                        var dragIndex by remember { mutableStateOf<Int?>(null) }
-                        var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
-                        val dragGhostColor = MaterialTheme.colorScheme.primary
-                        linked.forEachIndexed { index, entry ->
-                            val transferData = remember(entry.id) {
-                                DragAndDropTransferData(
-                                    clipData = ClipData.newPlainText("lumi-entry", entry.label),
-                                    localState = entry.id,
-                                )
-                            }
-                            // Captured here (composable scope) because the
-                            // drawWithContent lambda below runs at draw time,
-                            // where MaterialTheme is not reachable.
-                            val linkRowColors = MaterialTheme.colorScheme
-                            SettingRow(
-                                leading = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        // Visible drag handle (D-07): the
-                                        // row's reordering is now legible at a
-                                        // glance instead of hidden in a long
-                                        // press.
-                                        Icon(
-                                            imageVector = Icons.Filled.DragHandle,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(22.dp),
-                                            tint = MaterialTheme.colorScheme.outline,
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        IconChip(
-                                            icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                                            background = MaterialTheme.colorScheme.primaryContainer,
-                                            content = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            size = 36.dp,
-                                            iconSize = 19.dp,
-                                        )
-                                    }
-                                },
-                                title = entry.label,
-                                modifier = Modifier
-                                    .dragAndDropSource(
-                                        drawDragDecoration = {
-                                            drawCircle(
-                                                color = dragGhostColor,
-                                                radius = 24.dp.toPx(),
-                                            )
-                                        },
-                                    ) {
-                                        dragIndex = index
-                                        startTransfer(transferData)
-                                    }
-                                    .dragAndDropTarget(
-                                        shouldStartDragAndDrop = { true },
-                                        target = object : DragAndDropTarget {
-                                            override fun onEntered(event: DragAndDropEvent) {
-                                                dropTargetIndex = index
-                                            }
-
-                                            override fun onExited(event: DragAndDropEvent) {
-                                                if (dropTargetIndex == index) dropTargetIndex = null
-                                            }
-
-                                            override fun onDrop(event: DragAndDropEvent): Boolean {
-                                                val from = dragIndex
-                                                if (from != null && from != index) {
-                                                    viewModel.reorderLinked(effectiveId, from, index)
-                                                }
-                                                if (from != null) {
-                                                    dragIndex = null
-                                                    dropTargetIndex = null
-                                                }
-                                                return from != null
-                                            }
-
-                                            override fun onEnded(event: DragAndDropEvent) {
-                                                if (dropTargetIndex == index) dropTargetIndex = null
-                                                if (dragIndex == index) dragIndex = null
-                                            }
-                                        },
-                                    )
-                                    .background(
-                                        if (dropTargetIndex == index) {
-                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                        } else {
-                                            Color.Transparent
-                                        },
-                                        RoundedCornerShape(16.dp),
-                                    )
-                                    // The settled drop-target state: a dashed
-                                    // primary outline over the peach wash.
-                                    .drawWithContent {
-                                        drawContent()
-                                        if (dropTargetIndex == index) {
-                                            // The pruned compose mirror has no
-                                            // PathEffect (no dashes) and no
-                                            // bordered drawRoundRect, so the
-                                            // drop-target outline is a solid
-                                            // 2 dp primary stroke over the
-                                            // same rounded rect.
-                                            drawRoundRect(
-                                                color = linkRowColors.primary,
-                                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                                                    16.dp.toPx(),
-                                                    16.dp.toPx(),
-                                                ),
-                                                style = Stroke(
-                                                    2.dp.toPx(),
-                                                    4f,
-                                                    StrokeCap.Butt,
-                                                    StrokeJoin.Miter,
-                                                    null,
-                                                ),
-                                            )
-                                        }
-                                    },
-                                trailing = {
-                                    // Stacked up/down (D-07): compact, one
-                                    // above the other, keeping the row's
-                                    // height down.
-                                    Column(
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        MoveIconButton(
-                                            icon = Icons.Filled.KeyboardArrowUp,
-                                            contentDescription = "Move up",
-                                            enabled = index > 0,
-                                            onClick = { viewModel.moveLinked(effectiveId, index, -1) },
-                                        )
-                                        MoveIconButton(
-                                            icon = Icons.Filled.KeyboardArrowDown,
-                                            contentDescription = "Move down",
-                                            enabled = index < linked.size - 1,
-                                            onClick = { viewModel.moveLinked(effectiveId, index, 1) },
-                                        )
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                    SoftIconButton(
-                                        icon = Icons.Default.Close,
-                                        contentDescription = "Remove",
-                                        onClick = { viewModel.removeLinked(effectiveId, entry.id) },
-                                    )
-                                },
-                            )
-                        }
-                        if (entries.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "Add to this tag:",
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                entries.forEach { entry ->
-                                    OutlinedButton(
-                                        onClick = { viewModel.addLinked(effectiveId, entry.id) },
-                                    ) {
-                                        Text("+ ${entry.label}")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 private fun onFilePicked(
     viewModel: LumiViewModel,
     context: Context,
@@ -1440,17 +1179,61 @@ private fun TagNameDialog(
 }
 
 /**
+ * Edit the details of a registered tag. The name is the only stored detail
+ * (the UID is hardware-derived and stays read-only, shown as context);
+ * saving goes through the view model's rename path, so the page's
+ * displayed name follows the saved value.
+ */
+@Composable
+private fun TagEditDialog(
+    uid: String,
+    initialName: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(28.dp),
+        title = { Text("Edit tag", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column {
+                Text("ID: $uid", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(LumiTagNdef.MAX_NAME_LENGTH) },
+                    label = { Text("Name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TonalPillButton("Save", onClick = { onSave(name) })
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+/**
  * Card with a bold section title and its content. When [addLabel] and [onAdd]
  * are given, a "+" button sits at the right end of the section's title row:
  * the section's single add action, kept one tap away and visually tied to
  * the section it adds to (the same title-left / action-right row language the
- * menu rows and setting rows use).
+ * menu rows and setting rows use). [trailing] renders an optional extra
+ * title-row action (e.g. the tag detail page's edit button) at the row's
+ * right end.
  */
 @Composable
 private fun SectionCard(
     title: String,
     addLabel: String? = null,
     onAdd: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -1502,6 +1285,7 @@ private fun SectionCard(
                         }
                     }
                 }
+                trailing?.invoke()
             }
             content()
         }
@@ -1614,43 +1398,6 @@ private fun SoftIconButton(
                 tint = scheme.onSurfaceVariant,
             )
         }
-    }
-}
-
-/**
- * One half of the link editor's stacked move control (D-07): a compact 34 x
- * 26 dp target (smaller than the 48 dp rule on purpose — two of them stack
- * in the row's trailing slot). Disabled at reduced opacity at the list
- * ends. The content description and the enabled/disabled state are the
- * semantic contract the reorder tests drive.
- */
-@Composable
-private fun MoveIconButton(
-    icon: ImageVector,
-    contentDescription: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Box(
-        modifier = Modifier
-            .size(width = 34.dp, height = 26.dp)
-            .semantics(mergeDescendants = true) {
-                this.contentDescription = contentDescription
-            }
-            .background(
-                scheme.surfaceContainerHigh.copy(alpha = if (enabled) 1f else 0.45f),
-                RoundedCornerShape(10.dp),
-            )
-            .clickable(enabled = enabled) { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = if (enabled) scheme.onSurfaceVariant else scheme.onSurfaceVariant.copy(alpha = 0.5f),
-        )
     }
 }
 

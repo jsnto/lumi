@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
@@ -259,13 +260,23 @@ class UiRevampUiTest {
         compose.waitForIdle()
         waitForText("Bunny")
 
-        compose.onNodeWithContentDescription("Delete tag").performClick()
+        // Deleting a tag happens from the tag detail page's danger zone (the
+        // row-level delete icon is gone): the row body opens the page, and
+        // the danger zone's delete reuses the same confirmation dialog.
+        compose.onNodeWithText("Bunny").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Delete").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Delete").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Remove tag?").assertIsDisplayed()
         compose.onNodeWithText("Remove").assertIsDisplayed()
         compose.onNodeWithText("Cancel").assertIsDisplayed()
 
         compose.onNodeWithText("Remove").performClick()
+        compose.waitForIdle()
+        // The page fell back to the menu; the list is empty now.
+        compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
         waitForText("No tags yet")
         assertEquals(0, dbAndGet { app().repository.observeTags().first() }.size)
