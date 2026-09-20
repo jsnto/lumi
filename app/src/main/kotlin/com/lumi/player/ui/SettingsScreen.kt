@@ -674,7 +674,7 @@ private fun LinkPane(
                                             )
                                         },
                                     ) {
-                                        if (dragIndex == null) dragIndex = index
+                                        dragIndex = index
                                         startTransfer(transferData)
                                     }
                                     .dragAndDropTarget(
