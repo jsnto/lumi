@@ -506,12 +506,15 @@ class LumiViewModel(
     }
 
     /**
-     * The tree uri's display name, or the uri itself when no name can be
-     * read. Querying a SAF tree uri lists the root's children, so an empty
-     * root (no direct children) yields a zero-row cursor - reading it
-     * unguarded threw (CursorIndexOutOfBoundsException) and crashed the
-     * add, so the read is guarded and any provider failure falls back to
-     * the uri string instead of aborting the add.
+     * The label for a picked folder: the first `_display_name` row of the
+     * tree query (which lists the root's children, so for a non-empty folder
+     * this is the first child's name - a known cosmetic quirk), or the uri
+     * itself when no name can be read. Querying a SAF tree uri lists the
+     * root's children, so an empty root (no direct children) yields a
+     * zero-row cursor - reading it unguarded threw
+     * (CursorIndexOutOfBoundsException) and crashed the add, so the read is
+     * guarded and any provider failure falls back to the uri string instead
+     * of aborting the add.
      */
     private fun folderDisplayName(treeUri: Uri): String =
         try {
