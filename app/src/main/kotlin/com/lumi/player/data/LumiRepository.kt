@@ -125,7 +125,9 @@ class LumiRepository(private val db: LumiDatabase) {
      * without a query.
      */
     suspend fun countEntriesByPayloads(payloads: Set<String>): Int =
-        if (payloads.isEmpty()) 0 else dao.countEntriesByPayloads(payloads)
+        payloads
+            .chunked(PAYLOAD_QUERY_BATCH)
+            .sumOf { chunk -> dao.countEntriesByPayloads(chunk.toSet()) }
 
     /**
      * Removes a remembered folder and the content rows imported from it in
@@ -140,7 +142,9 @@ class LumiRepository(private val db: LumiDatabase) {
      */
     suspend fun removeFolder(folder: FolderEntity, importedPayloads: Set<String>): Int =
         db.withTransaction {
-            val removed = if (importedPayloads.isEmpty()) 0 else dao.deleteEntriesByPayloads(importedPayloads)
+            val removed = importedPayloads
+                .chunked(PAYLOAD_QUERY_BATCH)
+                .sumOf { chunk -> dao.deleteEntriesByPayloads(chunk.toSet()) }
             dao.deleteFolder(folder)
             removed
         }
@@ -236,5 +240,8 @@ class LumiRepository(private val db: LumiDatabase) {
 
         /** Inclusive range the re-read wait (seconds) is allowed to take. */
         val NFC_REREAD_SECONDS_RANGE = 1L..120L
+
+        /** Payload-set queries go in batches this large: SQLite before 3.32 (Android <= 11) caps bound variables at 999. */
+        const val PAYLOAD_QUERY_BATCH = 900
     }
 }

@@ -25,6 +25,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import java.io.FileNotFoundException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -317,6 +319,74 @@ class FolderRemoveUiTest {
             "and its 1 imported song will be removed from the content list",
             substring = true,
         ).assertExists()
+    }
+
+    /** Pumps the main looper for a bounded time, letting in-flight work run. */
+    private fun pumpMainLooper(ms: Long) {
+        val deadline = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+    }
+
+    @Test
+    fun aRemovalRequestWhileAWalkIsInFlightIsIgnored() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+
+        // Phase 1: both trees answer immediately, so the adds settle.
+        viewModel.folderChildren = { folderUri ->
+            when (folderUri.toString()) {
+                TREE_URI_A -> listOf(file("song-a.mp3", "c://x/a"))
+                TREE_URI_B -> listOf(file("song-b.mp3", "c://x/b"))
+                else -> emptyList()
+            }
+        }
+        viewModel.addFolderEntry(Uri.parse(TREE_URI_A))
+        idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
+        viewModel.addFolderEntry(Uri.parse(TREE_URI_B))
+        idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
+
+        val folders = dbAndGet { app().repository.observeFolders().first() }
+        val folderA = folders.single { it.uri == TREE_URI_A }
+        val folderB = folders.single { it.uri == TREE_URI_B }
+
+        // Phase 2: A's removal walk blocks on the gate (a large tree), and
+        // B's tree is counted, so an ignored request leaves no trace.
+        val gateA = CountDownLatch(1)
+        val bTreeQueries = AtomicInteger(0)
+        viewModel.folderChildren = { folderUri ->
+            when (folderUri.toString()) {
+                TREE_URI_A -> {
+                    val walked = gateA.await(10, TimeUnit.SECONDS)
+                    if (walked) listOf(file("song-a.mp3", "c://x/a")) else emptyList()
+                }
+                TREE_URI_B -> {
+                    bTreeQueries.incrementAndGet()
+                    listOf(file("song-b.mp3", "c://x/b"))
+                }
+                else -> emptyList()
+            }
+        }
+
+        viewModel.requestFolderRemoval(folderA)
+        pumpMainLooper(300)
+        val bQueriesBefore = bTreeQueries.get()
+        viewModel.requestFolderRemoval(folderB)
+        pumpMainLooper(300)
+
+        // While A's walk is in flight, B's request is ignored: no preview is
+        // written and B's tree is not walked.
+        assertNull(viewModel.folderRemovalPreview.value)
+        assertEquals(bQueriesBefore, bTreeQueries.get())
+
+        gateA.countDown()
+        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        val preview = viewModel.folderRemovalPreview.value!!
+        assertEquals(TREE_URI_A, preview.folder.uri)
+        assertEquals(setOf("c://x/a"), preview.importedPayloads)
+        assertEquals(1, preview.songCount)
     }
 
     companion object {

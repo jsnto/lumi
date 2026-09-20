@@ -34,6 +34,7 @@ import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -561,19 +562,21 @@ class LumiViewModel(
     private val _folderRemovalPreview = MutableStateFlow<FolderRemovalPreview?>(null)
     val folderRemovalPreview: StateFlow<FolderRemovalPreview?> = _folderRemovalPreview.asStateFlow()
 
+    private var removalJob: Job? = null
+
     /**
      * Prepares the removal confirmation for [folder]: re-walks its tree to
      * identify the imported songs (the same walk the add used), then opens
      * the confirmation with the song count - or with a plain "the tree can
      * no longer be read" notice when the walk fails. The dialog is
      * state-driven ([folderRemovalPreview]), so the async walk settles
-     * before the confirmation appears. A request made while the preview is
-     * open is ignored; cancel or confirm clears it before a new removal can
-     * be requested.
+     * before the confirmation appears. A request made while a walk is in
+     * flight or the preview is open is ignored; cancel or confirm clears
+     * the preview before a new removal can be requested.
      */
     fun requestFolderRemoval(folder: FolderEntity) {
-        if (_folderRemovalPreview.value != null) return
-        viewModelScope.launch {
+        if (_folderRemovalPreview.value != null || removalJob?.isActive == true) return
+        removalJob = viewModelScope.launch {
             val walked: List<ScannedSong>? = try {
                 withContext(Dispatchers.IO) {
                     collectAudioFiles(folder.uri) { folderUri ->
