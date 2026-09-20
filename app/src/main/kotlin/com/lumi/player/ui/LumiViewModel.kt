@@ -505,17 +505,27 @@ class LumiViewModel(
         }
     }
 
-    /** The tree uri's display name (the folder's name), or the uri itself. */
+    /**
+     * The tree uri's display name, or the uri itself when no name can be
+     * read. Querying a SAF tree uri lists the root's children, so an empty
+     * root (no direct children) yields a zero-row cursor - reading it
+     * unguarded threw (CursorIndexOutOfBoundsException) and crashed the
+     * add, so the read is guarded and any provider failure falls back to
+     * the uri string instead of aborting the add.
+     */
     private fun folderDisplayName(treeUri: Uri): String =
-        context.contentResolver
-            .query(treeUri, arrayOf("_display_name"), null, null, null)
-            ?.use { cursor ->
-                cursor.moveToFirst()
-                val name = cursor.getColumnIndexOrThrow("_display_name")
-                cursor.getString(name)
-            }
-            ?.ifEmpty { null }
-            ?: treeUri.toString()
+        try {
+            context.contentResolver
+                .query(treeUri, arrayOf("_display_name"), null, null, null)
+                ?.use { cursor ->
+                    if (!cursor.moveToFirst()) return@use null
+                    cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
+                }
+                ?.ifEmpty { null }
+                ?: treeUri.toString()
+        } catch (_: Exception) {
+            treeUri.toString()
+        }
 
     /**
      * Test seam: the documents provider's folder listing (a folder uri to

@@ -1,5 +1,9 @@
 package com.lumi.player.ui
 
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.net.Uri
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -21,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
@@ -225,6 +230,58 @@ class FolderAddUiTest {
             listOf("song-a.mp3"),
             entries.map { it.label },
         )
+    }
+
+    /**
+     * A documents provider whose tree query answers with a zero-row cursor:
+     * a folder whose root has no direct children. Querying a SAF tree uri
+     * lists the root's children, so an empty root yields no rows - the input
+     * that crashed the add path before the label read guarded the cursor.
+     */
+    private fun registerEmptyTreeProvider() {
+        val provider = object : ContentProvider() {
+            override fun onCreate(): Boolean = true
+            override fun query(
+                uri: Uri,
+                projection: Array<out String>?,
+                selection: String?,
+                selectionArgs: Array<out String>?,
+                sortOrder: String?,
+            ): Cursor? = MatrixCursor(arrayOf("_id", "_display_name", "_flags"))
+            override fun getType(uri: Uri): String? = null
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun update(
+                uri: Uri,
+                values: ContentValues?,
+                selection: String?,
+                selectionArgs: Array<out String>?,
+            ): Int = 0
+        }
+        ShadowContentResolver.registerProviderInternal("docs", provider)
+    }
+
+    @Test
+    fun addFolderWhoseRootHasNoDirectChildrenDoesNotCrash() {
+        val viewModel = openContentPane()
+        registerEmptyTreeProvider()
+
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
+
+        // The crash input: the label read sees a zero-row cursor (no direct
+        // children at the root). Must complete - and add nothing.
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it.startsWith("No songs found") } })
+
+        // The folder is remembered (so it stays rescannable) with the tree
+        // uri as its label fallback, and no entries were stored.
+        val folders = dbAndGet { app().repository.observeFolders().first() }
+        assertEquals("the empty folder is remembered once", 1, folders.size)
+        assertEquals(TREE_URI, folders.single().uri)
+        assertEquals("no name readable from the empty tree, so the uri is the label", TREE_URI, folders.single().label)
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertTrue("an empty folder adds no entries", entries.isEmpty())
     }
 
     @Test
