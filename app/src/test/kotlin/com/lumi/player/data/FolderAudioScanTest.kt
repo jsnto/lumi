@@ -90,6 +90,24 @@ class FolderAudioScanTest {
     }
 
     @Test
+    fun aFolderThatListsItselfDoesNotLoopTheWalk() {
+        // A provider quirk (or a misbuilt child uri) that lists a folder
+        // inside itself must not loop the walk forever: the repeat is
+        // skipped and the walk still terminates with the file found once.
+        val tree = { folderUri: String ->
+            when (folderUri) {
+                "root" -> listOf(dir("loop", "c://x/loop"), file("song.mp3", "c://x/s"))
+                "c://x/loop" -> listOf(dir("loop", "c://x/loop"), file("deep.mp3", "c://x/d"))
+                else -> emptyList()
+            }
+        }
+        assertEquals(
+            listOf("deep.mp3", "song.mp3"),
+            collectAudioFiles("root", tree).map { it.displayName },
+        )
+    }
+
+    @Test
     fun aSubfolderIsWalkedOnlyWhenItIsMarkedDirectory() {
         // A file that merely looks like a folder name must not be recursed.
         val tree = { folderUri: String ->

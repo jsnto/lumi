@@ -153,6 +153,7 @@ fun SettingsScreen(
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
     val effectiveSelectedId by viewModel.effectiveSelectedTagId.collectAsState(null)
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
+    val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
@@ -233,6 +234,7 @@ fun SettingsScreen(
             },
             onAddFolder = { folderPicker.launch(null) },
             onRescanFolder = { viewModel.rescanFolder(it) },
+            onRemoveFolder = { viewModel.requestFolderRemoval(it) },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.Link -> LinkPane(
@@ -344,6 +346,50 @@ fun SettingsScreen(
                 TextButton(onClick = { deleteEntry = null }) { Text("Cancel") }
             },
         )
+    }
+
+    // The folder-removal confirmation: the async walk identifies the
+    // imported songs (the rescan precedent) before the dialog appears, so
+    // the copy states the song count - or plainly that it cannot be
+    // determined when the tree can no longer be read. The destructive
+    // confirm names the effect: the folder and its imported songs leave
+    // the app's content list; the music files on the phone are untouched.
+    folderRemoval?.let { preview ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelFolderRemoval() },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = {
+                Text("Remove folder?", style = MaterialTheme.typography.headlineSmall)
+            },
+            text = { Text(folderRemovalText(preview)) },
+            confirmButton = {
+                DestructivePillButton(
+                    label = "Remove",
+                    onClick = { viewModel.confirmFolderRemoval() },
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelFolderRemoval() }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/**
+ * The folder-removal confirmation copy: the effect is stated before the
+ * destructive confirm - the folder and the songs imported from it leave the
+ * app's content list, and the music files on the phone are not touched. When
+ * the tree can no longer be read the count cannot be determined and the
+ * confirmation says so plainly: the folder row is still removed, and the
+ * songs that can no longer be identified stay.
+ */
+private fun folderRemovalText(preview: LumiViewModel.FolderRemovalPreview): String {
+    val label = preview.folder.label
+    return when (val count = preview.songCount) {
+        null -> "That folder's songs can no longer be read, so the songs imported from it can't be identified and will stay in the content list. “$label” will be removed from the folder list. The music files themselves stay on the phone."
+        0 -> "“$label” has no imported songs in the content list. It will be removed from the folder list. The music files themselves stay on the phone."
+        else -> "“$label” and its $count imported song${if (count == 1) "" else "s"} will be removed from the content list. The music files themselves stay on the phone."
     }
 }
 
@@ -735,6 +781,7 @@ private fun ContentPane(
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
     onRescanFolder: (FolderEntity) -> Unit,
+    onRemoveFolder: (FolderEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -806,22 +853,34 @@ private fun ContentPane(
                         title = folder.label,
                         detail = "Rescan to pick up new songs.",
                         trailing = {
-                            FilledTonalButton(
-                                onClick = { onRescanFolder(folder) },
-                                shape = RoundedCornerShape(500.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                ),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(15.dp),
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilledTonalButton(
+                                    onClick = { onRescanFolder(folder) },
+                                    shape = RoundedCornerShape(500.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Rescan", fontSize = 13.sp)
+                                }
+                                // The folder's removal: the settled row-level
+                                // delete treatment (48 dp target, 40 dp soft
+                                // circle), right next to the rescan action it
+                                // shares the row with. The confirmation names
+                                // the effect before anything is deleted.
+                                SoftIconButton(
+                                    icon = Icons.Default.Delete,
+                                    contentDescription = "Remove folder",
+                                    onClick = { onRemoveFolder(folder) },
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Rescan", fontSize = 13.sp)
                             }
                         },
                     )

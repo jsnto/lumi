@@ -39,13 +39,20 @@ fun isSupportedAudioFile(displayName: String): Boolean {
  * subfolder. [childrenOf] lists the direct children of the
  * folder identified by the (string) uri it is given - the tree uri itself
  * for the root - so the recursion is testable without a content resolver.
+ *
+ * Each folder uri is walked at most once: a listing that contains its own
+ * folder again (a provider quirk, or a misbuilt child uri) must not loop
+ * the walk forever - the repeat is skipped and the walk still terminates
+ * with the file found once.
  */
 fun collectAudioFiles(
     rootUri: String,
     childrenOf: (folderUri: String) -> List<FolderChild>,
 ): List<ScannedSong> {
     val songs = mutableListOf<ScannedSong>()
+    val walkedFolders = mutableSetOf<String>()
     fun walk(folderUri: String) {
+        if (!walkedFolders.add(folderUri)) return
         for (child in childrenOf(folderUri)) {
             if (child.isDirectory) {
                 walk(child.childUri)

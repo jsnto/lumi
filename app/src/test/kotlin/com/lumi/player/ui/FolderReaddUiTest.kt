@@ -217,9 +217,12 @@ class FolderReaddUiTest {
      * ```
      *
      * A query on the tree uri lists the root's children; a query on a
-     * subfolder's document uri lists that subfolder's children; a query on
-     * a file's document uri answers with the file's own row - the shape the
-     * real ExternalStorageProvider takes.
+     * subfolder's children uri (the tree's `child/<treeId>:tree/<docId>`
+     * listing - the shape the production seam builds, since a subfolder's
+     * document uri answers with the folder's own single row, not its
+     * children) lists that subfolder's children; a query on a file's
+     * document uri answers with the file's own row - the shape the real
+     * ExternalStorageProvider takes.
      *
      * android.net.Uri has no `:`-fragment parsing, so the tree uri's
      * `:tree`/`:openable` suffix is part of the LAST PATH SEGMENT (the same
@@ -251,9 +254,15 @@ class FolderReaddUiTest {
             val path = uri.encodedPath ?: return null
             val docId = when {
                 path.startsWith("/tree/") ->
+                    // The walk's root: the root folder's own children.
                     Uri.decode(path.removePrefix("/tree/"))
                         .removeSuffix(":tree")
                         .removeSuffix(":openable")
+                path.startsWith("/child/") ->
+                    // A subfolder's children are listed at the tree's child
+                    // uri (child/<treeId>:tree/<parentDocId>), never at the
+                    // subfolder's document uri - the production seam's shape.
+                    Uri.decode(path.removePrefix("/child/").substringAfterLast('/'))
                 path.startsWith("/document/") -> Uri.decode(path.removePrefix("/document/"))
                 else -> return null
             }

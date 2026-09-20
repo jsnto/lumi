@@ -48,6 +48,18 @@ interface LumiDao {
     @Delete
     suspend fun deleteEntry(entry: EntryEntity)
 
+    /** The stored content rows whose payload is in [payloads] (a folder removal's match). */
+    @Query("SELECT COUNT(*) FROM entries WHERE payload IN (:payloads)")
+    suspend fun countEntriesByPayloads(payloads: Set<String>): Int
+
+    /**
+     * Deletes the stored content rows whose payload is in [payloads]; tag
+     * links to the deleted rows cascade off with them, the same way a
+     * single-entry deletion does.
+     */
+    @Query("DELETE FROM entries WHERE payload IN (:payloads)")
+    suspend fun deleteEntriesByPayloads(payloads: Set<String>): Int
+
     // ---- added folders (rescannable content) ----
 
     @Query("SELECT * FROM folders ORDER BY createdAt ASC, id ASC")
@@ -62,6 +74,9 @@ interface LumiDao {
     @Insert
     suspend fun insertFolder(folder: FolderEntity): Long
 
+    /** Removes a remembered folder row (its songs are removed separately by payload match). */
+    @Delete
+    suspend fun deleteFolder(folder: FolderEntity)
 
     /** Every stored entry's payload, so a rescan can skip already-stored files. */
     @Query("SELECT payload FROM entries")
