@@ -78,18 +78,23 @@ class LumiViewModel(
 
     // ---- NFC registration flow ----
 
-    private val _registering = MutableStateFlow(false)
-    val registering: StateFlow<Boolean> = _registering.asStateFlow()
+    // ---- tag scan: the "Scan NFC" action of the NFC tags pane ----
 
-    // ---- edit scan: the "Scan NFC" row of the NFC tags pane ----
+    /**
+     * Whether a tag scan is in progress: the next tag read settles it - a
+     * registered tag resolves to its profile page, an unregistered one
+     * enters the registration flow (capture + naming dialog, with the
+     * optional write-to-tag).
+     */
+    private val _scanActive = MutableStateFlow(false)
+    val scanActive: StateFlow<Boolean> = _scanActive.asStateFlow()
 
-    /** Whether an edit scan (a scan aimed at an EXISTING tag's details) is in progress. */
-    private val _editScanActive = MutableStateFlow(false)
-    val editScanActive: StateFlow<Boolean> = _editScanActive.asStateFlow()
-
-    /** The tag a settled edit scan resolved to; consumed by the settings screen (it opens the edit dialog). */
-    private val _pendingEditTag = MutableStateFlow<TagEntity?>(null)
-    val pendingEditTag: StateFlow<TagEntity?> = _pendingEditTag.asStateFlow()
+    /**
+     * The registered tag a settled scan resolved to; consumed by the
+     * settings screen (it opens the tag's profile page).
+     */
+    private val _pendingTagProfile = MutableStateFlow<TagEntity?>(null)
+    val pendingTagProfile: StateFlow<TagEntity?> = _pendingTagProfile.asStateFlow()
 
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
@@ -165,33 +170,31 @@ class LumiViewModel(
 
     /**
      * A tag was detected (a foreground-dispatch read in either play mode
-     * or a tap delivered by intent on cold start, a registration capture,
-     * or an edit-scan read).
+     * or a tap delivered by intent on cold start). While a tag scan is in
+     * progress, the read settles the scan: a registered tag resolves to
+     * its profile page, an unregistered one is captured for the
+     * registration flow.
      * [tag] is the raw NFC tag; during registration it is kept (for a
      * later write) and its lumi payload read for form prefill.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
-        if (_editScanActive.value) {
-            // An edit scan was in progress: settle it. A registered tag
-            // resolves to its edit flow (the settings screen consumes
-            // [pendingEditTag] and opens the edit dialog); an unknown one
-            // reports without starting a registration. Either way the scan
-            // is over, so further reads are normal playback reads.
-            _editScanActive.value = false
+        if (_scanActive.value) {
+            // A tag scan was in progress (the NFC tags pane's "Scan NFC"
+            // action): settle it. A registered tag resolves to its profile
+            // page (the settings screen consumes [pendingTagProfile] and
+            // opens the tag detail page); an unknown one goes into the
+            // registration flow (capture + naming dialog, with the
+            // optional write-to-tag). Either way the scan is over, so
+            // further reads are normal playback reads.
+            _scanActive.value = false
             viewModelScope.launch {
                 val existing = repository.tagByUid(uid)
                 if (existing != null) {
-                    _pendingEditTag.value = existing
+                    _pendingTagProfile.value = existing
                 } else {
-                    event("That tag isn't registered yet.")
+                    capture(uid, tag)
                 }
             }
-            return
-        }
-        if (_registering.value) {
-            // We were waiting to register a tag: capture it.
-            _registering.value = false
-            capture(uid, tag)
             return
         }
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
@@ -319,36 +322,26 @@ class LumiViewModel(
 
     // ---- settings: tags ----
 
-    fun startTagRegistration() {
-        _capturedUid.value = null
-        _editScanActive.value = false
-        _registering.value = true
-    }
-
-    fun cancelTagRegistration() {
-        _registering.value = false
-    }
-
     /**
-     * Starts an edit scan (the NFC tags pane's "Scan NFC" row): the next
-     * tag read resolves to a registered tag's edit flow instead of driving
-     * playback or a registration capture. Reuses the read path registration
-     * already uses - the foreground-dispatch read into [onTagDetected] - so
-     * only the flag checked there differs. Starting here cancels a
-     * registration scan in flight.
+     * Arms a tag scan (the NFC tags pane's "Scan NFC" action): the next
+     * tag read settles it - a registered tag opens its profile page, an
+     * unregistered one goes into the registration flow (capture, naming
+     * dialog, optional write-to-tag). Reuses the app's only read path -
+     * the foreground-dispatch read into [onTagDetected] - so only the
+     * flag checked there differs.
      */
-    fun startTagEditScan() {
-        _registering.value = false
-        _editScanActive.value = true
+    fun startTagScan() {
+        _capturedUid.value = null
+        _scanActive.value = true
     }
 
-    fun cancelTagEditScan() {
-        _editScanActive.value = false
+    fun cancelTagScan() {
+        _scanActive.value = false
     }
 
-    /** Consumes the resolved edit-scan target (the settings screen has opened the edit dialog). */
-    fun consumePendingEditTag() {
-        _pendingEditTag.value = null
+    /** Consumes the resolved scan target (the settings screen has opened the tag's profile page). */
+    fun consumePendingTagProfile() {
+        _pendingTagProfile.value = null
     }
 
     /**

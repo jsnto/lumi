@@ -101,20 +101,19 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
             .assertDoesNotExist()
 
-        // NFC tags: the sub-screen offers registration and the (empty) list.
+        // NFC tags: the sub-screen offers the scan action (a prominent
+        // button above the list, not a row of it) and the (empty) list;
+        // the section's title row has no + button.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        // The "+ Register a tag" pill is now the + button on the section's
-        // title row (found by content description); on the small test screen
-        // it may sit below the viewport, so existence is the layout
-        // assertion.
-        compose.onNodeWithContentDescription("Register a tag").assertExists()
-        compose.onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
+        compose.onNodeWithText("No tags yet. Scan a tag to add it.")
             .assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("NFC tags").assertExists()
-        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
+        compose.onNodeWithText("Scan NFC").assertDoesNotExist()
 
         // Content: the sub-screen offers content management.
         compose.onNodeWithText("Content").performClick()

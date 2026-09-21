@@ -642,27 +642,31 @@ class NfcAlwaysListeningUiTest {
         assertEquals(PlaybackStatus.PLAYING, PlayerStateHolder.state.value.status)
     }
 
-    // ---- registration flow: capture ends the session, receive path stays live ----
+    // ---- tag scan: a captured (unregistered) tag ends the scan, receive path stays live ----
 
     @Test
-    fun registrationSession_capturesPresentedTag_andStaysListening() {
-        setupDb()
+    fun scanSession_capturesUnregisteredTag_andStaysListening() {
+        // No tag is registered: the presented tag is unknown to the app,
+        // so the scan settles into the registration flow (capture).
+        setupDb(tagA = false)
         val controller = startMainActivity()
         val viewModel = viewModelOf(controller.get())
         assertTrue("starts with foreground dispatch live", NfcTestState.foregroundDispatchEnabled)
 
-        viewModel.startTagRegistration()
-        assertTrue("dispatch must stay live while registering", NfcTestState.foregroundDispatchEnabled)
+        viewModel.startTagScan()
+        assertTrue("dispatch must stay live while scanning", NfcTestState.foregroundDispatchEnabled)
 
-        // A tag is presented while registering; it arrives via the
-        // foreground-dispatch intent exactly like a main-page read.
+        // A tag is presented while scanning; it arrives via the
+        // foreground-dispatch intent exactly like a main-page read. The
+        // scan's settle does a Room lookup before the capture, so wait for
+        // the capture itself, not just the flag.
         sendTag(controller, UID_A)
-        idleUntil({ !viewModel.registering.value })
+        idleUntil({ viewModel.capturedUid.value == UID_A })
         compose.waitForIdle()
-        assertFalse("a captured tag must end the registration", viewModel.registering.value)
+        assertFalse("a captured tag must end the scan", viewModel.scanActive.value)
         assertEquals(UID_A, viewModel.capturedUid.value)
         assertTrue(
-            "the receive path must stay live after the registration session",
+            "the receive path must stay live after the scan session",
             NfcTestState.foregroundDispatchEnabled,
         )
     }

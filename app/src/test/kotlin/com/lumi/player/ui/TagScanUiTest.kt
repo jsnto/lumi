@@ -4,7 +4,9 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -28,16 +30,19 @@ import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
 
 /**
- * The NFC tags pane's "Scan NFC" row: tapping it arms an edit scan that
- * reuses the app's existing NFC read plumbing - the foreground-dispatch
- * read the tag registration already uses (a tag intent delivered to
- * [MainActivity] as EXTRA_TAG, the same shape the system's foreground
- * dispatch delivers). When a tag is scanned, its UID is looked up among
- * the registered tags: a registered one opens its edit dialog (the name
- * and editable details, the UID read-only), and an unregistered one shows
- * a concise not-registered message and leaves the registration flow
- * untouched. The scan result is driven the same way the NFC tests drive
- * tag reads: [ActivityController.newIntent] -> [MainActivity.onNewIntent].
+ * The NFC tags pane's "Scan NFC" button: the pane's single scan entry
+ * point, a prominent action ABOVE the tag list (not a row of it - the old
+ * "+" register button and the list-row scan are both gone). Tapping it
+ * arms the unified scan, which reuses the app's existing NFC read plumbing
+ * - the foreground-dispatch read the tag registration already uses (a tag
+ * intent delivered to [MainActivity] as EXTRA_TAG, the same shape the
+ * system's foreground dispatch delivers). When a tag is scanned, its UID
+ * is looked up among the registered tags: a registered one opens that
+ * tag's profile page (the tag detail page), and an unregistered one goes
+ * into the registration flow (capture, naming dialog, optional
+ * write-to-tag). The scan result is driven the same way the NFC tests
+ * drive tag reads: [ActivityController.newIntent] ->
+ * [MainActivity.onNewIntent].
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -46,7 +51,7 @@ import org.robolectric.shadows.ShadowToast
     shadows = [ShadowNfcAdapterForTest::class],
 )
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class TagEditScanUiTest {
+class TagScanUiTest {
 
     @get:Rule
     val compose = createEmptyComposeRule()
@@ -155,25 +160,48 @@ class TagEditScanUiTest {
     }
 
     @Test
-    fun scanNfcRow_isPresentInTheNfcTagsPane_andOpensTheScan() {
+    fun scanNfcButtonIsThePaneAction_notAListRow_andArmsTheScan() {
         seedTag(REGISTERED_UID, "Porch")
-        startMainActivity()
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
-        // The row matches the pane's pattern: an Nfc-chipped setting row
-        // with a title and a detail line.
+        // The button reads as an action, not as another row of the list:
+        // it carries the click, and the old row's detail line is gone.
+        compose.onNodeWithText("Scan NFC").assertHasClickAction()
         compose.onNodeWithText("Scan NFC").assertIsDisplayed()
-        compose.onNodeWithText("Scan a registered tag to open its details").assertExists()
+        compose.onNodeWithText("Scan a registered tag to open its details").assertDoesNotExist()
 
-        // Tapping it arms the scan: the scan dialog (the registration scan
-        // dialog's shape) appears.
+        // The section's old + button is gone: no "Register a tag" action
+        // anywhere in the pane.
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
+
+        // Visually separated from the list: the button sits ABOVE the
+        // section card (the top bar carries the same title, so the LOWER
+        // of the "NFC tags" nodes is the section's title row).
+        val button = compose.onNodeWithText("Scan NFC").fetchSemanticsNode()
+        val sectionTitle = compose
+            .onAllNodesWithText("NFC tags")
+            .fetchSemanticsNodes()
+            .maxBy { it.boundsInRoot.top }
+        assertTrue(
+            "the scan button must sit above the tag list section " +
+                "(button bottom=${button.boundsInRoot.bottom}, section top=${sectionTitle.boundsInRoot.top})",
+            button.boundsInRoot.bottom < sectionTitle.boundsInRoot.top,
+        )
+
+        // Tapping it arms the scan: the unified scan dialog appears, with
+        // copy that names ANY tag (the scan goes either to a profile page
+        // or into registration).
         compose.onNodeWithText("Scan NFC").performClick()
         compose.waitForIdle()
+        assertTrue("tapping the button must arm the scan", viewModel.scanActive.value)
         compose.onNodeWithText("Scan a tag").assertIsDisplayed()
+        compose.onNodeWithText("Hold the back of the phone against any NFC tag…").assertExists()
     }
 
     @Test
-    fun scanOfRegisteredTag_opensTheEditFlow() {
+    fun scanDialogCancel_dismissesWithoutArmedScan() {
         seedTag(REGISTERED_UID, "Porch")
         val controller = startMainActivity()
         val viewModel = viewModelOf(controller.get())
@@ -181,26 +209,57 @@ class TagEditScanUiTest {
 
         compose.onNodeWithText("Scan NFC").performClick()
         compose.waitForIdle()
-        assertTrue("tapping the row must arm the edit scan", viewModel.editScanActive.value)
+        compose.onNodeWithText("Scan a tag").assertIsDisplayed()
+
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+        assertFalse("cancel must disarm the scan", viewModel.scanActive.value)
+        compose.onNodeWithText("Scan a tag").assertDoesNotExist()
+    }
+
+    @Test
+    fun scanOfRegisteredTag_opensTheTagProfilePage() {
+        seedTag(REGISTERED_UID, "Porch")
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
+        openNfcTagsPane()
+
+        compose.onNodeWithText("Scan NFC").performClick()
+        compose.waitForIdle()
+        assertTrue("tapping the button must arm the scan", viewModel.scanActive.value)
         compose.onNodeWithText("Scan a tag").assertIsDisplayed()
 
         // A registered tag is presented: the read arrives through the
         // foreground-dispatch path, exactly like a registration scan read.
         sendTag(controller, REGISTERED_UID)
-        idleUntil({ !viewModel.editScanActive.value })
-        waitForText("Edit tag")
+        idleUntil({ !viewModel.scanActive.value })
+        waitForText("Tag details")
 
-        // The scan dialog closed and the tag's edit dialog opened: title,
-        // the read-only UID as context, Save / Cancel.
+        // The scan dialog closed and the tag's PROFILE page opened (not an
+        // edit dialog): the page shows the tag's details, its (empty)
+        // song list, and the danger zone. The top bar carries the tag's
+        // name too, so the name appears twice (top bar + details row).
         compose.onNodeWithText("Scan a tag").assertDoesNotExist()
-        compose.onNodeWithText("Edit tag").assertIsDisplayed()
-        compose.onNodeWithText("ID: $REGISTERED_UID").assertExists()
-        compose.onNodeWithText("Save").assertIsDisplayed()
-        compose.onNodeWithText("Cancel").assertIsDisplayed()
+        compose.onNodeWithText("Tag details").assertExists()
+        assertEquals(
+            "the top bar and the details row must both show the tag's name",
+            2,
+            compose.onAllNodesWithText("Porch").fetchSemanticsNodes().size,
+        )
+        compose.onNodeWithText(REGISTERED_UID).assertExists()
+        compose.onNodeWithText("This tag plays nothing yet.").assertExists()
+        compose.onNodeWithText("Danger zone").assertExists()
+        // The edit dialog is NOT what a scan opens.
+        compose.onNodeWithText("Edit tag").assertDoesNotExist()
+        // The resolved target is consumed, so a later scan can re-trigger.
+        idleUntil({ viewModel.pendingTagProfile.value == null })
+        assertNull("the resolved tag must be consumed", viewModel.pendingTagProfile.value)
     }
 
     @Test
-    fun scanOfUnregisteredTag_showsNotRegisteredMessage_andLeavesRegistrationUntouched() {
+    fun scanOfUnregisteredTag_entersTheRegistrationFlow_andSaves() {
+        // A different tag is registered: it must not be what the scan
+        // resolves to (the scanned tag is unknown).
         seedTag(REGISTERED_UID, "Porch")
         val controller = startMainActivity()
         val viewModel = viewModelOf(controller.get())
@@ -208,60 +267,50 @@ class TagEditScanUiTest {
 
         compose.onNodeWithText("Scan NFC").performClick()
         compose.waitForIdle()
-        assertTrue("tapping the row must arm the edit scan", viewModel.editScanActive.value)
+        assertTrue("tapping the button must arm the scan", viewModel.scanActive.value)
 
-        // An unknown tag is presented: the scan settles with the message
-        // and no edit dialog.
+        // An unknown tag is presented: the scan settles into the
+        // registration flow (capture + naming dialog).
         sendTag(controller, UNREGISTERED_UID)
-        idleUntil({ !viewModel.editScanActive.value })
+        idleUntil({ viewModel.capturedUid.value == UNREGISTERED_UID })
         compose.waitForIdle()
-        ShadowLooper.idleMainLooper()
+        assertFalse("a captured tag must end the scan", viewModel.scanActive.value)
+        compose.onNodeWithText("Scan a tag").assertDoesNotExist()
+        compose.onNodeWithText("Tag captured").assertIsDisplayed()
+        compose.onNodeWithText("ID: $UNREGISTERED_UID").assertExists()
 
+        // Saving registers the tag: the toast lands once the Room write
+        // settles, the naming dialog closes, and the tag row joins the list.
+        compose.onNodeWithText("Save").performClick()
+        idleUntil({ ShadowToast.getTextOfLatestToast() == "Tag added!" })
+        compose.waitForIdle()
+        compose.onNodeWithText("Tag captured").assertDoesNotExist()
+        waitForText(UNREGISTERED_UID)
+        compose.onNodeWithText("Porch").assertExists()
+    }
+
+    @Test
+    fun scanSettlesOnTheFirstRead_secondReadIsAPlaybackRead() {
+        seedTag(REGISTERED_UID, "Porch")
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller.get())
+        openNfcTagsPane()
+
+        compose.onNodeWithText("Scan NFC").performClick()
+        compose.waitForIdle()
+        sendTag(controller, REGISTERED_UID)
+        idleUntil({ !viewModel.scanActive.value })
+        waitForText("Tag details")
+
+        // The scan is over: a further read of the same tag is a normal
+        // playback read (the tag has no songs, so it reports, not opens).
+        sendTag(controller, REGISTERED_UID)
+        idleUntil({ ShadowToast.getTextOfLatestToast() == "Nothing is linked to Porch yet." })
         assertEquals(
-            "That tag isn't registered yet.",
+            "Nothing is linked to Porch yet.",
             ShadowToast.getTextOfLatestToast(),
         )
-        compose.onNodeWithText("Edit tag").assertDoesNotExist()
-        compose.onNodeWithText("Scan a tag").assertDoesNotExist()
-        // The registration flow is untouched: no registration session
-        // started, no tag captured.
-        assertFalse("an unknown scan must not start a registration", viewModel.registering.value)
-        assertNull("an unknown scan must not capture the tag", viewModel.capturedUid.value)
-    }
-
-    @Test
-    fun scansDoNotStack_armingOneScanCancelsTheOther() {
-        seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
-        val viewModel = viewModelOf(controller.get())
-        openNfcTagsPane()
-
-        // Arm the edit scan, then arm a registration: only one scan may be
-        // armed - the registration wins and the edit scan is dropped.
-        compose.onNodeWithText("Scan NFC").performClick()
-        compose.waitForIdle()
-        assertTrue("tapping the row must arm the edit scan", viewModel.editScanActive.value)
-        viewModel.startTagRegistration()
-        compose.waitForIdle()
-        assertFalse("arming a registration must cancel the edit scan", viewModel.editScanActive.value)
-        assertTrue("the registration must be armed", viewModel.registering.value)
-
-        // A read that now lands settles the REGISTRATION (it is captured),
-        // not a stale edit scan (which would open the edit dialog instead).
-        sendTag(controller, REGISTERED_UID)
-        idleUntil({ viewModel.capturedUid.value == REGISTERED_UID })
-        assertNull("a stale edit scan must not have resolved a tag", viewModel.pendingEditTag.value)
-        compose.onNodeWithText("Edit tag").assertDoesNotExist()
-
-        // The reverse: arming an edit scan while a registration is armed
-        // cancels the registration.
-        viewModel.startTagRegistration()
-        compose.waitForIdle()
-        assertTrue("the registration must be armed again", viewModel.registering.value)
-        viewModel.startTagEditScan()
-        compose.waitForIdle()
-        assertFalse("arming an edit scan must cancel the registration", viewModel.registering.value)
-        assertTrue("the edit scan must be armed", viewModel.editScanActive.value)
+        assertNull("no second profile resolution must be pending", viewModel.pendingTagProfile.value)
     }
 
     companion object {

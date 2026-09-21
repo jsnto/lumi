@@ -94,18 +94,18 @@ class SettingsBackNavUiTest {
         // Open the tags sub-screen from the (top) of the menu.
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        // The "+ Register a tag" pill is now the + button on the section's
-        // title row (found by content description); on the small test screen
-        // it may sit below the viewport, so existence is the layout
-        // assertion.
-        compose.onNodeWithContentDescription("Register a tag").assertExists()
+        // The pane's scan action is on screen (on the small test screen it
+        // may sit above or below the viewport, so existence is the layout
+        // assertion); the section has no + button.
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
 
         // The first back unwinds the sub-screen to the menu; it must NOT pop
         // settings away.
         systemBack(activity)
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("NFC tags").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Register a tag").assertDoesNotExist()
+        compose.onNodeWithText("Scan NFC").assertDoesNotExist()
 
         // The second back leaves the menu entirely and returns to the
         // player screen.
