@@ -20,6 +20,12 @@ data class TagEntity(
  *
  * [type] is the [EntryType.storageValue]; [payload] carries the type-specific
  * data (a file URI for audio/video, a URL for url entries).
+ *
+ * [folderId] marks a row imported from a folder (that folder's [FolderEntity.id]):
+ * such songs stay OUT of the individual content list - they are visible only
+ * inside their folder's page. Rows the user added one by one carry no marker
+ * (`folderId == null`); a folder's removal clears the marker off its rows so
+ * the songs that are not deleted degrade into the individual list.
  */
 @Entity(tableName = "entries")
 data class EntryEntity(
@@ -28,6 +34,7 @@ data class EntryEntity(
     val label: String,
     val payload: String,
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(name = "folder_id") val folderId: Long? = null,
 )
 
 /**

@@ -95,7 +95,7 @@ class PlayModeItemUiTest {
         assertFlushRight(addContent, screenRight, density, 36 + 4)
         assertOnTitleRow(
             addContent,
-            "Content",
+            "Individual content",
             compose.onNodeWithText("Nothing here yet. Add a song.").fetchSemanticsNode(),
         )
 

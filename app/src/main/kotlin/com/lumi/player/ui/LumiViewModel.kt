@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,6 +77,9 @@ class LumiViewModel(
 
     /** Added folder trees, each rescannable for new songs. */
     fun observeFolders(): Flow<List<FolderEntity>> = repository.observeFolders()
+
+    /** The individual content list: the stored rows with no folder marker. */
+    fun observeIndividualEntries(): Flow<List<EntryEntity>> = repository.observeIndividualEntries()
 
     // ---- NFC registration flow ----
 
@@ -165,6 +169,12 @@ class LumiViewModel(
                 }
             }
         }
+        // Best-effort v3 -> v4 backfill: content rows stored before the
+        // folder marker existed are stamped with the folder that imported
+        // them (the same tree walk the folder page uses); a folder that can
+        // no longer be read degrades to its songs appearing in the
+        // individual content list (its rows keep no marker).
+        viewModelScope.launch { backfillFolderEntries() }
     }
 
     // ---- NFC events from the activity ----
@@ -486,7 +496,7 @@ class LumiViewModel(
             // Remember the folder so it can be rescanned later for new songs.
             // The label query is a ContentResolver read, so keep it off the main thread.
             val label = withContext(Dispatchers.IO) { folderDisplayName(treeUri) }
-            repository.rememberFolder(treeUri.toString(), label)
+            val folder = repository.rememberFolder(treeUri.toString(), label)
             val scanned = try {
                 withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
             } catch (e: Exception) {
@@ -504,7 +514,7 @@ class LumiViewModel(
                 return@launch
             }
             val fresh = scanned.count {
-                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri) != null
+                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id) != null
             }
             event(
                 when {
@@ -543,7 +553,7 @@ class LumiViewModel(
                 emptyList()
             }
             newSongs.forEach {
-                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri)
+                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id)
             }
             event(
                 when {
@@ -898,17 +908,53 @@ class LumiViewModel(
         }
 
     /**
-     * Adds a freshly picked song file onto a tag: persists the SAF grant,
-     * then stores the entry and appends it to the tag's song list in one
-     * transaction, so the tag's list gains the new song with a single pick.
-     * The song list is associated by the tag's UID in the database, so no
-     * tag write is involved.
+     * The v3 -> v4 backfill (see [com.lumi.player.data.LumiDatabase.MIGRATION_3_4]):
+     * content rows stored before the folder marker existed are stamped with
+     * the folder that imported them, re-walking each remembered folder with
+     * the same tree walk the folder page uses. Best-effort by design: a
+     * folder whose tree can no longer be read (a revoked grant) is logged
+     * and skipped, so its songs keep no marker and appear in the individual
+     * content list; a file deleted from the tree since the add is the same
+     * (its row keeps no marker). Rows already stamped (by an add after the
+     * marker existed) are never re-stamped.
      */
-    fun addSongToTag(uri: Uri, tagId: Long, displayName: String?) {
+    internal suspend fun backfillFolderEntries() {
+        val folders = repository.observeFolders().first()
+        if (folders.isEmpty()) return
+        folders.forEach { folder ->
+            val payloads: Set<String>? = try {
+                withContext(Dispatchers.IO) {
+                    collectAudioFiles(folder.uri) { folderUri ->
+                        folderChildrenAttributed(Uri.parse(folderUri))
+                    }.map { it.uri }.toSet()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to backfill the songs of folder ${folder.uri}", e)
+                null
+            }
+            if (!payloads.isNullOrEmpty()) {
+                repository.markEntriesFromFolder(folder.id, payloads)
+            }
+        }
+    }
+
+    /**
+     * Links an already-stored content entry to the end of the tag's song
+     * list - the in-app add-song flow: a tag's list is an assignment over
+     * the app's existing content (individual or folder-imported alike), so
+     * the pick links the stored row instead of storing a new one. When the
+     * tag already plays the song (its list carries an entry with the same
+     * label) the pick is reported instead of silently duplicating the
+     * link.
+     */
+    fun linkEntryToTag(tag: TagEntity, entry: EntryEntity) {
         viewModelScope.launch {
-            if (!persistReadGrant(uri)) return@launch
-            val entry = repository.addEntryToTag(tagId, EntryType.AUDIO, displayName ?: "Untitled", uri.toString())
-            event(if (entry != null) "Song added to the tag" else "Could not add the song to that tag.")
+            if (repository.entriesForTag(tag.id).any { it.label == entry.label }) {
+                event("That song is already on the tag.")
+                return@launch
+            }
+            val linked = repository.linkEntryToTag(tag.id, entry.id)
+            event(if (linked) "Song added to the tag" else "Could not add the song to that tag.")
         }
     }
 
