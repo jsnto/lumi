@@ -38,8 +38,9 @@ import org.robolectric.shadows.ShadowLooper
  * link order - the play order - and survives a navigation round trip; a
  * drag that ends where it started persists nothing; the held handle
  * consumes the move so the page's scroll never runs; sub-pitch moves
- * settle where the pointer says; a handle that finished a drag starts
- * the next one) - an
+ * settle where the pointer says; a multi-move drag that crosses the swap
+ * boundary mid-drag settles where the pointer releases; a handle that
+ * finished a drag starts the next one) - an
  * add-song action aimed at THIS tag, and a danger zone that deletes the
  * tag. The add-song action opens the in-app content
  * list (the app's existing content, individual or folder-imported): a
@@ -644,6 +645,45 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The drag settled where the pointer said: one row down.
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+        compose.waitForIdle()
+        val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the page shows the settled order", bTop > 0f && bTop < aTop)
+    }
+
+    @Test
+    fun aMultiMoveDragReleasingOnePitchDownSettlesOneRowDown() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // A multi-move drag that crosses the swap boundary mid-drag and
+        // releases exactly one pitch down: the pointer position says one
+        // row down even though the row re-laid itself there mid-drag.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch * 0.6f))
+            moveBy(Offset(0f, pitch * 0.4f))
+            up()
+        }
+        compose.waitForIdle()
+
+        // The drag settles where the pointer released: one row down.
         idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
         compose.waitForIdle()
         val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top

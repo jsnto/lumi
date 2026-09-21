@@ -1057,11 +1057,12 @@ private fun ReorderableSongList(
     // The order the last completed drag wrote, shown until the observed
     // list echoes it back - so releasing a drag never snaps the list back
     // to the pre-drag order for a frame while the write lands. The
-    // baseline is the observed list at that release: an observed list
-    // that settles to something that is neither the baseline nor the
-    // pending order means the write did not land as dragged (the list
-    // changed in flight), and the provisional order is dropped so the
-    // page shows the observed list.
+    // baseline is the list the drag previewed from (captured when the
+    // drag's snapshot is taken): an observed list that settles to
+    // something that is neither the baseline nor the pending order means
+    // the write did not land as dragged (the list changed in flight),
+    // and the provisional order is dropped so the page shows the
+    // observed list.
     var pending by remember { mutableStateOf<List<EntryEntity>?>(null) }
     var pendingBaseline by remember { mutableStateOf<List<EntryEntity>?>(null) }
     LaunchedEffect(pending, pendingBaseline, observed) {
@@ -1096,12 +1097,14 @@ private fun ReorderableSongList(
         if (pitchPx <= 0f) return
         val shown = displayedList()
         if (dragStartIndex < 0) {
-            // First move of the drag: snapshot the order and mark the row.
+            // First move of the drag: snapshot the order (the baseline the
+            // pending order is echoed against) and mark the row.
             val start = shown.indexOfFirst { it.id == entryId }
             if (start < 0) return
             dragStartIndex = start
             dragCurrentIndex = start
             order = shown
+            pendingBaseline = shown
             draggedId = entryId
         }
         val target = (dragStartIndex + (totalDeltaY / pitchPx).roundToInt())
@@ -1117,7 +1120,6 @@ private fun ReorderableSongList(
         if (dragStartIndex < 0) return
         if (dragCurrentIndex != dragStartIndex) {
             pending = order
-            pendingBaseline = observed
             onReordered(order)
         }
         draggedId = null
