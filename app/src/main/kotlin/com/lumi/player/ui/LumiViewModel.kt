@@ -698,20 +698,27 @@ class LumiViewModel(
 
     /**
      * The label for a picked folder: the `_display_name` of the folder's own
-     * row, read at the folder's own document uri (see the [folderChildren]
-     * seam's grammar note - the tree uri itself is NOT a listing uri, so the
-     * label is a single-row document query, not a listing read). The
-     * provider may still answer empty (or throw, e.g. on a revoked grant),
-     * so the read is guarded and any provider failure falls back to the uri
-     * string instead of aborting the add.
+     * row, read at the folder's own tree-scoped document uri (see the
+     * [folderChildren] seam's grammar note - the tree uri itself is NOT a
+     * listing uri, so the label is a single-row document query, not a
+     * listing read - and the treeless document uri is not authorized under
+     * the tree grant). The provider may still answer empty (or throw, e.g.
+     * on a revoked grant), so the read is guarded and any provider failure
+     * falls back to the uri string instead of aborting the add.
      */
     private fun folderDisplayName(treeUri: Uri): String =
         try {
             context.contentResolver
-                .query(Uri.parse(documentUri(treeUri, folderDocIdOf(treeUri))), arrayOf("_display_name"), null, null, null)
+                .query(
+                    Uri.parse(documentUri(treeUri, treeIdOf(treeUri), folderDocIdOf(treeUri))),
+                    arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )
                 ?.use { cursor ->
                     if (!cursor.moveToFirst()) return@use null
-                    cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
+                    cursor.getString(cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
                 }
                 ?.ifEmpty { null }
                 ?: treeUri.toString()
@@ -723,64 +730,83 @@ class LumiViewModel(
      * Test seam: the documents provider's folder listing (a folder uri to
      * its direct children), replaced in unit tests with a fake tree.
      *
-     * The real documents provider's query grammar (AOSP
-     * `android.provider.DocumentsProvider`, API 26-35) answers exactly the
-     * shapes `document/<docId>` (the document's own row),
-     * `document/<docId>/children` (its direct children - files and
-     * subfolders alike, NO root row) and the tree-scoped twins
-     * `tree/<treeId>/document/<docId>(/children)`. EVERY other shape - in
-     * particular the tree uri itself (`tree/<treeId>`) and any `child/...`
-     * listing - is refused with `UnsupportedOperationException`: that
-     * rejection is what used to make every folder scan die at its first
-     * query and surface as the generic "Couldn't read that folder's songs."
-     * So this seam lists every folder - the tree's root and each subfolder
-     * alike - at `document/<docId>/children`, and a folder's node uri is
-     * always its own document uri, never the tree uri and never a `child/`
-     * uri. (The tree-scoped twins are additionally gated by the provider's
-     * descendant-containment check, which the stock providers answer
-     * `false` for - the plain `document/` shapes are the ones that work on
-     * every provider.)
+     * The SAF picker persists a grant on the picked tree uri
+     * (`tree/<treeId>`), and the framework's permission check authorizes
+     * ONLY the tree-scoped shapes under that grant: every treeless
+     * `document/<docId>(/children)` query against the tree's provider is
+     * rejected with `SecurityException: Permission Denial ... requires
+     * that you obtain access using ACTION_OPEN_DOCUMENT` (device-proven on
+     * Android 14 - that denial is what made the pre-fix treeless seam
+     * import zero songs for EVERY folder and surface the generic "Couldn't
+     * read that folder's songs."). So this seam lists every folder - the
+     * tree's root and each subfolder alike - at the tree-scoped
+     * `tree/<treeId>/document/<docId>/children` under the grant's own
+     * treeId, and a folder's node uri is its own tree-scoped document uri
+     * `tree/<treeId>/document/<docId>` - never the bare tree uri (the
+     * provider's matcher has no entry for a bare tree uri) and never a
+     * treeless
+     * `document/` uri (the permission layer denies it under the tree
+     * grant).
      *
      * A picked tree's docIds contain `/` and `:` (e.g.
      * `primary:Music/Album/song.mp3`), so every uri this seam builds carries
-     * the docId percent-encoded into ONE path segment (`Uri.encode(docId,
-     * null)` + `encodedPath`): a raw docId splits the path into extra
-     * segments the provider no longer recognizes as a document uri (refused
-     * with `UnsupportedOperationException`), and a stored payload would be a
-     * uri the player can't open either.
+     * the treeId and the docId each percent-encoded into ONE path segment
+     * (`Uri.encode(id, null)` + `encodedPath`), and a stored payload is
+     * openable under the tree grant alone (device-proven: the treeless
+     * `document/<docId>` payload fails with a SecurityException under the
+     * same grant, the tree-scoped one opens).
      *
-     * Rows are directories when their `_mime_type` is
-     * `vnd.android.document/directory` ([DocumentsContract.Document.MIME_TYPE_DIR]):
-     * the real providers mark directories that way. The `_flags` bit 0 is
-     * `FLAG_SUPPORTS_THUMBNAIL` on API 26+ - a flags-based check would
-     * misread every subfolder as a file and every thumbnailable file as a
-     * subfolder.
+     * The provider's cursor carries the DocumentsContract columns
+     * `document_id`, `_display_name` and `mime_type` - the constants
+     * [DocumentsContract.Document.COLUMN_DOCUMENT_ID],
+     * [DocumentsContract.Document.COLUMN_DISPLAY_NAME] and
+     * [DocumentsContract.Document.COLUMN_MIME_TYPE] (NOT the `_id`/
+     * `_mime_type` names the treeless seam read - the real provider's
+     * cursor has no such columns, so that read crashed on the first row -
+     * device-proven), and rows are directories when their `mime_type` is
+     * `vnd.android.document/directory` ([DocumentsContract.Document.MIME_TYPE_DIR]).
      *
      * The tree uri's docId is its second path segment; a trailing
      * `:openable` picker suffix on that segment (android.net.Uri has no
      * `:`-fragment parsing, so it rides in the path) is stripped before the
-     * query - the provider answers only the bare docId. The folders table
-     * stores the picker uri verbatim (normalization is at query time only).
+     * query - the provider answers only the bare docId. The strip applies
+     * to the picker's tree uri ONLY: the tree-scoped node uris this seam
+     * builds never carry it, and a raw docId may legitimately end in
+     * `:openable` (legal on ext4), so a subfolder's docId is used verbatim.
+     * The folders table stores the picker uri verbatim (normalization is at
+     * query time only).
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
+        val treeId = treeIdOf(folderUri)
         val docId = folderDocIdOf(folderUri)
         context.contentResolver
-            .query(listChildrenUri(folderUri, docId), null, null, null, null)
+            .query(
+                listChildrenUri(folderUri, treeId, docId),
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null,
+                null,
+                null,
+            )
             ?.use { cursor ->
-                val docIdColumn = cursor.getColumnIndexOrThrow("_id")
-                val nameColumn = cursor.getColumnIndexOrThrow("_display_name")
-                val mimeColumn = cursor.getColumnIndexOrThrow("_mime_type")
+                val docIdColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
                 buildList {
                     while (cursor.moveToNext()) {
                         val rawDocId = cursor.getString(docIdColumn) ?: continue
-                        // The child's own document uri is the walk node for a
-                        // subfolder AND the stored payload for a file - one
-                        // uri shape for both.
+                        // The child's own tree-scoped document uri is the
+                        // walk node for a subfolder AND the stored payload
+                        // for a file - one uri shape for both, openable
+                        // under the tree grant alone.
                         add(
                             FolderChild(
                                 displayName = cursor.getString(nameColumn) ?: "",
                                 isDirectory = cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR,
-                                childUri = documentUri(folderUri, rawDocId),
+                                childUri = documentUri(folderUri, treeId, rawDocId),
                             ),
                         )
                     }
@@ -790,43 +816,64 @@ class LumiViewModel(
     }
 
     /**
-     * The docId of the folder a listing is asked for: the tree uri carries
-     * it as its second path segment (a trailing `:openable` picker suffix on
-     * that segment is stripped - the provider answers only the bare docId),
-     * and every other node uri this seam builds is a plain
-     * `document/<docId>` uri, whose docId is the same second segment (the
-     * percent-encoding is already undone by [Uri.pathSegments]).
+     * The grant's own treeId: the picker's tree uri carries it as its
+     * second path segment (a trailing `:openable` picker suffix on that
+     * segment is stripped - the provider answers only the bare docId), and
+     * every tree-scoped node uri this seam builds carries the same
+     * (already-stripped) treeId as its second segment, verbatim.
+     */
+    private fun treeIdOf(folderUri: Uri): String {
+        val segments = folderUri.pathSegments
+        if (segments.firstOrNull() != "tree") return ""
+        val treeId = segments.getOrNull(1) ?: return ""
+        return if (segments.size == 2) treeId.removeSuffix(":openable") else treeId
+    }
+
+    /**
+     * The docId of the folder a listing is asked for: the picker's tree
+     * uri carries it as its second path segment (a trailing `:openable`
+     * picker suffix on that segment is stripped - the provider answers
+     * only the bare docId), and a tree-scoped node uri
+     * (`tree/<treeId>/document/<docId>`) carries it as its fourth path
+     * segment, verbatim (the percent-encoding is already undone by
+     * [Uri.pathSegments]).
      *
-     * The `:openable` strip applies to the tree uri ONLY - the picker
-     * appends it to the tree uri's docId segment and to nothing else. The
-     * subfolder node uris this seam builds never carry it, so their docId
-     * is used verbatim: a raw docId may legitimately end in `:openable`
-     * (legal on ext4), and stripping it there would corrupt the children
-     * listing and lose a fully readable folder.
+     * The `:openable` strip applies to the picker's tree uri ONLY - the
+     * picker appends it to the tree uri's docId segment and to nothing
+     * else. The tree-scoped node uris this seam builds never carry it, so
+     * a subfolder's docId is used verbatim: a raw docId may legitimately
+     * end in `:openable` (legal on ext4), and stripping it there would
+     * corrupt the children listing and lose a fully readable folder.
      */
     private fun folderDocIdOf(folderUri: Uri): String {
-        val docId = folderUri.pathSegments.getOrNull(1) ?: return ""
-        return if (folderUri.pathSegments.firstOrNull() == "tree") {
-            docId.removeSuffix(":openable")
-        } else {
-            docId
+        val segments = folderUri.pathSegments
+        return when {
+            // A tree-scoped node uri: the docId is the fourth segment, verbatim.
+            segments.size == 4 && segments.getOrNull(0) == "tree" && segments.getOrNull(2) == "document" ->
+                segments.getOrNull(3).orEmpty()
+            // The picker's tree uri: the docId is the second segment, with the
+            // optional `:openable` picker suffix stripped.
+            segments.getOrNull(0) == "tree" -> segments.getOrNull(1)?.removeSuffix(":openable").orEmpty()
+            // The walk never builds any other uri; kept verbatim for the
+            // tests' synthetic tree uris.
+            else -> segments.getOrNull(1).orEmpty()
         }
     }
 
-    /** A folder's children listing uri `scheme://authority/document/<docId>/children`, the docId percent-encoded into a single path segment. */
-    private fun listChildrenUri(folderUri: Uri, docId: String): Uri =
+    /** A folder's children listing uri `scheme://authority/tree/<treeId>/document/<docId>/children`, the treeId and the docId each percent-encoded into a single path segment. */
+    private fun listChildrenUri(folderUri: Uri, treeId: String, docId: String): Uri =
         Uri.Builder()
             .scheme(folderUri.scheme)
             .authority(folderUri.authority)
-            .encodedPath("/document/${Uri.encode(docId, null)}/children")
+            .encodedPath("/tree/${Uri.encode(treeId, null)}/document/${Uri.encode(docId, null)}/children")
             .build()
 
-    /** A child's own uri `scheme://authority/document/<docId>` built from [folderUri]'s scheme + authority, the docId percent-encoded into a single path segment. It is the walk node for a subfolder AND the stored payload for a file. */
-    private fun documentUri(folderUri: Uri, docId: String): String =
+    /** A child's own uri `scheme://authority/tree/<treeId>/document/<docId>` built from [folderUri]'s scheme + authority, the treeId and the docId each percent-encoded into a single path segment. It is the walk node for a subfolder AND the stored payload for a file - openable under the tree grant alone. */
+    private fun documentUri(folderUri: Uri, treeId: String, docId: String): String =
         Uri.Builder()
             .scheme(folderUri.scheme)
             .authority(folderUri.authority)
-            .encodedPath("/document/${Uri.encode(docId, null)}")
+            .encodedPath("/tree/${Uri.encode(treeId, null)}/document/${Uri.encode(docId, null)}")
             .build()
             .toString()
 

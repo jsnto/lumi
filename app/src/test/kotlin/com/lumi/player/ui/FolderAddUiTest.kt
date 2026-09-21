@@ -267,9 +267,10 @@ class FolderAddUiTest {
     /**
      * A documents provider that answers every query with a zero-row cursor:
      * a folder whose root has no direct children. The label read (the
-     * folder's own document row) and the root listing (the folder's
-     * children listing) can both answer a zero-row cursor, so the guarded
-     * reads are what let the add complete - and add nothing.
+     * folder's own tree-scoped document row) and the root listing (the
+     * folder's tree-scoped children listing) can both answer a zero-row
+     * cursor, so the guarded reads are what let the add complete - and add
+     * nothing.
      */
     private fun registerEmptyTreeProvider() {
         val provider = object : ContentProvider() {
@@ -280,7 +281,7 @@ class FolderAddUiTest {
                 selection: String?,
                 selectionArgs: Array<out String>?,
                 sortOrder: String?,
-            ): Cursor? = MatrixCursor(arrayOf("_id", "_display_name", "_flags", "_mime_type"))
+            ): Cursor? = MatrixCursor(arrayOf("document_id", "_display_name", "flags", "mime_type"))
             override fun getType(uri: Uri): String? = null
             override fun insert(uri: Uri, values: ContentValues?): Uri? = null
             override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0

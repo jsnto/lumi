@@ -35,30 +35,35 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * The on-device read failure the folder-import fix targets, pinned against
- * a provider that enforces the REAL documents-provider uri grammar (AOSP
- * `android.provider.DocumentsProvider`, API 26-35).
+ * a provider that enforces the REAL SAF tree-grant grammar (the framework's
+ * permission check + AOSP `android.provider.DocumentsProvider`, API 26-35).
  *
- * The pre-fix seam listed the root at the tree uri itself
- * (`tree/<treeId>`) and subfolders at a `child/<treeSeg>:tree/<docId>`
- * listing uri, and decided a row was a directory from the `_flags` bit 0.
- * The real provider's matcher answers ONLY `document/<docId>`,
- * `document/<docId>/children` and the tree-scoped twins
- * `tree/<treeId>/document/<docId>(/children)`: the tree uri itself and any
- * `child/...` uri are refused with `UnsupportedOperationException` (and the
- * tree-scoped twins are gated by the stock provider's
- * descendant-containment check), so EVERY folder scan died at its first
- * query and surfaced as the generic "Couldn't read that folder's songs."
- * On top of that, the real providers mark directories by `_mime_type`
- * (`vnd.android.document/directory`), not by a flags bit - the pre-fix
- * flags check misread every subfolder as a file (never recursed) and every
- * thumbnailable file as a subfolder.
+ * The pre-fix seam queried the treeless `document/<docId>(/children)`
+ * shapes - the label read, the root listing and every subfolder listing -
+ * and read the `_id`/`_mime_type` columns. The SAF permission layer
+ * authorizes ONLY the tree-scoped shapes under the tree grant: every
+ * treeless query is rejected with
+ * `SecurityException: Permission Denial ... requires that you obtain
+ * access using ACTION_OPEN_DOCUMENT` (device-proven on Android 14), so
+ * EVERY folder add imported zero songs and surfaced as the generic
+ * "Couldn't read that folder's songs."; and the real provider's cursor
+ * exposes the `document_id`/`_display_name`/`mime_type` columns, so the
+ * `_id`/`_mime_type` read would crash on the first row anyway. On top of
+ * that, the real providers mark directories by `mime_type`
+ * (`vnd.android.document/directory`), not by a flags bit - a flags check
+ * misreads every subfolder as a file and every thumbnailable file as a
+ * subfolder.
  *
- * [StrictDocumentsProvider] encodes that grammar and is registered by
- * authority; the PRODUCTION [LumiViewModel.folderChildren] seam (NOT
- * replaced) is driven against it. The counterfactual tests pin the
- * rejection of the pre-fix uri shapes; the import tests prove the fixed
- * seam walks the same tree end-to-end (root files, subfolder files, the
- * stored payload shape, and the rescan no-op).
+ * [StrictDocumentsProvider] encodes that grammar (the tree-scoped shapes
+ * answer, gated by the enforceTree descendant check; the treeless shapes
+ * are refused with the permission layer's SecurityException; the bare tree
+ * uri and any `child/...` uri are refused with
+ * `UnsupportedOperationException`), is registered by authority, and drives
+ * the PRODUCTION [LumiViewModel.folderChildren] seam (NOT replaced)
+ * against it. The counterfactual tests pin the rejection of the treeless
+ * uri shapes; the import tests prove the fixed seam walks the same tree
+ * end-to-end (root files, subfolder files, the stored tree-scoped payload
+ * shape, and the rescan no-op).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -117,10 +122,10 @@ class FolderTreeReadFixUiTest {
     }
 
     /**
-     * The captain's case, pinned against the real provider's grammar: a
+     * The captain's case, pinned against the real tree-grant grammar: a
      * .mp3-only folder (including a subfolder) adds cleanly through the
      * production cursor path, every song is stored exactly once, and the
-     * stored payload is a well-formed document uri.
+     * stored payload is a well-formed tree-scoped document uri.
      */
     @Test
     fun aFolderOfMp3FilesImportsEverySongIncludingSubfolders() {
@@ -128,7 +133,8 @@ class FolderTreeReadFixUiTest {
         val events = eventsOf(viewModel)
 
         // The strict provider is registered by authority, so the production
-        // seam's queries (tree, child, document uris) hit its grammar.
+        // seam's queries (the tree-scoped label read, root listing and
+        // subfolder listing) hit its grammar.
         ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = true))
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
@@ -140,18 +146,21 @@ class FolderTreeReadFixUiTest {
             entries.map { it.label },
         )
 
-        // The stored payload is a well-formed document uri - exactly two
-        // path segments, the docId percent-encoded into one - so the player
-        // can open it (the pre-fix payload was a three-segment uri no
-        // documents provider can parse).
+        // The stored payload is a well-formed tree-scoped document uri -
+        // four path segments, the treeId and the docId each
+        // percent-encoded into one - so the player can open it under the
+        // tree grant alone (the treeless payload the pre-fix seam stored
+        // is denied by the permission layer under the same grant).
         assertEquals(
-            "content://docs/document/primary%3AMusic%2Ftrack%2001.mp3",
+            "content://docs/tree/primary%3AMusic/document/primary%3AMusic%2Ftrack%2001.mp3",
             entries.first().payload,
         )
         val payload = Uri.parse(entries.first().payload)
-        assertEquals(2, payload.pathSegments.size)
-        assertEquals("document", payload.pathSegments[0])
-        assertEquals("primary:Music/track 01.mp3", payload.pathSegments[1])
+        assertEquals(4, payload.pathSegments.size)
+        assertEquals("tree", payload.pathSegments[0])
+        assertEquals("primary:Music", payload.pathSegments[1])
+        assertEquals("document", payload.pathSegments[2])
+        assertEquals("primary:Music/track 01.mp3", payload.pathSegments[3])
 
         // The folder is remembered for rescans.
         val folders = dbAndGet { app().repository.observeFolders().first() }
@@ -206,14 +215,15 @@ class FolderTreeReadFixUiTest {
             entries.map { it.label },
         )
         assertEquals(
-            "content://docs/document/primary%3AMusic%2Ftrack%2001.mp3",
+            "content://docs/tree/primary%3AMusic/document/primary%3AMusic%2Ftrack%2001.mp3",
             entries.first().payload,
         )
         val payload = Uri.parse(entries.first().payload)
-        assertEquals(2, payload.pathSegments.size)
+        assertEquals(4, payload.pathSegments.size)
 
         // The folder row stores the picker uri verbatim; the label is the
-        // folder's own name, read through the canonical ":tree" shape.
+        // folder's own name, read through the canonical tree-scoped
+        // document uri.
         val folders = dbAndGet { app().repository.observeFolders().first() }
         assertEquals(1, folders.size)
         assertEquals(TREE_URI_OPENABLE, folders.single().uri)
@@ -225,9 +235,10 @@ class FolderTreeReadFixUiTest {
      * ext4) must be walked uncorrupted: the picker appends the suffix only
      * to the tree uri's docId segment, so the seam must use the subfolder
      * node uri's docId verbatim. Stripping it there (the pre-fix behavior)
-     * would list the children at `document/primary:Music/box/children`,
-     * which this provider refuses, and the whole walk would surface the
-     * generic "Couldn't read that folder's songs."
+     * would list the children at
+     * `tree/primary:Music/document/primary:Music/box/children`, which this
+     * provider refuses, and the whole walk would surface the generic
+     * "Couldn't read that folder's songs."
      */
     @Test
     fun aSubfolderWhoseDocIdEndsInOpenableIsWalkedUncorrupted() {
@@ -244,7 +255,7 @@ class FolderTreeReadFixUiTest {
         // The stored payload keeps the subfolder's `:openable` docId
         // (percent-encoded) - the walk queried it verbatim, uncorrupted.
         assertEquals(
-            "content://docs/document/primary%3AMusic%2Fbox%3Aopenable%2Ftrack%2001.mp3",
+            "content://docs/tree/primary%3AMusic/document/primary%3AMusic%2Fbox%3Aopenable%2Ftrack%2001.mp3",
             entries.first().payload,
         )
     }
@@ -272,41 +283,52 @@ class FolderTreeReadFixUiTest {
     }
 
     /**
-     * The counterfactuals: the uri shapes the PRE-FIX seam built are
-     * rejected by the provider's grammar. That rejection (not a revoked
-     * grant) is what the captain's .mp3 folder threw on the device.
+     * The counterfactuals: the uri shapes the SAF permission layer does NOT
+     * authorize under the tree grant - or the provider's matcher does not
+     * parse - are rejected. The treeless `document/...` shapes, what the
+     * pre-fix seam queried, are the device-proven failure: denied with the
+     * permission layer's SecurityException before a single song is
+     * imported.
      */
     @Test
-    fun theOldUriShapesAreRejectedByTheProvider() {
+    fun theTreelessUriShapesAreRejectedUnderTheTreeGrant() {
         val provider = StrictDocumentsProvider(withSubfolder = true)
 
-        // The pre-fix root listing: the tree uri itself. The matcher has no
-        // tree/* entry for a bare tree uri - the pre-fix seam's first query
-        // for EVERY folder.
+        // The pre-fix label read: the treeless single-row document uri.
+        // The SAF permission layer denies it under the tree grant
+        // (device-proven on Android 14: SecurityException "Permission
+        // Denial ... requires that you obtain access using
+        // ACTION_OPEN_DOCUMENT").
+        assertThrows(SecurityException::class.java) {
+            provider.query(Uri.parse("content://docs/document/primary%3AMusic"), null, null, null, null)
+        }
+        // The pre-fix root listing: the treeless children uri - the pre-fix
+        // seam's first query for EVERY folder.
+        assertThrows(SecurityException::class.java) {
+            provider.query(Uri.parse("content://docs/document/primary%3AMusic/children"), null, null, null, null)
+        }
+        // The pre-fix subfolder listing: the treeless subfolder children
+        // uri - the pre-fix seam's first query for EVERY folder with a
+        // subfolder.
+        assertThrows(SecurityException::class.java) {
+            provider.query(Uri.parse("content://docs/document/primary%3AMusic%2FAlbums/children"), null, null, null, null)
+        }
+        // The bare tree uri has no matcher entry at all - the provider
+        // refuses it with the generic unsupported-uri rejection.
         assertThrows(UnsupportedOperationException::class.java) {
             provider.query(Uri.parse("content://docs/tree/primary%3AMusic"), null, null, null, null)
         }
-        // The pre-fix subfolder listing: a child/... uri. No matcher entry
-        // for it either - the pre-fix seam's first query for EVERY folder
-        // with a subfolder.
+        // A child/... listing has no matcher entry either.
         assertThrows(UnsupportedOperationException::class.java) {
             provider.query(Uri.parse("content://docs/child/primary%3AMusic/primary%3AMusic%2FAlbums"), null, null, null, null)
         }
-        // A raw docId split by '/' into extra path segments is not a
-        // document uri: the matcher takes the docId from exactly the second
-        // segment, and a third segment that is not "children" is refused.
-        assertThrows(UnsupportedOperationException::class.java) {
-            provider.query(Uri.parse("content://docs/document/primary%3AMusic/Albums"), null, null, null, null)
-        }
-        // The tree-scoped twin: the matcher accepts it, but the stock
-        // provider's enforceTree descendant check (isChildDocument, which
-        // the stock providers answer false for) gates it - the reason the
-        // seam lists at the plain document/ shapes instead.
+        // And the tree-scoped shapes DO answer under the grant's own treeId
+        // (gated by the descendant check: a docId outside the tree is
+        // refused with the enforceTree SecurityException).
+        assertNotNull(provider.query(Uri.parse("content://docs/tree/primary%3AMusic/document/primary%3AMusic"), null, null, null, null))
+        assertNotNull(provider.query(Uri.parse("content://docs/tree/primary%3AMusic/document/primary%3AMusic/children"), null, null, null, null))
         assertThrows(SecurityException::class.java) {
-            provider.query(
-                Uri.parse("content://docs/tree/primary%3AMusic/document/primary%3AMusic%2Ftrack%2001.mp3"),
-                null, null, null, null,
-            )
+            provider.query(Uri.parse("content://docs/tree/primary%3AMusic%2FOther/document/primary%3AMusic"), null, null, null, null)
         }
     }
 
@@ -362,7 +384,7 @@ class FolderTreeReadFixUiTest {
     }
 
     /**
-     * The provider that encodes the real documents-provider grammar for the
+     * The provider that encodes the real SAF tree-grant grammar for the
      * tree `primary:Music`:
      *
      * ```
@@ -377,24 +399,33 @@ class FolderTreeReadFixUiTest {
      *                       directory check would misread it as a subfolder)]
      * ```
      *
-     * - `document/<docId>` (exactly two path segments) answers with the
-     *   document's OWN single row - files AND directories alike;
-     * - `document/<docId>/children` answers with the document's DIRECT
-     *   CHILDREN ONLY - files and subfolders alike, NO root row (a directory
-     *   row's `_mime_type` is `vnd.android.document/directory` - the way the
-     *   real providers mark directories);
+     * - `tree/<treeId>/document/<docId>` (exactly four path segments)
+     *   answers with the document's OWN single row - files AND directories
+     *   alike;
+     * - `tree/<treeId>/document/<docId>/children` answers with the
+     *   document's DIRECT CHILDREN ONLY - files and subfolders alike, NO
+     *   root row (a directory row's `mime_type` is
+     *   `vnd.android.document/directory` - the way the real providers mark
+     *   directories);
+     * - both tree-scoped shapes are gated by the stock provider's
+     *   `enforceTree` descendant-containment check (the docId must be the
+     *   tree itself or a descendant of it) - any other docId is refused
+     *   with `SecurityException`;
+     * - the treeless `document/<docId>(/children)` shapes are refused with
+     *   `SecurityException` - the SAF permission layer's "Permission
+     *   Denial ... requires that you obtain access using
+     *   ACTION_OPEN_DOCUMENT", which the pre-fix seam hit on the real
+     *   device for EVERY folder;
      * - the tree uri itself (`tree/<treeId>`), any `child/...` listing uri,
-     *   and a `document/<docId>` uri with a third segment that is not
-     *   "children" are refused with `UnsupportedOperationException`, the
-     *   same `UnsupportedOperationException("Unsupported Uri ...")` the
-     *   real matcher throws for shapes it does not parse;
-     * - the tree-scoped twins (`tree/<treeId>/document/<docId>(/children)`,
-     *   matcher-accepted) are refused with `SecurityException` - the stock
-     *   provider's `enforceTree` descendant-containment check, which the
-     *   stock providers answer `false` for - which is why the seam lists at
-     *   the plain `document/` shapes;
+     *   and any other shape have no matcher entry at all - the real matcher
+     *   falls through to the `UnsupportedOperationException("Unsupported
+     *   Uri ...")` it throws for shapes it does not parse;
      * - an unknown docId is refused with the real
      *   `FileNotFoundException("Unable to find document id: ...")`.
+     *
+     * The rows carry the real provider's column names: `document_id`,
+     * `_display_name`, `flags`, `mime_type` (the DocumentsContract
+     * constants) - NOT the `_id`/`_mime_type` names the pre-fix seam read.
      */
     private class StrictDocumentsProvider(private val withSubfolder: Boolean) : ContentProvider() {
 
@@ -408,32 +439,34 @@ class FolderTreeReadFixUiTest {
             sortOrder: String?,
         ): Cursor? {
             val segments = uri.pathSegments
-            return when (segments.getOrNull(0)) {
-                "document" -> {
-                    val docId = segments.getOrNull(1)
-                    when {
-                        // getDocumentIdFromUri: the docId is the second
-                        // segment and ONLY the second segment.
-                        segments.size == 2 -> singleRow(docId)
-                        segments.size == 3 && segments[2] == "children" -> childrenOf(docId)
-                        else -> throw UnsupportedOperationException("Unsupported Uri $uri")
-                    }
-                }
-                // The tree-scoped twins: the matcher accepts these shapes, but
-                // the stock provider's enforceTree descendant check (the
-                // isChildDocument containment test, which the stock providers
-                // answer false for) gates every query through them. A BARE
-                // tree uri, though, has no matcher entry at all - the matcher
-                // rejects it before enforceTree ever runs.
-                "tree" ->
-                    if (segments.size == 4 && segments.getOrNull(2) == "document") {
-                        throw SecurityException("Not a descendant of $uri")
-                    } else {
+            return when (val first = segments.getOrNull(0)) {
+                // The tree-scoped shapes: the only ones the SAF permission
+                // layer authorizes under the tree grant (device-proven on
+                // Android 14). The matcher accepts exactly
+                // tree/<treeId>/document/<docId>(/children), gated by
+                // enforceTree.
+                "tree" -> {
+                    val treeId = segments.getOrNull(1)
+                    if (segments.getOrNull(2) != "document" || segments.size !in intArrayOf(4, 5)) {
+                        // The bare tree uri (and every other tree shape)
+                        // has no matcher entry at all - the real matcher
+                        // rejects it before enforceTree ever runs.
                         throw UnsupportedOperationException("Unsupported Uri $uri")
                     }
-                // The pre-fix shapes: the tree uri itself and the child/...
-                // listing have no matcher entry at all - the real matcher
-                // falls through to the same rejection.
+                    val docId = segments.getOrNull(3)
+                    if (treeId == null || docId == null || !(docId == treeId || docId.startsWith("$treeId/"))) {
+                        throw SecurityException("Not a descendant of $uri")
+                    }
+                    if (segments.size == 4) singleRow(docId) else childrenOf(docId)
+                }
+                // The treeless shapes: the SAF permission layer denies them
+                // under the tree grant before the provider is ever asked -
+                // the device-proven rejection the pre-fix seam hit for
+                // EVERY folder.
+                "document" -> throw SecurityException(
+                    "Permission Denial: reading $uri requires that you obtain access using ACTION_OPEN_DOCUMENT or related APIs",
+                )
+                // The pre-fix child/... shapes: no matcher entry at all.
                 else -> throw UnsupportedOperationException("Unsupported Uri $uri")
             }
         }
@@ -500,7 +533,7 @@ class FolderTreeReadFixUiTest {
             const val ROOT_DOC_ID = "primary:Music"
             const val MIME_DIR = "vnd.android.document/directory"
 
-            val COLUMNS = arrayOf("_id", "_display_name", "_flags", "_mime_type")
+            val COLUMNS = arrayOf("document_id", "_display_name", "flags", "mime_type")
         }
     }
 
@@ -514,10 +547,11 @@ class FolderTreeReadFixUiTest {
      *     track 01.mp3    (file, audio/mpeg)
      * ```
      *
-     * `document/primary:Music/box:openable/children` answers the subfolder's
-     * file; every other docId (in particular `primary:Music/box`, what a
-     * suffix-strip of the subfolder's node uri would build) is refused, so
-     * the walk only succeeds when the subfolder's docId is used verbatim.
+     * `tree/primary:Music/document/primary:Music/box:openable/children`
+     * answers the subfolder's file; every other docId (in particular
+     * `primary:Music/box`, what a suffix-strip of the subfolder's node uri
+     * would build) is refused, so the walk only succeeds when the
+     * subfolder's docId is used verbatim.
      */
     private class OpenableSubfolderDocumentsProvider : ContentProvider() {
 
@@ -532,20 +566,20 @@ class FolderTreeReadFixUiTest {
         ): Cursor? {
             val segments = uri.pathSegments
             return when (segments.getOrNull(0)) {
-                "document" -> {
-                    val docId = segments.getOrNull(1)
-                    when {
-                        segments.size == 2 -> singleRow(docId)
-                        segments.size == 3 && segments[2] == "children" -> childrenOf(docId)
-                        else -> throw UnsupportedOperationException("Unsupported Uri $uri")
-                    }
-                }
-                "tree" ->
-                    if (segments.size == 4 && segments.getOrNull(2) == "document") {
-                        throw SecurityException("Not a descendant of $uri")
-                    } else {
+                "tree" -> {
+                    val treeId = segments.getOrNull(1)
+                    if (segments.getOrNull(2) != "document" || segments.size !in intArrayOf(4, 5)) {
                         throw UnsupportedOperationException("Unsupported Uri $uri")
                     }
+                    val docId = segments.getOrNull(3)
+                    if (treeId == null || docId == null || !(docId == treeId || docId.startsWith("$treeId/"))) {
+                        throw SecurityException("Not a descendant of $uri")
+                    }
+                    if (segments.size == 4) singleRow(docId) else childrenOf(docId)
+                }
+                "document" -> throw SecurityException(
+                    "Permission Denial: reading $uri requires that you obtain access using ACTION_OPEN_DOCUMENT or related APIs",
+                )
                 else -> throw UnsupportedOperationException("Unsupported Uri $uri")
             }
         }
@@ -595,7 +629,7 @@ class FolderTreeReadFixUiTest {
             const val BOX_DOC_ID = "primary:Music/box:openable"
             const val MIME_DIR = "vnd.android.document/directory"
 
-            val COLUMNS = arrayOf("_id", "_display_name", "_flags", "_mime_type")
+            val COLUMNS = arrayOf("document_id", "_display_name", "flags", "mime_type")
         }
     }
 
