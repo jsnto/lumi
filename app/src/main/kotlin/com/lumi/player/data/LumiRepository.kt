@@ -19,6 +19,9 @@ class LumiRepository(private val db: LumiDatabase) {
 
     fun observeEntries(): Flow<List<EntryEntity>> = dao.observeEntries()
 
+    /** The individual content list: the stored rows with no folder marker. */
+    fun observeIndividualEntries(): Flow<List<EntryEntity>> = dao.observeIndividualEntries()
+
     fun observePlayMode(): Flow<PlayMode> =
         dao.observeSettings().map { rows ->
             rows.firstOrNull { it.key == SettingsEntity.PLAY_MODE }
@@ -58,12 +61,18 @@ class LumiRepository(private val db: LumiDatabase) {
 
     // ---- entries ----
 
-    suspend fun addEntry(type: EntryType, label: String, payload: String): EntryEntity {
+    /**
+     * Stores a new entry. [folderId] marks the row as imported from that
+     * folder (the folder-import path); individually added rows store with no
+     * marker.
+     */
+    suspend fun addEntry(type: EntryType, label: String, payload: String, folderId: Long? = null): EntryEntity {
         val id = dao.insertEntry(
             EntryEntity(
                 type = type.storageValue,
                 label = label.trim().ifEmpty { "Untitled" },
                 payload = payload,
+                folderId = folderId,
             )
         )
         return checkNotNull(dao.entryById(id))
@@ -75,25 +84,33 @@ class LumiRepository(private val db: LumiDatabase) {
      * or re-adding a folder whose songs are already in the content list,
      * adds no duplicate rows.
      */
-    suspend fun addEntryUnique(type: EntryType, label: String, payload: String): EntryEntity? {
+    suspend fun addEntryUnique(type: EntryType, label: String, payload: String, folderId: Long? = null): EntryEntity? {
         if (dao.entryByPayload(payload) != null) return null
-        return addEntry(type, label, payload)
+        return addEntry(type, label, payload, folderId)
     }
 
     /**
-     * Stores a new entry and appends it to the end of [tagId]'s song list in
-     * one Room transaction, so "adding a song onto a tag" never leaves a
-     * linked but missing row or a stored but unlinked row. The link order is
-     * read through the same join query the rest of the app observes, so the
-     * append lands exactly where the current list ends. Returns null when
-     * the tag no longer exists (it was deleted while the pick was in flight).
+     * Links an ALREADY-STORED entry to the end of [tagId]'s song list - the
+     * in-app add-song flow (a tag's list is an assignment over the app's
+     * existing content, not a store of new files). Linking the existing row
+     * means a song already on another tag links without copying its entry.
+     * Returns false when the tag or the entry no longer exists (deleted
+     * while the pick was in flight) or when the tag already links the entry
+     * (a second pick of the same song must not duplicate the link).
      */
-    suspend fun addEntryToTag(tagId: Long, type: EntryType, label: String, payload: String): EntryEntity? {
+    suspend fun linkEntryToTag(tagId: Long, entryId: Long): Boolean {
         return db.withTransaction {
-            if (dao.tagById(tagId) == null) return@withTransaction null
-            val entry = addEntry(type, label, payload)
-            updateTagEntries(tagId) { it + entry.id }
-            entry
+            if (dao.tagById(tagId) == null) return@withTransaction false
+            if (dao.entryById(entryId) == null) return@withTransaction false
+            if (dao.linkCount(tagId, entryId) > 0) return@withTransaction false
+            dao.insertLink(
+                TagLinkEntity(
+                    tagId = tagId,
+                    entryId = entryId,
+                    sortOrder = dao.linkCountForTag(tagId),
+                )
+            )
+            true
         }
     }
 
@@ -113,6 +130,18 @@ class LumiRepository(private val db: LumiDatabase) {
     }
 
     fun observeFolders(): Flow<List<FolderEntity>> = dao.observeFolders()
+
+    /**
+     * Marks the stored rows whose payload is in [payloads] as imported from
+     * [folderId], without re-marking rows that already carry a folder marker
+     * (the import-time stamp and the v3 -> v4 backfill both go through it).
+     * The payloads are matched in [PAYLOAD_QUERY_BATCH]-sized IN-clauses
+     * (the SQLite bound-variable cap). Returns the number of rows marked.
+     */
+    suspend fun markEntriesFromFolder(folderId: Long, payloads: Set<String>): Int =
+        payloads
+            .chunked(PAYLOAD_QUERY_BATCH)
+            .sumOf { chunk -> dao.markEntriesFromFolder(folderId, chunk.toSet()) }
 
 
     /** The set of every stored entry's payload (content uris). */
@@ -157,13 +186,17 @@ class LumiRepository(private val db: LumiDatabase) {
      * untouched - and tag links to the deleted rows cascade off them the
      * same way a single-entry removal does. Returns the number of content
      * rows deleted (0 for an empty set - e.g. a folder whose tree can no
-     * longer be read, where only the folder row is removed).
+     * longer be read, where only the folder row is removed). A row that
+     * survives the deletion (a shared song another folder also imports) is
+     * UNMARKED in the same transaction, so it degrades into the individual
+     * content list.
      */
     suspend fun removeFolder(folder: FolderEntity, importedPayloads: Set<String>): Int =
         db.withTransaction {
             val removed = importedPayloads
                 .chunked(PAYLOAD_QUERY_BATCH)
                 .sumOf { chunk -> dao.deleteEntriesByPayloads(chunk.toSet()) }
+            dao.unmarkEntriesFromFolder(folder.id)
             dao.deleteFolder(folder)
             removed
         }

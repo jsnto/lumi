@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -36,7 +37,10 @@ import org.robolectric.shadows.ShadowLooper
  * [LumiViewModel.folderChildren] seam): add a folder whose tree holds songs
  * at the root AND one level down, reopen the app, rescan the remembered
  * folder, and re-add (re-pick) it - the audio entries must appear, exactly
- * once.
+ * once. Also pins the backfill (the migration's best-effort half): rows
+ * stored before the folder-origin marker existed get marked on app start
+ * when the tree is still readable, and degrade into the individual content
+ * list (visible, not lost) when it is not.
  *
  * A realistic documents provider is registered by authority and answers the
  * folder's tree-scoped children listings (`tree/<treeId>/document/<docId>/children`
@@ -68,9 +72,22 @@ class FolderReaddUiTest {
 
     private var activityController: ActivityController<MainActivity> = buildActivity(MainActivity::class.java)
 
+    /** Whether [activityController]'s activity has been created (and its view model with it). */
+    private var activityCreated = false
+
     /** Opens the Content pane and returns its (activity-scoped) view model. */
     private fun openContentPane(): LumiViewModel {
-        val activity = activityController.setup().get()
+        // The activity (and with it the view model's init) is created on the
+        // first open or by [reopenApp]; a controller whose activity exists is
+        // reused instead of set up twice.
+        val activity =
+            if (activityCreated) {
+                activityController.get()
+            } else {
+                activityController.setup()
+                activityCreated = true
+                activityController.get()
+            }
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
@@ -81,10 +98,11 @@ class FolderReaddUiTest {
         return field.get(activity) as LumiViewModel
     }
 
-    /** Simulates reopening the app: a fresh activity (and view model), the same database. */
+    /** Simulates reopening the app: a fresh, created activity (so the view model's init runs - including the backfill - and a fresh view model), the same database. */
     private fun reopenApp() {
         activityController.destroy()
-        activityController = buildActivity(MainActivity::class.java)
+        activityController = buildActivity(MainActivity::class.java).setup()
+        activityCreated = true
     }
 
     /** Runs a suspend block on the app's database and returns its result. */
@@ -139,21 +157,34 @@ class FolderReaddUiTest {
         val folders1 = dbAndGet { app().repository.observeFolders().first() }
         assertEquals("the folder is remembered once", 1, folders1.size)
 
-        // Session 2: the app is reopened - fresh activity, fresh view model,
-        // the same database. The stored audio must be visible in the content
-        // pane. (The remembered-folder row carries the folder's own name -
-        // the label read at the folder's own document uri - so the entry
-        // row's text is unique on the pane.)
+        // Session 2: the app is reopened - fresh activity, fresh view
+        // model, the same database. The stored audio must be visible - in
+        // the folder's own page: the folder-imported songs stay OUT of the
+        // individual content list (that list now holds individually added
+        // content only). (The remembered-folder row carries the folder's own
+        // name - the label read at the folder's own document uri - so the
+        // folder's row text is unique on the pane.)
         reopenApp()
         val viewModel2 = openContentPane()
+        // The individual content list holds no folder-imported rows...
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
+        // ...the folder's page does (the row opens it).
+        compose.onNodeWithText("Music").performClick()
+        compose.waitForIdle()
+        // The page's song list settles after the folder's walk (async).
+        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
         assertTrue(
-            "the first song is visible in the content pane after the reopen",
+            "the first song is visible on the folder's page after the reopen",
             compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty(),
         )
         assertTrue(
-            "the nested song is visible in the content pane after the reopen",
+            "the nested song is visible on the folder's page after the reopen",
             compose.onAllNodesWithText("deep 01.flac").fetchSemanticsNodes().isNotEmpty(),
         )
+        // The page's back unwinds one level to the content pane, where the
+        // rescan / re-add sequence runs.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
 
         // Rescan the remembered folder: it is unchanged, so nothing new.
         val events2 = eventsOf(viewModel2)
@@ -174,8 +205,14 @@ class FolderReaddUiTest {
             stored2.map { it.label },
         )
         assertEquals("the re-add stored no duplicate folder row", 1, dbAndGet { app().repository.observeFolders().first() }.size)
+        // The songs are still visible on the folder's page after rescan +
+        // re-add (and still OUT of the individual content list).
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
+        compose.onNodeWithText("Music").performClick()
+        compose.waitForIdle()
+        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
         assertTrue(
-            "the songs are still visible in the content pane after rescan + re-add",
+            "the songs are still visible on the folder's page after rescan + re-add",
             compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() &&
                 compose.onAllNodesWithText("deep 01.flac").fetchSemanticsNodes().isNotEmpty(),
         )
@@ -204,6 +241,94 @@ class FolderReaddUiTest {
         assertEquals("the folder is still remembered for rescans", 1, folders.size)
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertTrue("a failed read stores no entries", entries.isEmpty())
+    }
+
+    /**
+     * Backfill (the migration's best-effort half): rows stored before the
+     * folder-origin marker existed (the v3 rows - a remembered folder whose
+     * songs carry no marker) get marked on app start by re-walking the
+     * folder's tree through the same seam the folder page uses. The songs
+     * leave the individual content list (they live on the folder's page
+     * now) - no data loss, just a corrected origin.
+     */
+    @Test
+    fun theBackfillMarksExistingFolderRowsFromAPreMarkerDatabase() {
+        // Session 1: seed the pre-marker state - a remembered folder and
+        // its stored songs WITHOUT the marker, exactly as the v3 rows look
+        // after the schema migration.
+        val folderId = dbAndGet {
+            val folder = app().repository.rememberFolder(TREE_URI, "Music")
+            app().repository.addEntry(EntryType.AUDIO, "track 01.mp3", TRACK_PAYLOAD)
+            app().repository.addEntry(EntryType.AUDIO, "deep 01.flac", DEEP_PAYLOAD)
+            folder.id
+        }
+
+        // Session 2: the app reopens with the tree readable - the view
+        // model's init backfill walks the folder and marks the rows.
+        ShadowContentResolver.registerProviderInternal("docs", FakeDocumentsProvider())
+        reopenApp()
+
+        idleUntil({
+            dbAndGet { app().repository.entriesByPayloads(setOf(TRACK_PAYLOAD, DEEP_PAYLOAD)) }
+                .all { it.folderId != null }
+        })
+        val marked = dbAndGet { app().repository.entriesByPayloads(setOf(TRACK_PAYLOAD, DEEP_PAYLOAD)) }
+        assertEquals("the backfill keeps both songs", 2, marked.size)
+        assertTrue(
+            "the backfill stamps the songs with the folder's id",
+            marked.all { it.folderId == folderId },
+        )
+        assertTrue(
+            "the marked songs left the individual content list",
+            dbAndGet { app().repository.observeIndividualEntries().first() }.isEmpty(),
+        )
+
+        // And the pane reflects it: the folder's row opens the page that
+        // lists both songs, while the individual content list is empty.
+        openContentPane()
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
+        compose.onNodeWithText("Music").performClick()
+        compose.waitForIdle()
+        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
+        assertTrue(
+            "the folder's page lists both backfilled songs",
+            compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() &&
+                compose.onAllNodesWithText("deep 01.flac").fetchSemanticsNodes().isNotEmpty(),
+        )
+    }
+
+    /**
+     * Backfill degradation: a remembered folder whose tree can no longer be
+     * read (a revoked grant) is left as-is - its rows keep the unmarked
+     * state, so its songs show in the individual content list (visible, not
+     * lost), and the app does not crash over it.
+     */
+    @Test
+    fun theBackfillLeavesUnreadableFolderRowsInTheIndividualList() {
+        dbAndGet {
+            app().repository.rememberFolder(TREE_URI, "Music")
+            app().repository.addEntry(EntryType.AUDIO, "track 01.mp3", TRACK_PAYLOAD)
+            app().repository.addEntry(EntryType.AUDIO, "deep 01.flac", DEEP_PAYLOAD)
+            true
+        }
+
+        // The tree's grant is gone by the time the app reopens: the
+        // backfill's walk throws, and the rows stay unmarked.
+        ShadowContentResolver.registerProviderInternal("docs", ThrowingTreeProvider())
+        reopenApp()
+
+        val individual = dbAndGet { app().repository.observeIndividualEntries().first() }
+        assertEquals(
+            "the unreadable folder's songs stay in the individual list (degraded, not lost)",
+            listOf("track 01.mp3", "deep 01.flac"),
+            individual.map { it.label },
+        )
+
+        // And the pane shows them there (the individual section, below the
+        // Folders section - existence is the layout assertion).
+        openContentPane()
+        compose.onNodeWithText("track 01.mp3").assertExists()
+        compose.onNodeWithText("deep 01.flac").assertExists()
     }
 
     /**
@@ -345,5 +470,13 @@ class FolderReaddUiTest {
     companion object {
         /** A documents tree uri in the shape the SAF picker returns. */
         const val TREE_URI = "content://docs/tree/primary%3AMusic"
+
+        /** The walked payload of the root song (its tree-scoped document uri). */
+        const val TRACK_PAYLOAD =
+            "content://docs/tree/primary%3AMusic/document/primary%3AMusic%2Ftrack%2001.mp3"
+
+        /** The walked payload of the nested song (its tree-scoped document uri). */
+        const val DEEP_PAYLOAD =
+            "content://docs/tree/primary%3AMusic/document/primary%3AMusic%2FAlbum%2Fdeep%2001.flac"
     }
 }

@@ -192,6 +192,64 @@ class FolderRemoveUiTest {
         assertEquals(1, dbAndGet { app().repository.observeTags().first() }.size)
     }
 
+    /**
+     * A song that left the folder's tree after the import is NOT deleted
+     * with the folder (the removal's walk no longer identifies it): its
+     * row survives and is unmarked (no longer folder-derived), so it
+     * degrades into the individual content list - visible, not lost.
+     */
+    @Test
+    fun removingAFolderUnmarksSongsThatLeftTheTreeIntoTheIndividualList() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+
+        // song-b is imported with the folder; the tree has since shrunk
+        // (song-b left it) - the removal's walk no longer sees it.
+        swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a"), file("song-b.mp3", "c://x/b")))
+        addFolder(viewModel, events, "Added 2 songs from the folder.")
+        swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
+
+        val folder = dbAndGet { app().repository.observeFolders().first() }.single()
+        assertTrue(
+            "the imported songs are marked as the folder's while the folder lives",
+            dbAndGet { app().repository.observeEntries().first() }.all { it.folderId == folder.id },
+        )
+        assertTrue(
+            "so they are out of the individual content list",
+            dbAndGet { app().repository.observeIndividualEntries().first() }.isEmpty(),
+        )
+
+        viewModel.requestFolderRemoval(folder)
+        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        val preview = viewModel.folderRemovalPreview.value!!
+        assertEquals(
+            "the walk identifies only the song still in the tree",
+            setOf("c://x/a"),
+            preview.importedPayloads,
+        )
+        assertEquals(1, preview.songCount)
+
+        viewModel.confirmFolderRemoval()
+        idleUntil({ events.any { it == "Removed the folder and 1 imported song." } })
+
+        // song-a (still in the tree) is gone; song-b's row survived...
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(listOf("song-b.mp3"), entries.map { it.label })
+        // ...and it is unmarked: the song degrades into the individual
+        // content list.
+        assertTrue(
+            "the survivor is no longer marked as the folder's",
+            entries.single().folderId == null,
+        )
+        assertEquals(
+            "the survivor shows in the individual content list",
+            listOf("song-b.mp3"),
+            dbAndGet { app().repository.observeIndividualEntries().first() }.map { it.label },
+        )
+        compose.waitForIdle()
+        compose.onNodeWithText("song-b.mp3").assertExists()
+    }
+
     @Test
     fun removingAnUnreadableFolderRemovesOnlyTheFolderRow() {
         val viewModel = openContentPane()

@@ -64,7 +64,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +84,8 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
+import com.lumi.player.data.TagSongOption
+import com.lumi.player.data.tagSongOptions
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.player.PlayerStateHolder
@@ -101,9 +102,9 @@ private enum class SettingsPane {
 
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
- * screen is a list of buttons, one per setting (play mode, NFC tags,
- * content); clicking a row navigates into that setting's own configuration
- * screen.
+ * screen is a list of buttons, one per setting (play mode, content, NFC
+ * tags, keep screen on); clicking a row navigates into that setting's own
+ * configuration screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
  * child of the NFC tags pane, and the folder detail page is a child of the
@@ -131,6 +132,9 @@ fun SettingsScreen(
 
     val tags by viewModel.observeTags().collectAsState(emptyList())
     val entries by viewModel.observeEntries().collectAsState(emptyList())
+    // The individual content list: the folder-imported rows stay out of it
+    // (they are visible only inside their folder's own page).
+    val individualEntries by viewModel.observeIndividualEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
@@ -162,6 +166,12 @@ fun SettingsScreen(
     // page leaves it).
     var folderDetailId by remember { mutableStateOf<Long?>(null) }
 
+    // The tag detail page's in-app add-song list: the tag the list is for,
+    // while it is open. A pick links one of the app's existing content
+    // entries (individual or folder-imported) to that tag - the list
+    // never launches the file picker.
+    var addSongPickerTagId by remember { mutableStateOf<Long?>(null) }
+
     // A settled scan hands its resolved (registered) tag to the detail
     // page (which overlays any pane); the result is consumed so a later
     // scan can re-trigger.
@@ -178,21 +188,14 @@ fun SettingsScreen(
     // to know what is playing. IDLE (no entry loaded) shows no strip.
     val playState by PlayerStateHolder.state.collectAsState()
 
-    // One shared OpenDocument launcher: both "Add content" (Content pane) and
-    // "Add song" (the tag detail page) launch it, and the pending tag id
-    // set right before the launch decides which side receives the result.
-    var pendingTagPickId by rememberSaveable { mutableStateOf<Long?>(null) }
-
+    // The one and only file picker: the Content pane's "Add content" launches
+    // it (a pick stores a new individual content row). The tag detail page's
+    // add-song no longer uses it - it links the app's existing content
+    // through the in-app list instead.
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val tagId = pendingTagPickId
-        if (tagId != null) {
-            viewModel.addSongToTag(uri, tagId, displayNameFor(context, uri))
-        } else {
-            onFilePicked(viewModel, context, uri, EntryType.AUDIO)
-        }
+        if (uri != null) onFilePicked(viewModel, context, uri, EntryType.AUDIO)
     }
 
     // The folder picker is its own launcher: OpenDocumentTree is a different
@@ -249,13 +252,10 @@ fun SettingsScreen(
             },
         )
         SettingsPane.Content -> ContentPane(
-            entries = entries,
+            individualEntries = individualEntries,
             folders = folders,
             onBack = { pane = SettingsPane.Menu },
-            onAddContent = {
-                pendingTagPickId = null
-                audioPicker.launch(arrayOf("audio/*"))
-            },
+            onAddContent = { audioPicker.launch(arrayOf("audio/*")) },
             onAddFolder = { folderPicker.launch(null) },
             onFolderOpened = { folder ->
                 folderDetailId = folder.id
@@ -280,9 +280,10 @@ fun SettingsScreen(
                     tag = tag,
                     linked = linked,
                     onBack = { pane = SettingsPane.Tags },
-                    onAddSong = { tagId ->
-                        pendingTagPickId = tagId
-                        audioPicker.launch(arrayOf("audio/*"))
+                    onAddSong = {
+                        // The page's add-song opens the in-app content list
+                        // (the app's existing content, linked - no picker).
+                        addSongPickerTagId = tag.id
                     },
                     onEdit = { editTag = it },
                     onDelete = { deleteTag = it },
@@ -314,6 +315,24 @@ fun SettingsScreen(
     }
 
     // ---------- dialogs (overlay any pane) ----------
+
+    // The tag detail page's in-app add-song list (see [addSongPickerTagId]).
+    addSongPickerTagId?.let { id ->
+        val tag = tags.firstOrNull { t -> t.id == id }
+        if (tag != null) {
+            AddSongPickerDialog(
+                options = tagSongOptions(entries, linked),
+                onPick = { option ->
+                    viewModel.linkEntryToTag(tag, option.entry)
+                    // A fresh link closes the list; a song the tag already
+                    // plays keeps it open (the view model reports the pick
+                    // with a toast instead of a duplicate link).
+                    if (!option.alreadyOnTag) addSongPickerTagId = null
+                },
+                onDismiss = { addSongPickerTagId = null },
+            )
+        }
+    }
 
     // The unified scan in progress: any NFC tag - a registered one opens
     // its profile page, an unregistered one is registered.
@@ -519,20 +538,20 @@ private fun SettingsMenuPane(
                 onClick = onPlayMode,
             )
             MenuRow(
-                icon = Icons.Filled.Nfc,
-                chipBackground = scheme.secondaryContainer,
-                chipContent = scheme.onSecondaryContainer,
-                title = "NFC tags",
-                subtitle = if (tags.isEmpty()) "No tags yet" else "${tags.size} registered",
-                onClick = onTags,
-            )
-            MenuRow(
                 icon = Icons.Filled.Folder,
                 chipBackground = scheme.tertiaryContainer,
                 chipContent = scheme.onTertiaryContainer,
                 title = "Content",
                 subtitle = if (entries.isEmpty()) "No songs yet" else "${entries.size} songs",
                 onClick = onContent,
+            )
+            MenuRow(
+                icon = Icons.Filled.Nfc,
+                chipBackground = scheme.secondaryContainer,
+                chipContent = scheme.onSecondaryContainer,
+                title = "NFC tags",
+                subtitle = if (tags.isEmpty()) "No tags yet" else "${tags.size} registered",
+                onClick = onTags,
             )
             KeepScreenOnRow(
                 checked = keepScreenOn,
@@ -851,8 +870,9 @@ private fun TagsPane(
  *
  * The song list reuses the shared selection plumbing: opening the page
  * selects the tag, so [linked] (the selected tag's entries) is this tag's
- * list, and the add-song pick goes through the same
- * [LumiViewModel.addSongToTag] path.
+ * list. The add-song action opens the in-app content list, where a pick
+ * links an already-stored content entry to the tag
+ * ([LumiViewModel.linkEntryToTag]) - no file picker, no duplicated song.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -861,7 +881,7 @@ private fun TagDetailPane(
     tag: TagEntity,
     linked: List<EntryEntity>,
     onBack: () -> Unit,
-    onAddSong: (Long) -> Unit,
+    onAddSong: () -> Unit,
     onEdit: (TagEntity) -> Unit,
     onDelete: (TagEntity) -> Unit,
 ) {
@@ -904,13 +924,14 @@ private fun TagDetailPane(
                     detail = tag.uid,
                 )
             }
-            // The + button on this section's title row adds a song to THIS
-            // tag: the pick stores the file and appends it to the tag's
-            // list in one transaction (the shared add-song path).
+            // The + button on this section's title row opens the in-app
+            // content list: the pick links one of the app's existing content
+            // entries (individual or folder-imported) to THIS tag - no file
+            // picker, so nothing is stored twice.
             SectionCard(
                 title = "Songs",
                 addLabel = "Add song",
-                onAdd = { onAddSong(tag.id) },
+                onAdd = { onAddSong() },
             ) {
                 if (linked.isEmpty()) {
                     Text(
@@ -1130,11 +1151,17 @@ private fun FolderDetailPane(
     }
 }
 
-/** Content: register and manage audio entries. */
+/**
+ * Content: register and manage audio content. The Folders section comes
+ * first (a folder's imported songs live on the folder's own page, so the
+ * folder is browsed as a unit), then the individual content - the songs
+ * added one at a time. The folder-imported rows are NOT in the individual
+ * list: they stay visible only inside their folder's page.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ContentPane(
-    entries: List<EntryEntity>,
+    individualEntries: List<EntryEntity>,
     folders: List<FolderEntity>,
     onBack: () -> Unit,
     onAddContent: () -> Unit,
@@ -1151,43 +1178,10 @@ private fun ContentPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // The old outlined "+ Add content" pill is now the + button on
-            // the section's title row.
-            SectionCard(
-                title = "Content",
-                addLabel = "Add content",
-                onAdd = onAddContent,
-            ) {
-                if (entries.isEmpty()) {
-                    Text(
-                        text = "Nothing here yet. Add a song.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                entries.forEach { entry ->
-                    SettingRow(
-                        leading = {
-                            IconChip(
-                                icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                                background = MaterialTheme.colorScheme.primaryContainer,
-                                content = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                        },
-                        title = entry.label,
-                        detail = detailFor(entry.type, entry.payload),
-                        trailing = {
-                            SoftIconButton(
-                                icon = Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                onClick = { onEntryDeleted(entry) },
-                            )
-                        },
-                    )
-                }
-            }
-            // "Add folder" joins its section's title row as the + button
-            // (the settled design moves it off the standalone button), and
-            // the folder rows get the violet folder chip (D-03).
+            // The folders come first: their imported songs live on the
+            // folder's own page, and the folder rows get the violet folder
+            // chip (D-03). "Add folder" is the + button on the section's
+            // title row.
             SectionCard(
                 title = "Folders",
                 addLabel = "Add folder",
@@ -1217,6 +1211,42 @@ private fun ContentPane(
                     )
                 }
             }
+            // The individual content: the songs added one at a time (the
+            // folder-imported rows are NOT here - they stay visible only
+            // inside their folder's page). The old outlined "+ Add content"
+            // pill is the + button on the section's title row.
+            SectionCard(
+                title = "Individual content",
+                addLabel = "Add content",
+                onAdd = onAddContent,
+            ) {
+                if (individualEntries.isEmpty()) {
+                    Text(
+                        text = "Nothing here yet. Add a song.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                individualEntries.forEach { entry ->
+                    SettingRow(
+                        leading = {
+                            IconChip(
+                                icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                background = MaterialTheme.colorScheme.primaryContainer,
+                                content = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        },
+                        title = entry.label,
+                        detail = detailFor(entry.type, entry.payload),
+                        trailing = {
+                            SoftIconButton(
+                                icon = Icons.Default.Delete,
+                                contentDescription = "Delete",
+                                onClick = { onEntryDeleted(entry) },
+                            )
+                        },
+                    )
+                }
+            }
         }
     }
 }
@@ -1238,6 +1268,86 @@ private fun displayNameFor(context: Context, uri: Uri): String? =
             val index = cursor.getColumnIndex("_display_name")
             if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
         }
+
+/**
+ * The tag detail page's in-app add-song list: the app's existing content
+ * (individual or folder-imported alike), collapsed to one row per song
+ * label (a song's duplicate copies are offered once, as the first stored
+ * copy). A pick links the stored entry to the page's tag - it never
+ * launches the file picker, so nothing is stored twice - and a song the
+ * tag already plays is offered but flagged (the pick is reported, never
+ * silently duplicated).
+ */
+@Composable
+private fun AddSongPickerDialog(
+    options: List<TagSongOption>,
+    onPick: (TagSongOption) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = scheme.surface,
+        shape = RoundedCornerShape(28.dp),
+        title = { Text("Add a song", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (options.isEmpty()) {
+                    Text(
+                        "No songs in your content yet. Add one in the Content setting first.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                options.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .clickable { onPick(option) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconChip(
+                            icon = Icons.Filled.MusicNote,
+                            background = scheme.primaryContainer,
+                            content = scheme.onPrimaryContainer,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                option.entry.label,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                if (option.alreadyOnTag) "Already on this tag"
+                                else detailFor(option.entry.type, option.entry.payload),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (option.alreadyOnTag) scheme.onSurface else scheme.onSurfaceVariant,
+                            )
+                        }
+                        if (option.alreadyOnTag) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = scheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
 
 /**
  * Dialog asking for a friendly name and the preferred play mode for a

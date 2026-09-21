@@ -14,6 +14,7 @@ import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -25,16 +26,13 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The Content pane ("Add content") and the tag detail page ("Add song")
- * share ONE OpenDocument launcher: whichever button was tapped stores the
- * pending target right before the launch, and the shared callback dispatches
- * the picked URI to that target. Visiting the tag detail page sets the
- * pending tag id while the page is composed and the Content pane's add
- * resets it to null, so a pick that lands after a detail-page visit must
- * still reach the plain content path. The real SAF picker cannot run under
- * Robolectric, so the pick is delivered straight through the activity's
- * result registry - the same callback slot the system's picker result would
- * use.
+ * The Content pane's "Add content" is the ONLY file-picker launch in the
+ * settings screen; the tag detail page's "Add song" opens the in-app
+ * content list instead (a pick links an already-stored entry, no picker),
+ * so a pick that lands after a detail-page visit must still reach the plain
+ * content path. The real SAF picker cannot run under Robolectric, so the
+ * pick is delivered straight through the activity's result registry - the
+ * same callback slot the system's picker result would use.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -85,6 +83,15 @@ class TagPickerDispatchUiTest {
     private fun entryCount(): Int =
         dbAndGet { app().repository.observeEntries().first().size }
 
+    /** The activity-result launch keys (the settings screen's pickers are the activity's only launchers). */
+    private fun launchedPickerKeys(activity: MainActivity): List<String> {
+        val registry = activity.activityResultRegistry
+        val field = ActivityResultRegistry::class.java.getDeclaredField("launchedKeys")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        return (field.get(registry) as MutableList<String>).toList()
+    }
+
     /** The tag's current song list, read off the database. */
     private fun tagLinks(tagId: Long): List<EntryEntity> =
         dbAndGet { app().repository.entriesForTag(tagId) }
@@ -92,11 +99,11 @@ class TagPickerDispatchUiTest {
     /**
      * Delivers the document picker's result for [uri] through the same
      * activity-result registry slot the real picker would use. The settings
-     * screen registers two document launchers (the shared audio picker and
-     * the folder picker, different contracts); the click above launched
-     * exactly one of them and [ActivityResultRegistry.launch] records its
-     * key in the registry's launched set, so the launched key is the slot to
-     * deliver the pick to.
+     * screen registers two document launchers (the content picker and the
+     * folder picker, different contracts); the click above launched exactly
+     * one of them and [ActivityResultRegistry.launch] records its key in the
+     * registry's launched set, so the launched key is the slot to deliver
+     * the pick to.
      */
     private fun deliverPick(activity: MainActivity, uri: Uri): String {
         val registry = activity.activityResultRegistry
@@ -126,9 +133,9 @@ class TagPickerDispatchUiTest {
     fun contentPick_afterVisitingTheTagDetailPage_storesPlainContentWithoutLinking() {
         val tagId = dbAndGet { app().repository.addTag(UID, "Porch")?.id ?: 0L }
 
-        // Compose the tag detail page (its "Add song" shares the one
-        // OpenDocument launcher) and leave it for the Content pane: the
-        // page's visit must not steer a later Content-pane pick at the tag.
+        // Compose the tag detail page (its "Add song" opens the in-app
+        // content list - it touches the file picker no more) and leave it
+        // for the Content pane.
         val activity = openMainActivity()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
@@ -148,8 +155,7 @@ class TagPickerDispatchUiTest {
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
 
-        // Tap the "Add content" + button: the pending target resets to null
-        // and the shared picker launches.
+        // Tap the "Add content" + button: the content picker launches.
         compose.onNodeWithContentDescription("Add content").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add content").performClick()
@@ -157,10 +163,9 @@ class TagPickerDispatchUiTest {
 
         deliverPick(activity, Uri.parse("content://fake/plain-song"))
 
-        // The entry must land as plain content (visible in the Content pane)
-        // and must NOT be linked to the seeded tag - the pick was not for a
-        // tag, and no callback may be missing (the pick is delivered through
-        // the registry slot the real picker would use).
+        // The entry must land as plain content (visible in the Content
+        // pane) and must NOT be linked to the seeded tag - the pick was
+        // for the content pane, not for a tag.
         idleUntil({ entryCount() == 1 })
         compose.waitForIdle()
         compose.onNodeWithText("Untitled").assertExists()
@@ -173,10 +178,13 @@ class TagPickerDispatchUiTest {
     }
 
     @Test
-    fun tagDetailPagePick_appendsTheSongToThePickedTagsList() {
+    fun tagDetailPageAddSongLaunchesNoPicker_andTheInAppListLinksTheStoredEntry() {
         val tagId = dbAndGet { app().repository.addTag(UID, "Porch")?.id ?: 0L }
         val existingId = dbAndGet {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
+        val newId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id
         }
         dbAndGet { app().repository.updateTagEntries(tagId) { listOf(existingId) }; true }
 
@@ -192,20 +200,38 @@ class TagPickerDispatchUiTest {
         val viewModel = field.get(activity) as LumiViewModel
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
+        val launchedBefore = launchedPickerKeys(activity)
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
 
-        deliverPick(activity, Uri.parse("content://fake/second-song"))
+        // The + button opens the in-app content list - the file picker is
+        // NOT launched (a pick links, it does not store).
+        compose.onNodeWithText("Add a song").assertExists()
+        assertEquals(
+            "the in-app add-song list must not launch the file picker",
+            launchedBefore,
+            launchedPickerKeys(activity),
+        )
 
+        // Picking the app's existing content links the stored entry AFTER
+        // the tag's existing song - nothing is stored twice.
+        compose.onNodeWithText("Second song").performClick()
+        compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 2 })
         val labels: List<String> = tagLinks(tagId).map { it.label }
         assertEquals(
             "the picked song must be appended after the tag's existing song",
-            listOf("First song", "Untitled"),
+            listOf("First song", "Second song"),
             labels,
         )
+        assertEquals(
+            "the content list is unchanged - the stored row was linked",
+            2,
+            entryCount(),
+        )
+        assertEquals(listOf(existingId, newId), tagLinks(tagId).map { it.id })
     }
 
     companion object {

@@ -145,6 +145,14 @@ class FolderAddUiTest {
             "content://docs/document/audio:200",
             entries.first { it.label == "song-b.flac" }.payload,
         )
+
+        // The imported songs stay OUT of the individual content list: the
+        // pane shows the folder's row (the tree uri as its label - no
+        // provider is registered to name it) and the individual section's
+        // empty state.
+        compose.waitForIdle()
+        compose.onNodeWithText(TREE_URI).assertExists()
+        compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
     }
 
     @Test

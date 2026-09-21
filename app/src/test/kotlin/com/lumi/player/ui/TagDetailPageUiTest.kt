@@ -1,6 +1,5 @@
 package com.lumi.player.ui
 
-import android.net.Uri
 import androidx.activity.result.ActivityResultRegistry
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -16,6 +15,7 @@ import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -32,11 +32,10 @@ import org.robolectric.shadows.ShadowLooper
  * edit action on the "Tag details" section - the name is the only
  * editable detail, the UID is hardware-derived and read-only), its
  * current song list, an add-song action aimed at THIS tag, and a danger
- * zone that deletes the tag. The page reuses the shared selection and
- * add-song plumbing (the shared OpenDocument launcher and
- * [LumiViewModel.addSongToTag]), so the add-song pick is delivered the
- * same way the real picker's result would be: through the activity's
- * result registry.
+ * zone that deletes the tag. The add-song action opens the in-app content
+ * list (the app's existing content, individual or folder-imported): a
+ * pick links the stored entry to the tag ([LumiViewModel.linkEntryToTag]) -
+ * it never launches the file picker, so nothing is stored twice.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -114,30 +113,17 @@ class TagDetailPageUiTest {
     }
 
     /**
-     * Delivers the shared audio picker's result for [uri] through the same
-     * activity-result registry slot the real picker would use. The "Add
-     * song" click above launched the picker and recorded its key in the
-     * registry's launched set, so the launched key is the slot to deliver
-     * the pick to (the folder picker, a different contract, was not
-     * launched).
+     * The activity-result launch keys through the settings screen's
+     * pickers (the activity's only launchers): the in-app add-song flow
+     * must keep this set unchanged - a pick links existing content, it
+     * never launches the file picker.
      */
-    private fun deliverPick(activity: MainActivity, uri: Uri) {
+    private fun launchedPickerKeys(activity: MainActivity): List<String> {
         val registry = activity.activityResultRegistry
-        val field = ActivityResultRegistry::class.java.getDeclaredField("keyToRc")
+        val field = ActivityResultRegistry::class.java.getDeclaredField("launchedKeys")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val keyToRc = field.get(registry) as Map<String, Int>
-        val launchedField = ActivityResultRegistry::class.java.getDeclaredField("launchedKeys")
-        launchedField.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val launchedKeys = launchedField.get(registry) as MutableList<String>
-        val picker = keyToRc.entries
-            .filter { entry: Map.Entry<String, Int> -> entry.key != "activity_rq#0" }
-            .singleOrNull { it.key in launchedKeys }
-            ?: error("expected the launched audio picker's registration; registry keys: $keyToRc launched=$launchedKeys")
-        if (picker.key !in launchedKeys) launchedKeys.add(picker.key)
-        val dispatched = registry.dispatchResult(picker.value, uri)
-        check(dispatched) { "dispatchResult returned false; keys=$keyToRc launched=$launchedKeys" }
+        return (field.get(registry) as MutableList<String>).toList()
     }
 
     // ---------- the page opens from a row tap and shows details + songs ----------
@@ -175,43 +161,133 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("Danger zone").assertExists()
     }
 
-    // ---------- add a song from the page: it lands in THIS tag's list ----------
+    // ---------- add a song from the page: the in-app content list links the stored row ----------
 
     @Test
-    fun addSongFromThePageLandsInThisTagsListAndInContent() {
+    fun addSongFromThePageLinksAnExistingContentEntryToTheTag() {
         val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val contentId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
 
         val activity = openTagPage("Porch")
         val viewModel = mainViewModel(activity)
         idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         // The empty tag says so, and the + button on the Songs section's
-        // title row launches the shared audio picker (it may sit below the
+        // title row opens the in-app content list (it may sit below the
         // viewport on the small test screen).
         compose.onNodeWithText("This tag plays nothing yet.").assertExists()
+        val launchedBefore = launchedPickerKeys(activity)
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
 
-        // The pick lands the way the real picker's result would: the
-        // shared callback persists the grant, stores the entry, and
-        // appends it to THIS tag's list in one transaction.
-        deliverPick(activity, Uri.parse("content://fake/added-song"))
+        // The in-app list offers the app's existing content, and the file
+        // picker is never launched (the pick links, it does not store).
+        compose.onNodeWithText("Add a song").assertExists()
+        waitForText("First song")
+        assertEquals(
+            "the add-song action must not launch the file picker",
+            launchedBefore,
+            launchedPickerKeys(activity),
+        )
 
+        // Picking the song links the STORED row: the tag's list gains it
+        // and the content list grows by nothing.
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(
-            "the picked song must be in the page's tag's list",
-            listOf("Untitled"),
-            tagLinks(tagId).map { it.label },
+            "the picked row must link the stored entry",
+            listOf(contentId),
+            tagLinks(tagId).map { it.id },
         )
-        waitForText("Untitled")
+        waitForText("First song")
         compose.onNodeWithText("This tag plays nothing yet.").assertDoesNotExist()
-        // The picked song is also a first-class content item.
         assertEquals(
-            "the picked song must also be in the content list",
-            listOf("Untitled"),
-            dbAndGet { app().repository.observeEntries().first().map { it.label } },
+            "picking links the stored row - no new content row is stored",
+            1,
+            dbAndGet { app().repository.observeEntries().first().size },
+        )
+    }
+
+    @Test
+    fun addingASongTheTagAlreadyPlaysIsReportedWithoutDuplicatingTheLink() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
+        val secondId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id
+        }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+
+        // The list offers the song but flags it: the tag already plays it
+        // (the flagged row's detail is the unique way to find it - the
+        // song's own row sits on the page below as well).
+        assertTrue(compose.onAllNodesWithText("First song").fetchSemanticsNodes().isNotEmpty())
+        compose.onNodeWithText("Already on this tag").assertExists()
+
+        // Picking the flagged song is REPORTED - the tag's list keeps the
+        // song exactly once and the list stays open for another pick.
+        compose.onNodeWithText("Already on this tag").performClick()
+        compose.waitForIdle()
+        idleUntil({ tagLinks(tagId).size == 1 })
+        assertEquals(
+            "a second pick of the same song must not duplicate the link",
+            listOf(firstId),
+            tagLinks(tagId).map { it.id },
+        )
+        compose.onNodeWithText("Add a song").assertExists()
+        compose.onNodeWithText("Second song").assertExists()
+    }
+
+    @Test
+    fun theAddSongListCollapsesDuplicateContentLabelsIntoOneRow() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstCopy = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
+        dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first-dup").id
+        }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+
+        // Duplicate content (the same label stored twice) displays ONCE -
+        // one row per song, the first stored copy behind it.
+        waitForText("First song")
+        assertEquals(
+            "the collapsed list offers the duplicated song exactly once",
+            1,
+            compose.onAllNodesWithText("First song").fetchSemanticsNodes().size,
+        )
+
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        idleUntil({ tagLinks(tagId).size == 1 })
+        assertEquals(
+            "picking the collapsed row links the FIRST stored copy",
+            listOf(firstCopy),
+            tagLinks(tagId).map { it.id },
         )
     }
 

@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -23,11 +24,12 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
- * is a list of buttons, one per setting (play mode, NFC tags, content);
- * clicking a row navigates into that setting's own configuration screen, and
- * the back arrow / system back unwind it back to the menu (from the menu,
- * to the player screen). The NFC tags pane rows offer no row-level delete -
- * deleting a tag happens from the tag detail page's danger zone.
+ * is a list of buttons, one per setting (play mode, content, NFC tags,
+ * keep screen on - in that order); clicking a row navigates into that
+ * setting's own configuration screen, and the back arrow / system back
+ * unwind it back to the menu (from the menu, to the player screen). The NFC
+ * tags pane rows offer no row-level delete - deleting a tag happens from the
+ * tag detail page's danger zone.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -71,7 +73,19 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
+        compose.onNodeWithText("Keep screen on").assertExists()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
+
+        // The menu's order reads top to bottom: play mode, content, NFC
+        // tags, keep screen on.
+        val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
+        val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
+        val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
+        val keepTop = compose.onNodeWithText("Keep screen on").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the menu lists play mode, content, NFC tags, keep screen on - in that order",
+            playModeTop < contentTop && contentTop < nfcTop && nfcTop < keepTop,
+        )
 
         // The menu only lists the settings - none of the configuration
         // content is on it (that lives in the sub-screens).
@@ -115,7 +129,10 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Scan NFC").assertDoesNotExist()
 
-        // Content: the sub-screen offers content management.
+        // Content: the sub-screen offers content management - the Folders
+        // section first (a folder's songs live on the folder's page), then
+        // the individual content (the songs added one at a time; the
+        // folder-imported rows are NOT in it).
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         // The "+ Add content" pill is now the + button on the section's title
@@ -123,6 +140,7 @@ class SettingsMenuUiTest {
         // assertion (it may sit below the viewport).
         compose.onNodeWithContentDescription("Add content").assertExists()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
+        compose.onNodeWithText("Individual content").assertExists()
         systemBack(activity)
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithContentDescription("Add content").assertDoesNotExist()

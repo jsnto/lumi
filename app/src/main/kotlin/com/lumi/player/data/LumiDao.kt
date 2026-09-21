@@ -36,6 +36,10 @@ interface LumiDao {
     @Query("SELECT * FROM entries ORDER BY createdAt ASC, id ASC")
     fun observeEntries(): Flow<List<EntryEntity>>
 
+    /** The individual content list: the stored rows with no folder marker (folder-imported songs stay out of it). */
+    @Query("SELECT * FROM entries WHERE folder_id IS NULL ORDER BY createdAt ASC, id ASC")
+    fun observeIndividualEntries(): Flow<List<EntryEntity>>
+
     @Query("SELECT * FROM entries WHERE id = :id")
     suspend fun entryById(id: Long): EntryEntity?
 
@@ -63,6 +67,24 @@ interface LumiDao {
      */
     @Query("DELETE FROM entries WHERE payload IN (:payloads)")
     suspend fun deleteEntriesByPayloads(payloads: Set<String>): Int
+
+    /**
+     * Marks the stored rows whose payload is in [payloads] as imported from
+     * [folderId], WITHOUT re-marking rows that already carry a folder marker
+     * (a song shared by two folders keeps the marker of the folder that
+     * stored it first). Drives the folder-import stamping and the v3 -> v4
+     * best-effort backfill of rows stored before the marker existed.
+     */
+    @Query("UPDATE entries SET folder_id = :folderId WHERE payload IN (:payloads) AND folder_id IS NULL")
+    suspend fun markEntriesFromFolder(folderId: Long, payloads: Set<String>): Int
+
+    /**
+     * Clears the folder marker off [folderId]'s rows (a folder's removal): the
+     * songs that survive the removal (a shared song another folder still
+     * imports) degrade into the individual content list.
+     */
+    @Query("UPDATE entries SET folder_id = NULL WHERE folder_id = :folderId")
+    suspend fun unmarkEntriesFromFolder(folderId: Long): Int
 
     // ---- added folders (rescannable content) ----
 
@@ -102,6 +124,14 @@ interface LumiDao {
 
     @Query("DELETE FROM tag_links WHERE tagId = :tagId")
     suspend fun clearLinksForTag(tagId: Long)
+
+    /** Whether the tag already links the entry (the in-app add-song list's "already on the tag" guard). */
+    @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId AND entryId = :entryId")
+    suspend fun linkCount(tagId: Long, entryId: Long): Int
+
+    /** A tag's current link count (the sortOrder of a freshly appended link). */
+    @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId")
+    suspend fun linkCountForTag(tagId: Long): Int
 
     @Insert
     suspend fun insertLink(link: TagLinkEntity)
