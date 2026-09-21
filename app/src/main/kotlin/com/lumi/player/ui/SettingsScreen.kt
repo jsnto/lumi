@@ -1116,43 +1116,35 @@ private fun ReorderableSongList(
     ) {
         shown.forEach { entry ->
             val isDragging = entry.id == draggedId
-            Row(
+            SettingRow(
+                leading = {
+                    IconChip(
+                        icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                        background = scheme.primaryContainer,
+                        content = scheme.onPrimaryContainer,
+                    )
+                },
+                title = entry.label,
+                detail = detailFor(entry.type, entry.payload),
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 56.dp)
                     .graphicsLayer {
                         if (isDragging) translationY = dragOffsetPx
                     }
                     .onGloballyPositioned { coords ->
                         rowTops[entry.id] = coords.localToRoot(Offset.Zero).y
                         val tops = shown.mapNotNull { rowTops[it.id] }
-                        if (tops.size >= 2) {
+                        if (draggedId == null && tops.size >= 2) {
                             pitch.value = (tops[1] - tops[0]).coerceAtLeast(0f)
                         }
                     },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconChip(
-                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                    background = scheme.primaryContainer,
-                    content = scheme.onPrimaryContainer,
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(entry.label, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                    Text(
-                        detailFor(entry.type, entry.payload),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
+                trailing = {
+                    SongDragHandle(
+                        contentDescription = "Reorder ${entry.label}",
+                        onDrag = { delta -> handleDragged(entry.id, delta) },
+                        onDragEnd = { handleDragEnded() },
                     )
-                }
-                Spacer(Modifier.width(12.dp))
-                SongDragHandle(
-                    contentDescription = "Reorder ${entry.label}",
-                    onDrag = { delta -> handleDragged(entry.id, delta) },
-                    onDragEnd = { handleDragEnded() },
-                )
-            }
+                },
+            )
         }
     }
 }
