@@ -133,11 +133,20 @@ class LumiRepository(private val db: LumiDatabase) {
      * The stored content rows whose payload is in [payloads] - the folder
      * detail page's song list (the rows a folder's walk identified, in the
      * content list's order). An empty set returns nothing without a query.
+     *
+     * The payloads are matched in [PAYLOAD_QUERY_BATCH]-sized IN-clauses
+     * (the SQLite bound-variable cap), and each clause answers its own rows
+     * in (createdAt, id) order. A payload set that spans more than one
+     * clause would otherwise come back clause-by-clause (in walk order), so
+     * the concatenated rows are re-sorted here with the SAME (createdAt
+     * ASC, id ASC) comparator to keep the content list's order intact
+     * across the clause boundary.
      */
     suspend fun entriesByPayloads(payloads: Set<String>): List<EntryEntity> =
         payloads
             .chunked(PAYLOAD_QUERY_BATCH)
             .flatMap { chunk -> dao.entriesByPayloads(chunk.toSet()) }
+            .sortedWith(compareBy({ it.createdAt }, { it.id }))
 
     /**
      * Removes a remembered folder and the content rows imported from it in

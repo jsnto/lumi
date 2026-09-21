@@ -796,9 +796,22 @@ class LumiViewModel(
      * and every other node uri this seam builds is a plain
      * `document/<docId>` uri, whose docId is the same second segment (the
      * percent-encoding is already undone by [Uri.pathSegments]).
+     *
+     * The `:openable` strip applies to the tree uri ONLY - the picker
+     * appends it to the tree uri's docId segment and to nothing else. The
+     * subfolder node uris this seam builds never carry it, so their docId
+     * is used verbatim: a raw docId may legitimately end in `:openable`
+     * (legal on ext4), and stripping it there would corrupt the children
+     * listing and lose a fully readable folder.
      */
-    private fun folderDocIdOf(folderUri: Uri): String =
-        folderUri.pathSegments.getOrNull(1)?.removeSuffix(":openable").orEmpty()
+    private fun folderDocIdOf(folderUri: Uri): String {
+        val docId = folderUri.pathSegments.getOrNull(1) ?: return ""
+        return if (folderUri.pathSegments.firstOrNull() == "tree") {
+            docId.removeSuffix(":openable")
+        } else {
+            docId
+        }
+    }
 
     /** A folder's children listing uri `scheme://authority/document/<docId>/children`, the docId percent-encoded into a single path segment. */
     private fun listChildrenUri(folderUri: Uri, docId: String): Uri =

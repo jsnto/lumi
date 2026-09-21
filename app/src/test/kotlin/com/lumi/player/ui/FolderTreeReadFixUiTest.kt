@@ -221,6 +221,35 @@ class FolderTreeReadFixUiTest {
     }
 
     /**
+     * A subfolder whose docId legitimately ends in `:openable` (legal on
+     * ext4) must be walked uncorrupted: the picker appends the suffix only
+     * to the tree uri's docId segment, so the seam must use the subfolder
+     * node uri's docId verbatim. Stripping it there (the pre-fix behavior)
+     * would list the children at `document/primary:Music/box/children`,
+     * which this provider refuses, and the whole walk would surface the
+     * generic "Couldn't read that folder's songs."
+     */
+    @Test
+    fun aSubfolderWhoseDocIdEndsInOpenableIsWalkedUncorrupted() {
+        val viewModel = openContentPane()
+        val events = eventsOf(viewModel)
+
+        ShadowContentResolver.registerProviderInternal("docs", OpenableSubfolderDocumentsProvider())
+
+        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+        idleUntil({ events.any { it == "Added 1 song from the folder." } })
+
+        val entries = dbAndGet { app().repository.observeEntries().first() }
+        assertEquals(listOf("track 01.mp3"), entries.map { it.label })
+        // The stored payload keeps the subfolder's `:openable` docId
+        // (percent-encoded) - the walk queried it verbatim, uncorrupted.
+        assertEquals(
+            "content://docs/document/primary%3AMusic%2Fbox%3Aopenable%2Ftrack%2001.mp3",
+            entries.first().payload,
+        )
+    }
+
+    /**
      * The rescan goes through the same uri grammar: a rescan of the unchanged
      * folder answers the tree and child listings again and adds nothing.
      */
@@ -469,6 +498,101 @@ class FolderTreeReadFixUiTest {
 
         private companion object {
             const val ROOT_DOC_ID = "primary:Music"
+            const val MIME_DIR = "vnd.android.document/directory"
+
+            val COLUMNS = arrayOf("_id", "_display_name", "_flags", "_mime_type")
+        }
+    }
+
+    /**
+     * The real documents-provider grammar for a tree whose only child is a
+     * subfolder whose docId ends in `:openable`:
+     *
+     * ```
+     * primary:Music/
+     *   [box:openable/    (subfolder; its docId ends in ":openable")]
+     *     track 01.mp3    (file, audio/mpeg)
+     * ```
+     *
+     * `document/primary:Music/box:openable/children` answers the subfolder's
+     * file; every other docId (in particular `primary:Music/box`, what a
+     * suffix-strip of the subfolder's node uri would build) is refused, so
+     * the walk only succeeds when the subfolder's docId is used verbatim.
+     */
+    private class OpenableSubfolderDocumentsProvider : ContentProvider() {
+
+        override fun onCreate(): Boolean = true
+
+        override fun query(
+            uri: Uri,
+            projection: Array<out String>?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+            sortOrder: String?,
+        ): Cursor? {
+            val segments = uri.pathSegments
+            return when (segments.getOrNull(0)) {
+                "document" -> {
+                    val docId = segments.getOrNull(1)
+                    when {
+                        segments.size == 2 -> singleRow(docId)
+                        segments.size == 3 && segments[2] == "children" -> childrenOf(docId)
+                        else -> throw UnsupportedOperationException("Unsupported Uri $uri")
+                    }
+                }
+                "tree" ->
+                    if (segments.size == 4 && segments.getOrNull(2) == "document") {
+                        throw SecurityException("Not a descendant of $uri")
+                    } else {
+                        throw UnsupportedOperationException("Unsupported Uri $uri")
+                    }
+                else -> throw UnsupportedOperationException("Unsupported Uri $uri")
+            }
+        }
+
+        private fun singleRow(docId: String?): Cursor {
+            if (docId == null) {
+                throw FileNotFoundException("Unable to find document id: $docId")
+            }
+            return MatrixCursor(COLUMNS).also { cursor ->
+                cursor.addRow(rowFor(docId))
+            }
+        }
+
+        private fun childrenOf(docId: String?): Cursor {
+            return MatrixCursor(COLUMNS).also { cursor ->
+                when (docId) {
+                    ROOT_DOC_ID -> cursor.addRow(row(BOX_DOC_ID, "box:openable", 0L, MIME_DIR))
+                    BOX_DOC_ID ->
+                        cursor.addRow(row("$BOX_DOC_ID/track 01.mp3", "track 01.mp3", 0L, "audio/mpeg"))
+                    else -> throw FileNotFoundException("Unable to find document id: $docId")
+                }
+            }
+        }
+
+        private fun rowFor(docId: String): Array<Any?> =
+            when (docId) {
+                ROOT_DOC_ID -> row(docId, "Music", 0L, MIME_DIR)
+                BOX_DOC_ID -> row(docId, "box:openable", 0L, MIME_DIR)
+                else -> row(docId, docId.substringAfterLast('/'), 0L, "audio/mpeg")
+            }
+
+        private fun row(docId: String, displayName: String, flags: Long, mime: String): Array<Any?> =
+            arrayOf<Any?>(docId, displayName, flags, mime)
+
+        override fun getType(uri: Uri): String? = null
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+        override fun update(
+            uri: Uri,
+            values: ContentValues?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+        ): Int = 0
+
+        private companion object {
+            const val ROOT_DOC_ID = "primary:Music"
+            const val BOX_DOC_ID = "primary:Music/box:openable"
             const val MIME_DIR = "vnd.android.document/directory"
 
             val COLUMNS = arrayOf("_id", "_display_name", "_flags", "_mime_type")
