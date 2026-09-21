@@ -4,6 +4,7 @@ import android.app.Activity
 import android.provider.Settings
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.lumi.player.LumiApp
@@ -132,6 +133,60 @@ class NfcPromptUiTest {
         compose.onNodeWithText("NFC not available").assertDoesNotExist()
         assertFalse("prompt flag must stay cleared on later resumes",
             promptState(activity))
+    }
+
+    /**
+     * The scan guard: arming a tag scan (the NFC tags pane's "Scan NFC"
+     * action) while the radio is off must surface the NFC prompt instead of
+     * failing silently - reading a tag is impossible with the radio off. The
+     * prompt's trigger moved with the unified scan in this change (it used
+     * to key off the registration scan), so this drives the new trigger:
+     * a scan armed with the radio on raises no prompt, and the same action
+     * with the radio off does.
+     */
+    @Test
+    fun scanArmedWithRadioOff_showsNfcPrompt() {
+        NfcTestState.radioEnabled = true
+        val controller = startMainActivity()
+        val activity = controller.get()
+        compose.waitForIdle()
+        compose.onNodeWithText("NFC is off").assertDoesNotExist()
+
+        // Open the NFC tags pane and arm the scan while the radio is ON:
+        // the scan dialog appears, no prompt.
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("NFC tags").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan NFC").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan a tag").assertIsDisplayed()
+        compose.onNodeWithText("NFC is off").assertDoesNotExist()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan a tag").assertDoesNotExist()
+
+        // The user turns the radio off (system settings) and returns; the
+        // resume sync raises the prompt, which is dismissed for now.
+        NfcTestState.radioEnabled = false
+        controller.pause()
+        controller.resume()
+        compose.waitForIdle()
+        compose.onNodeWithText("NFC is off").assertExists()
+        compose.onNodeWithText("Later").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("NFC is off").assertDoesNotExist()
+
+        // Arming a scan with the radio off must raise the prompt again,
+        // while the scan stays armed (its dialog is behind the prompt).
+        compose.onNodeWithText("Scan NFC").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan a tag").assertExists()
+        compose.onNodeWithText("NFC is off").assertIsDisplayed()
+        assertTrue(
+            "the prompt flag must be raised by the scan guard",
+            promptState(activity),
+        )
     }
 
     /** The internal [MainActivity.showNfcPrompt] Compose state, via reflection. */
