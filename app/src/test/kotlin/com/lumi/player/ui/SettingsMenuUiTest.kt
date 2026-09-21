@@ -24,7 +24,7 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
- * is a list of buttons, one per setting (play mode, content, NFC tags,
+ * is a list of buttons, one per setting (play mode, NFC tags, content,
  * keep screen on - in that order); clicking a row navigates into that
  * setting's own configuration screen, and the back arrow / system back
  * unwind it back to the menu (from the menu, to the player screen). The NFC
@@ -76,15 +76,15 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Keep screen on").assertExists()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
 
-        // The menu's order reads top to bottom: play mode, content, NFC
-        // tags, keep screen on.
+        // The menu's order reads top to bottom: play mode, NFC tags, content,
+        // keep screen on.
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
-        val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
+        val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
         val keepTop = compose.onNodeWithText("Keep screen on").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, content, NFC tags, keep screen on - in that order",
-            playModeTop < contentTop && contentTop < nfcTop && nfcTop < keepTop,
+            "the menu lists play mode, NFC tags, content, keep screen on - in that order",
+            playModeTop < nfcTop && nfcTop < contentTop && contentTop < keepTop,
         )
 
         // The menu only lists the settings - none of the configuration
