@@ -199,7 +199,17 @@ class MainActivity : ComponentActivity() {
                 }
                 launch {
                     PlayerStateHolder.state.collectLatest { state ->
-                        if (state.status == PlaybackStatus.IDLE) {
+                        // Only IDLE with NO active tag is a real stop: the
+                        // service's stopPlayback clears the tag along with
+                        // the IDLE status. The transient IDLE that lingers
+                        // during an ACTION_START start-up (the service sets
+                        // the active tag on the holder BEFORE ExoPlayer
+                        // reaches READY) must not be treated as a stop:
+                        // treating it as one disowns the just-activated tag
+                        // (a removal then pauses nothing, and a re-hold
+                        // restarts the queue instead of resuming) and tears
+                        // the presence poll down mid-hold.
+                        if (state.status == PlaybackStatus.IDLE && state.activeTagUid == null) {
                             viewModel.onPlaybackStopped()
                             // Playback has stopped: tear the presence poll
                             // (fallback and fast path) down so no background
