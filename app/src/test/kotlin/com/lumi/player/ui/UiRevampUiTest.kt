@@ -275,9 +275,8 @@ class UiRevampUiTest {
 
         compose.onNodeWithText("Remove").performClick()
         compose.waitForIdle()
-        // The page fell back to the menu; the list is empty now.
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
+        // The page fell back to the NFC tags list (where the tag's row
+        // lived); the list is empty now.
         waitForText("No tags yet")
         assertEquals(0, dbAndGet { app().repository.observeTags().first() }.size)
     }

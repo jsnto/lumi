@@ -3,10 +3,14 @@ package com.lumi.player.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.test.core.app.ApplicationProvider
+import com.lumi.player.LumiApp
+import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -15,11 +19,14 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral coverage for the settings navigation back gesture: system back
- * (driven through the real [androidx.activity.OnBackPressedDispatcher])
- * unwinds one settings sub-screen at a time and leaves the menu at the exact
+ * (driven through the real [androidx.activity.OnBackPressedDispatcher]) and
+ * the in-pane back arrow unwind one level at a time - the tag detail page is
+ * a child of the NFC tags pane, so its back lands on the NFC tags list and
+ * only the next back reaches the menu - and the menu is left at the exact
  * scroll position it was left at. The screen is configured short (300dp) so
  * the settings menu list genuinely overflows and the scroll position is a
  * meaningful state to check, instead of fitting on one screen.
@@ -54,6 +61,44 @@ class SettingsBackNavUiTest {
     private fun systemBack(activity: MainActivity) {
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
+    }
+
+    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
+
+    /** Runs a suspend block on the app's database and returns its result. */
+    private fun <T> dbAndGet(block: suspend () -> T): T {
+        var result: T? = null
+        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    /** Pumps the main looper until a node with [text] is laid out or fails. */
+    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
+            Thread.sleep(20)
+        }
+        compose.onNodeWithText(text).assertExists()
+    }
+
+    /**
+     * Opens settings, the NFC tags pane, and the [name] tag's detail page
+     * (the tag row arrives through an async Room round trip, so wait for it
+     * before clicking).
+     */
+    private fun openTagPage(name: String): MainActivity {
+        val activity = openSettings()
+        compose.onNodeWithText("NFC tags").performClick()
+        compose.waitForIdle()
+        waitForText(name)
+        compose.onNodeWithText(name).performScrollTo()
+        compose.onNodeWithText(name).performClick()
+        compose.waitForIdle()
+        return activity
     }
 
     @Test
@@ -112,5 +157,57 @@ class SettingsBackNavUiTest {
         systemBack(activity)
         compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    // ---------- the tag detail page unwinds to the NFC tags list, not the menu ----------
+
+    @Test
+    fun systemBackFromTheTagDetailPageUnwindsToTheTagsListAndOnlyThenTheMenu() {
+        dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
+
+        val activity = openTagPage("Porch")
+        // The detail page is showing.
+        waitForText("Tag details")
+
+        // The first system back unwinds the detail page one level, to the
+        // NFC tags list it lives under - not the menu, and not out of
+        // settings (the list's scan action and the tag's row are back).
+        systemBack(activity)
+        compose.onNodeWithText("Tag details").assertDoesNotExist()
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithText(TAG_UID).assertExists()
+
+        // The second system back leaves the tags list for the menu.
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Scan NFC").assertDoesNotExist()
+
+        // The third back leaves the menu entirely and returns to the player
+        // screen (the two-level unwind, then the host's back handling).
+        systemBack(activity)
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    @Test
+    fun theInPaneBackArrowFromTheTagDetailPageLandsOnTheTagsList() {
+        dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
+
+        openTagPage("Porch")
+        waitForText("Tag details")
+
+        // The pane's own back arrow (the top bar) lands on the NFC tags
+        // list, the detail page's parent pane - not the menu.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Tag details").assertDoesNotExist()
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithText(TAG_UID).assertExists()
+        // The menu is not showing either.
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    companion object {
+        const val TAG_UID = "04:CA:FE:99:99"
     }
 }

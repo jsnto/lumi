@@ -246,9 +246,9 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("Remove").performClick()
         compose.waitForIdle()
 
-        // The tag is gone (the page fell back to the menu) and its songs
-        // remain in the content list - deleting a tag never deletes the
-        // entries.
+        // The tag is gone (the page fell back to the NFC tags list, where
+        // the tag's row lived) and its songs remain in the content list -
+        // deleting a tag never deletes the entries.
         waitForText("NFC tags")
         compose.onNodeWithText("Danger zone").assertDoesNotExist()
         dbAndGet {
@@ -262,28 +262,34 @@ class TagDetailPageUiTest {
         }
     }
 
-    // ---------- back navigation: the page unwinds to the tags menu ----------
+    // ---------- back navigation: the page unwinds one level to the tags list ----------
 
     @Test
-    fun systemBackFromTheTagPageReturnsToTheTagsMenu() {
+    fun systemBackFromTheTagPageReturnsToTheTagsListAndOnlyThenTheMenu() {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
 
         val activity = openTagPage("Porch")
         waitForText("Tag details")
 
-        // The page is a sub-screen, so the screen's BackHandler (enabled
-        // while any pane is showing) must answer the first system back and
-        // settle on the menu - exactly like every other sub-screen - with
-        // the menu row intact and the page gone. It must not pop settings
-        // away in one step.
+        // The page is a child of the NFC tags pane, so the screen's
+        // BackHandler must answer the first system back by unwinding ONE
+        // level - to the NFC tags list, not the menu - with the list's scan
+        // action and the tag's row back and the page gone. It must not pop
+        // settings away in one step.
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
-        compose.onNodeWithText("Play mode").assertIsDisplayed()
-        compose.onNodeWithText("NFC tags").assertIsDisplayed()
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithText(TAG_UID).assertExists()
         compose.onNodeWithText("Tag details").assertDoesNotExist()
         compose.onNodeWithText("Danger zone").assertDoesNotExist()
 
-        // The second back leaves the menu entirely and returns to the
+        // The second back leaves the tags list for the settings menu.
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Scan NFC").assertDoesNotExist()
+
+        // The third back leaves the menu entirely and returns to the
         // player screen (the settings hop pops only from the menu).
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
