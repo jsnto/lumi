@@ -79,6 +79,7 @@ class PlayerService : Service(), Player.Listener {
                 if (entries.isEmpty()) {
                     stopPlayback()
                 } else {
+                    Log.i(TAG, "ACTION_START: ${entries.size} entries for uid=$uid")
                     val startIndex = intent.getIntExtra(EXTRA_START_ENTRY_INDEX, 0).coerceAtLeast(0)
                     val startSeekMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L).coerceAtLeast(0)
                     startQueue(entries, uid, startIndex, startSeekMs)
@@ -190,6 +191,7 @@ class PlayerService : Service(), Player.Listener {
     /** Idempotent: safe to run on every re-report of a tag still in range. */
     private fun resumePlayback() {
         if (queue.isEmpty()) return stopPlayback()
+        Log.i(TAG, "ACTION_RESUME: resuming (playWhenReady=${player?.playWhenReady})")
         player?.playWhenReady = true
     }
 
@@ -202,12 +204,16 @@ class PlayerService : Service(), Player.Listener {
         if (queue.isEmpty()) return stopPlayback()
         val p = player ?: return
         if (p.playWhenReady) {
+            Log.i(TAG, "ACTION_PAUSE: pausing playback")
             p.playWhenReady = false
             saveCurrentPosition()
+        } else {
+            Log.i(TAG, "ACTION_PAUSE: already paused/idle, no-op")
         }
     }
 
     private fun stopPlayback() {
+        Log.i(TAG, "stopPlayback: stopping the session")
         main.removeCallbacks(positionSaver)
         pendingSeekMs = 0
         saveCurrentPosition()

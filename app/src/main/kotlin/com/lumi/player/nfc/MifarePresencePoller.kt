@@ -9,10 +9,15 @@ import java.io.IOException
  * A connected low-level read session on an NFC tag.
  *
  * In the app this is backed by a connected [android.nfc.tech.MifareUltralight]
- * session: reading page 0 of the tag only succeeds while the tag is
- * physically in the reader's field, so a read failure is a reliable
- * "tag removed" signal even when the NFC stack itself reports nothing about
- * a stationary tag.
+ * session: reading page 0 of the tag succeeds only while the tag is
+ * physically in the reader's field AND its RF session is still alive. Note
+ * that a read failure on a stale session is NOT by itself a reliable
+ * "tag removed" signal - under foreground dispatch a tag held still in
+ * range can go cold (its RF session drops while the tag is still in the
+ * field). The app therefore pairs this with
+ * [ReconnectingPresenceSession], which re-establishes a fresh session on a
+ * failed read: only when the fresh session also cannot read the tag is the
+ * failure a genuine "tag removed" strike.
  */
 fun interface PresenceReader {
     /** Reads page 0 of the tag; throws [IOException] when the tag is out of range. */
