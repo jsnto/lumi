@@ -28,9 +28,10 @@ import kotlin.math.abs
  *    visible border: the chip's border is a transparent stroke
  *    ([playModeItemBorder]).
  *  - Where the settings sections used the small outlined "+ ..." pill
- *    buttons (register a tag, add content, add a folder), the action is now
- *    a plain "+" icon button on the section's title row, right-aligned next
- *    to the section title.
+ *    buttons (add content, add a folder), the action is now a plain "+"
+ *    icon button on the section's title row, right-aligned next to the
+ *    section title. (The NFC tags section has no + button at all: its
+ *    entry point is the "Scan NFC" action button above the tag list.)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -84,28 +85,10 @@ class PlayModeItemUiTest {
     }
 
     @Test
-    fun registerTagAndAddContentButtonsSitOnTheirSectionTitleRows() {
-        val activity = openPane("NFC tags")
+    fun addContentAndAddFolderButtonsSitOnTheirSectionTitleRows() {
+        val activity = openPane("Content")
         val density = activity.resources.displayMetrics.density
         val screenRight = activity.resources.displayMetrics.widthPixels
-
-        // NFC tags: the "+ Register a tag" pill is a + button now, on the
-        // section's title row (16dp column + 20dp card padding + the 4dp
-        // inset of the icon within its button, so the same flush-right edge
-        // as before the move).
-        compose.onNodeWithContentDescription("Register a tag").assertHasClickAction()
-        val plus = compose.onNodeWithContentDescription("Register a tag").fetchSemanticsNode()
-        val hint = compose
-            .onNodeWithText("No tags yet. Tap a tag on the back of the phone to register it.")
-            .fetchSemanticsNode()
-        assertFlushRight(plus, screenRight, density, 36 + 4)
-        assertOnTitleRow(plus, "NFC tags", hint)
-
-        // Back to the menu, then the Content pane.
-        activity.onBackPressedDispatcher.onBackPressed()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Add content").assertHasClickAction()
         val addContent = compose.onNodeWithContentDescription("Add content").fetchSemanticsNode()

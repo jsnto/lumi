@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -128,9 +129,8 @@ fun SettingsScreen(
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
-    val registering by viewModel.registering.collectAsState(false)
-    val editScan by viewModel.editScanActive.collectAsState(false)
-    val pendingEditTag by viewModel.pendingEditTag.collectAsState(null)
+    val scanActive by viewModel.scanActive.collectAsState(false)
+    val pendingTagProfile by viewModel.pendingTagProfile.collectAsState(null)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
@@ -141,24 +141,24 @@ fun SettingsScreen(
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
     // The tag whose edit dialog is showing (set by the tag detail page's
-    // edit action on the Tag details section, or by a settled edit scan -
-    // the "Scan NFC" row of the NFC tags pane).
+    // edit action on the Tag details section).
     var editTag by remember { mutableStateOf<TagEntity?>(null) }
 
-    // A settled edit scan hands its resolved tag to the edit dialog (which
-    // overlays any pane); the result is consumed so a later scan can
-    // re-trigger.
-    LaunchedEffect(pendingEditTag) {
-        pendingEditTag?.let {
-            editTag = it
-            viewModel.consumePendingEditTag()
+    // The tag whose detail page is showing (set when a tag row in the NFC
+    // tags pane is tapped, or when a scan settles on a registered tag;
+    // cleared when the tag is removed or the page leaves it).
+    var tagDetailId by remember { mutableStateOf<Long?>(null) }
+
+    // A settled scan hands its resolved (registered) tag to the detail
+    // page (which overlays any pane); the result is consumed so a later
+    // scan can re-trigger.
+    LaunchedEffect(pendingTagProfile) {
+        pendingTagProfile?.let {
+            tagDetailId = it.id
+            pane = SettingsPane.TagDetail
+            viewModel.consumePendingTagProfile()
         }
     }
-
-    // The tag whose detail page is showing (set when a tag row in the NFC
-    // tags pane is tapped, cleared when the tag is removed or the page
-    // leaves it).
-    var tagDetailId by remember { mutableStateOf<Long?>(null) }
 
     // The settings menu's now-playing strip (D-06): the current entry and
     // the active play mode, so parents never have to go back to the player
@@ -271,34 +271,20 @@ fun SettingsScreen(
 
     // ---------- dialogs (overlay any pane) ----------
 
-    if (editScan) {
+    // The unified scan in progress: any NFC tag - a registered one opens
+    // its profile page, an unregistered one is registered.
+    if (scanActive) {
         AlertDialog(
-            onDismissRequest = { viewModel.cancelTagEditScan() },
+            onDismissRequest = { viewModel.cancelTagScan() },
             containerColor = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(28.dp),
             icon = { NfcAnchor() },
             title = {
                 Text("Scan a tag", style = MaterialTheme.typography.headlineSmall)
             },
-            text = { Text("Hold the back of the phone against a registered tag…") },
-            confirmButton = {
-                TextButton(onClick = { viewModel.cancelTagEditScan() }) { Text("Cancel") }
-            },
-        )
-    }
-
-    if (registering) {
-        AlertDialog(
-            onDismissRequest = { viewModel.cancelTagRegistration() },
-            containerColor = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(28.dp),
-            icon = { NfcAnchor() },
-            title = {
-                Text("Register a tag", style = MaterialTheme.typography.headlineSmall)
-            },
             text = { Text("Hold the back of the phone against any NFC tag…") },
             confirmButton = {
-                TextButton(onClick = { viewModel.cancelTagRegistration() }) { Text("Cancel") }
+                TextButton(onClick = { viewModel.cancelTagScan() }) { Text("Cancel") }
             },
         )
     }
@@ -738,11 +724,14 @@ private fun PlayModePane(
 }
 
 /**
- * NFC tags: register and manage tags. A "Scan NFC" row arms an edit scan:
- * the next tag read opens that tag's edit dialog if it is registered (or
- * reports that it isn't). Tapping a tag row's body opens the tapped tag's
- * detail page (the per-tag page where the tag can also be deleted, from its
- * danger zone).
+ * NFC tags: the pane's single scan entry point sits ABOVE the tag list as
+ * a prominent action (a filled button with the NFC icon, not a row of the
+ * list): arming it, the next tag read either opens a registered tag's
+ * profile page (the per-tag page where the tag can be renamed, given
+ * songs, or deleted from its danger zone) or takes an unregistered tag
+ * into the registration flow (capture, naming dialog, optional
+ * write-to-tag). Tapping a tag row's body opens the tapped tag's detail
+ * page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -761,31 +750,30 @@ private fun TagsPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // The old outlined "+ Register a tag" pill is now the + button on
-            // the section's title row.
-            SectionCard(
-                title = "NFC tags",
-                addLabel = "Register a tag",
-                onAdd = { viewModel.startTagRegistration() },
+            // The single scan entry point: a prominent filled action (NFC
+            // icon + label) above the tag list, separated from it by the
+            // column's spacing - it reads as the pane's action, not as
+            // another row of the list. It arms the unified scan (the same
+            // read path playback uses: the foreground-dispatch read into
+            // LumiViewModel.onTagDetected).
+            Button(
+                onClick = { viewModel.startTagScan() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
             ) {
-                // The "Scan NFC" row: a row in the pane's own pattern that
-                // arms an edit scan - the next read opens a registered
-                // tag's edit dialog (the same read path registration uses).
-                SettingRow(
-                    modifier = Modifier.clickable { viewModel.startTagEditScan() },
-                    leading = {
-                        IconChip(
-                            icon = Icons.Filled.Nfc,
-                            background = MaterialTheme.colorScheme.secondaryContainer,
-                            content = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                    },
-                    title = "Scan NFC",
-                    detail = "Scan a registered tag to open its details",
+                Icon(
+                    Icons.Filled.Nfc,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
                 )
+                Spacer(Modifier.width(10.dp))
+                Text("Scan NFC", style = MaterialTheme.typography.titleMedium)
+            }
+            SectionCard(title = "NFC tags") {
                 if (tags.isEmpty()) {
                     Text(
-                        text = "No tags yet. Tap a tag on the back of the phone to register it.",
+                        text = "No tags yet. Scan a tag to add it.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

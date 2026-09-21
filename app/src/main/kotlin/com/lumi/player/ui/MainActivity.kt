@@ -148,11 +148,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    viewModel.registering.collectLatest { registering ->
+                    viewModel.scanActive.collectLatest { scanning ->
                         reconfigureNfc()
                         // Reading a tag is impossible with the radio off; tell
                         // the user instead of failing silently.
-                        if (registering && (nfcMissing || nfc?.isEnabled == false)) {
+                        if (scanning && (nfcMissing || nfc?.isEnabled == false)) {
                             showNfcPrompt = true
                         }
                     }
