@@ -1093,7 +1093,7 @@ private fun ReorderableSongList(
     val shown = displayedList()
 
     fun handleDragged(entryId: Long, totalDeltaY: Float) {
-        val pitchPx = pitch.value
+        val pitchPx = pitch.floatValue
         if (pitchPx <= 0f) return
         val shown = displayedList()
         if (dragStartIndex < 0) {
@@ -1151,7 +1151,7 @@ private fun ReorderableSongList(
                         rowTops[entry.id] = coords.localToRoot(Offset.Zero).y
                         val tops = shown.mapNotNull { rowTops[it.id] }
                         if (draggedId == null && tops.size >= 2) {
-                            pitch.value = (tops[1] - tops[0]).coerceAtLeast(0f)
+                            pitch.floatValue = (tops[1] - tops[0]).coerceAtLeast(0f)
                         }
                     },
                 trailing = {

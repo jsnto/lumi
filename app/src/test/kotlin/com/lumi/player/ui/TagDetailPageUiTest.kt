@@ -10,11 +10,13 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -40,7 +42,9 @@ import org.robolectric.shadows.ShadowLooper
  * consumes the move so the page's scroll never runs; sub-pitch moves
  * settle where the pointer says; a multi-move drag that crosses the swap
  * boundary mid-drag settles where the pointer releases; a handle that
- * finished a drag starts the next one) - an
+ * finished a drag starts the next one; a reorder order that is no longer
+ * a permutation of the current song set - a list change in flight - is
+ * rejected and keeps the current order, firing no save event) - an
  * add-song action aimed at THIS tag, and a danger zone that deletes the
  * tag. The add-song action opens the in-app content
  * list (the app's existing content, individual or folder-imported): a
@@ -740,6 +744,79 @@ class TagDetailPageUiTest {
             "the page shows the order the second drag left",
             firstRowTop > 0f && firstRowTop < secondRowTop,
         )
+    }
+
+    // ---------- the reorder write's set-equality guard: a list change in flight keeps the current order ----------
+
+    @Test
+    fun aStaleReorderIsRejectedWhenTheListChangesInFlight() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val tag = checkNotNull(dbAndGet { app().repository.tagByUid(TAG_UID) })
+        val first = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first") }
+        val second = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second") }
+        val third = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third") }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(first.id, second.id) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        // An accepted reorder writes the order and fires the save event -
+        // the baseline the rejection below is measured against.
+        viewModel.reorderTagSongs(tag, listOf(second, first))
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(second.id, first.id) })
+        idleUntil({ events.contains("Order saved.") })
+
+        // A song is added while a second drag is still in flight: the
+        // current set is now {first, second, third}, while the in-flight
+        // order can only be a permutation of the old {first, second}.
+        viewModel.linkEntryToTag(tag, third)
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(second.id, first.id, third.id) })
+
+        // The stale in-flight order is rejected: the current order is
+        // kept and the save event fires only for the accepted write.
+        viewModel.reorderTagSongs(tag, listOf(first, second))
+        pumpMainLooperSettled()
+        assertEquals(
+            "the stale order is not written",
+            listOf(second.id, first.id, third.id),
+            tagLinks(tagId).map { it.id },
+        )
+        assertEquals(
+            "a rejected write fires no save event",
+            1,
+            events.count { it == "Order saved." },
+        )
+
+        // An unchanged order (a drag that ends where it started) writes
+        // nothing and fires nothing.
+        viewModel.reorderTagSongs(tag, listOf(second, first, third))
+        pumpMainLooperSettled()
+        assertEquals(
+            "an unchanged order fires no save event",
+            1,
+            events.count { it == "Order saved." },
+        )
+        assertEquals(
+            "the order is unchanged",
+            listOf(second.id, first.id, third.id),
+            tagLinks(tagId).map { it.id },
+        )
+    }
+
+    /**
+     * Pumps the main looper long enough for a short view-model launch (a
+     * Room read plus a transaction) to have settled, so a "nothing fired"
+     * assertion is not racing the write.
+     */
+    private fun pumpMainLooperSettled(rounds: Int = 10, pauseMs: Long = 50) {
+        repeat(rounds) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            Thread.sleep(pauseMs)
+        }
     }
 
     companion object {
