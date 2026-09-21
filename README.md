@@ -17,9 +17,10 @@ server or account — everything is stored locally on the device.
    already registered opens its page instead. The NFC tags section lists
    the registered tags, and tapping a tag opens its own page — the tag's
    details (its name, which can be edited, and its read-only ID), its song
-   list (songs are added straight onto the tag with one pick; no data is
-   written to the tag), and a danger zone to delete the tag (its songs stay
-   in the content list).
+   list (songs are added straight onto the tag with one pick, and the list
+   can be reordered by dragging a song's handle to set the play order; no
+   data is written to the tag), and a danger zone to delete the tag (its
+   songs stay in the content list).
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual

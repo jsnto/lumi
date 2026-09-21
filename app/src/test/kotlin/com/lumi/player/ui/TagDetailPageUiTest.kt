@@ -1,6 +1,7 @@
 package com.lumi.player.ui
 
 import androidx.activity.result.ActivityResultRegistry
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -8,11 +9,14 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -31,8 +35,18 @@ import org.robolectric.shadows.ShadowLooper
  * tags pane opens the tag's own page - its details (name + UID, with an
  * edit action on the "Tag details" section - the name is the only
  * editable detail, the UID is hardware-derived and read-only), its
- * current song list, an add-song action aimed at THIS tag, and a danger
- * zone that deletes the tag. The add-song action opens the in-app content
+ * current song list - in the order the songs were added, reorderable by
+ * dragging a row's drag handle (a completed drag persists as the tag's
+ * link order - the play order - and survives a navigation round trip; a
+ * drag that ends where it started persists nothing; the held handle
+ * consumes the move so the page's scroll never runs; sub-pitch moves
+ * settle where the pointer says; a multi-move drag that crosses the swap
+ * boundary mid-drag settles where the pointer releases; a handle that
+ * finished a drag starts the next one; a reorder order that is no longer
+ * a permutation of the current song set - a list change in flight - is
+ * rejected and keeps the current order, firing no save event) - an
+ * add-song action aimed at THIS tag, and a danger zone that deletes the
+ * tag. The add-song action opens the in-app content
  * list (the app's existing content, individual or folder-imported): a
  * pick links the stored entry to the tag ([LumiViewModel.linkEntryToTag]) -
  * it never launches the file picker, so nothing is stored twice.
@@ -412,6 +426,397 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
         check(compose.onAllNodesWithText("Renamed tag").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("Porch").assertDoesNotExist()
+    }
+
+    // ---------- drag reorder: the list shows in added order; a drag persists across a round trip ----------
+
+    @Test
+    fun theSongListShowsInAddedOrder() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val tag = checkNotNull(dbAndGet { app().repository.tagByUid(TAG_UID) })
+        val first = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first") }
+        val second = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second") }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        // The page's own add-song path appends one link at a time, so the
+        // stored order is the order the songs were added.
+        viewModel.linkEntryToTag(tag, first)
+        idleUntil({ tagLinks(tagId).size == 1 })
+        viewModel.linkEntryToTag(tag, second)
+        idleUntil({ tagLinks(tagId).size == 2 })
+        assertEquals(
+            "the stored order is the order the songs were added",
+            listOf(first.id, second.id),
+            tagLinks(tagId).map { it.id },
+        )
+
+        // The page shows the songs in that order (top to bottom).
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the song list shows in the added order",
+            firstTop > 0f && firstTop < secondTop,
+        )
+    }
+
+    @Test
+    fun aDragReorderPersistsAcrossANavigationRoundTrip() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        // The row pitch, measured from the laid-out rows: the gap between
+        // the tops of the first two rows.
+        compose.onNodeWithContentDescription("Reorder Second song").performScrollTo()
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // Drag the second song's handle up by one pitch: the list previews
+        // the swap and the release persists it.
+        compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -pitch.toFloat()))
+            up()
+        }
+        compose.waitForIdle()
+
+        // The reordered list is the persisted link order (the play order).
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+
+        // The page shows it: the dragged row now leads (the last row may
+        // sit at the edge of the small test screen's viewport, where a
+        // clipped node reports empty bounds - so its position is asserted
+        // by existence; the persisted order above is the authoritative pin).
+        compose.waitForIdle()
+        val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the page shows the dragged row first",
+            bTop > 0f && bTop < aTop,
+        )
+        compose.onNodeWithText("Third song").assertExists()
+
+        // A navigation round trip re-reads the persisted order: back to the
+        // tags list, the tag's page again.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan NFC").assertExists()
+        compose.onNodeWithText("Porch").performClick()
+        compose.waitForIdle()
+        waitForText("Second song")
+        compose.waitForIdle()
+        assertEquals(
+            "the re-read order is the dragged order",
+            listOf(secondId, firstId, thirdId),
+            tagLinks(tagId).map { it.id },
+        )
+        val b2 = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        val a2 = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the re-opened page keeps the dragged order", b2 > 0f && b2 < a2)
+        compose.onNodeWithText("Third song").assertExists()
+    }
+
+    @Test
+    fun aDragThatEndsWhereItStartedPersistsNothing() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Second song")
+        compose.waitForIdle()
+
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // A quarter-pitch nudge crosses no row boundary, so the drag ends
+        // where it started.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, (pitch / 4).toFloat()))
+            up()
+        }
+        compose.waitForIdle()
+
+        // Nothing is persisted and the list keeps its order.
+        assertEquals(
+            "a drag that ends where it started writes nothing",
+            listOf(firstId, secondId),
+            tagLinks(tagId).map { it.id },
+        )
+        val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the list keeps its order", aTop > 0f && aTop < bTop)
+    }
+
+    @Test
+    fun aHeldHandleDoesNotScrollThePage() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
+        compose.waitForIdle()
+        val detailsTopBefore =
+            compose.onNodeWithText("Tag details").fetchSemanticsNode().boundsInRoot.top
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // A full-pitch move: a distance the page would travel if the
+        // handle did not consume it.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch.toFloat()))
+            up()
+        }
+        compose.waitForIdle()
+
+        // The move was a real drag: it persisted the swap.
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+
+        // ... and the page never scrolled while the handle was held.
+        compose.waitForIdle()
+        val detailsTopAfter =
+            compose.onNodeWithText("Tag details").fetchSemanticsNode().boundsInRoot.top
+        assertEquals(
+            "the page does not scroll while the handle is held",
+            detailsTopBefore,
+            detailsTopAfter,
+            0.5f,
+        )
+    }
+
+    @Test
+    fun aSubPitchMultiMoveDragSettlesWhereThePointerSays() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // Sub-pitch moves that cross the first boundary in small steps
+        // and release past half a pitch (0.70 of one): the pointer
+        // position says one row down.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch * 0.45f))
+            moveBy(Offset(0f, pitch * 0.10f))
+            moveBy(Offset(0f, pitch * 0.10f))
+            moveBy(Offset(0f, pitch * 0.05f))
+            up()
+        }
+        compose.waitForIdle()
+
+        // The drag settled where the pointer said: one row down.
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+        compose.waitForIdle()
+        val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the page shows the settled order", bTop > 0f && bTop < aTop)
+    }
+
+    @Test
+    fun aMultiMoveDragReleasingOnePitchDownSettlesOneRowDown() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // A multi-move drag that crosses the swap boundary mid-drag and
+        // releases exactly one pitch down: the pointer position says one
+        // row down even though the row re-laid itself there mid-drag.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch * 0.6f))
+            moveBy(Offset(0f, pitch * 0.4f))
+            up()
+        }
+        compose.waitForIdle()
+
+        // The drag settles where the pointer released: one row down.
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+        compose.waitForIdle()
+        val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the page shows the settled order", bTop > 0f && bTop < aTop)
+    }
+
+    @Test
+    fun aSecondDragOnTheSameHandleReordersAgain() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
+        compose.waitForIdle()
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
+        val pitch = (secondTop - firstTop).toLong()
+
+        // First drag: the leading song down one pitch - the gesture's
+        // handle node is the row that keeps the top position.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch.toFloat()))
+            up()
+        }
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
+        compose.waitForIdle()
+
+        // Second drag on the SAME node: the song now leading (the second
+        // song, on the first song's old handle node) goes down one pitch.
+        compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, pitch.toFloat()))
+            up()
+        }
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(firstId, secondId, thirdId) })
+        compose.waitForIdle()
+
+        // The page shows the order the second drag left: the first song
+        // leads again.
+        val firstRowTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val secondRowTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the page shows the order the second drag left",
+            firstRowTop > 0f && firstRowTop < secondRowTop,
+        )
+    }
+
+    // ---------- the reorder write's set-equality guard: a list change in flight keeps the current order ----------
+
+    @Test
+    fun aStaleReorderIsRejectedWhenTheListChangesInFlight() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val tag = checkNotNull(dbAndGet { app().repository.tagByUid(TAG_UID) })
+        val first = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first") }
+        val second = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second") }
+        val third = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third") }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(first.id, second.id) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        // An accepted reorder writes the order and fires the save event -
+        // the baseline the rejection below is measured against.
+        viewModel.reorderTagSongs(tag, listOf(second, first))
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(second.id, first.id) })
+        idleUntil({ events.contains("Order saved.") })
+
+        // A song is added while a second drag is still in flight: the
+        // current set is now {first, second, third}, while the in-flight
+        // order can only be a permutation of the old {first, second}.
+        viewModel.linkEntryToTag(tag, third)
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(second.id, first.id, third.id) })
+
+        // The stale in-flight order is rejected: the current order is
+        // kept and the save event fires only for the accepted write.
+        viewModel.reorderTagSongs(tag, listOf(first, second))
+        pumpMainLooperSettled()
+        assertEquals(
+            "the stale order is not written",
+            listOf(second.id, first.id, third.id),
+            tagLinks(tagId).map { it.id },
+        )
+        assertEquals(
+            "a rejected write fires no save event",
+            1,
+            events.count { it == "Order saved." },
+        )
+
+        // An unchanged order (a drag that ends where it started) writes
+        // nothing and fires nothing.
+        viewModel.reorderTagSongs(tag, listOf(second, first, third))
+        pumpMainLooperSettled()
+        assertEquals(
+            "an unchanged order fires no save event",
+            1,
+            events.count { it == "Order saved." },
+        )
+        assertEquals(
+            "the order is unchanged",
+            listOf(second.id, first.id, third.id),
+            tagLinks(tagId).map { it.id },
+        )
+    }
+
+    /**
+     * Pumps the main looper long enough for a short view-model launch (a
+     * Room read plus a transaction) to have settled, so a "nothing fired"
+     * assertion is not racing the write.
+     */
+    private fun pumpMainLooperSettled(rounds: Int = 10, pauseMs: Long = 50) {
+        repeat(rounds) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            Thread.sleep(pauseMs)
+        }
     }
 
     companion object {

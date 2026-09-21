@@ -958,6 +958,32 @@ class LumiViewModel(
         }
     }
 
+    /**
+     * Reorders the tag's song list - the tag detail page's drag reorder:
+     * the persisted link order is replaced with [ordered] through the same
+     * transactional seam the add-song flow appends through, so the play
+     * order (the link order) follows the reordered order. A list that is
+     * unchanged (a drag that ends where it started) writes nothing.
+     */
+    fun reorderTagSongs(tag: TagEntity, ordered: List<EntryEntity>) {
+        viewModelScope.launch {
+            val ids = ordered.map { it.id }
+            if (repository.entriesForTag(tag.id).map { it.id } == ids) return@launch
+            var accepted = false
+            repository.updateTagEntries(tag.id) { current ->
+                // The list may have changed between the drag and the write
+                // (a song added or removed in flight); only a permutation of
+                // the current set is a reorder - anything else keeps the
+                // current order.
+                if (current.toSet() == ids.toSet()) {
+                    accepted = true
+                    ids
+                } else current
+            }
+            if (accepted) event("Order saved.")
+        }
+    }
+
     /** Keeps the read grant on [uri] forever; false when it cannot. */
     private suspend fun persistReadGrant(uri: Uri): Boolean =
         try {
