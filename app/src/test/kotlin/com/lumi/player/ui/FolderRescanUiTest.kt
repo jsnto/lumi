@@ -27,10 +27,11 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral coverage for rescanning an added folder: adding a folder tree
- * remembers it in the content pane's "Folders" section (each with a "Rescan"
- * affordance), and rescanning re-walks the tree and stores only the audio
- * files added since the last scan - files already stored are skipped, and a
- * rescan of an unchanged folder adds nothing.
+ * remembers it in the content pane's "Folders" section (each row opens the
+ * folder's detail page, which carries the "Rescan" affordance), and
+ * rescanning re-walks the tree and stores only the audio files added since
+ * the last scan - files already stored are skipped, and a rescan of an
+ * unchanged folder adds nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -100,11 +101,17 @@ class FolderRescanUiTest {
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
         idleUntil({ events.any { it.startsWith("Added") } })
 
-        // The folder is now listed in the "Folders" section with a Rescan
-        // affordance. On the small test screen the section sits below the
-        // viewport, so existence is the layout assertion.
+        // The folder is now listed in the "Folders" section; its rescan
+        // affordance lives on the folder's detail page. On the small test
+        // screen the section sits below the viewport, so existence is the
+        // layout assertion, and the page is opened by tapping the row.
+        compose.waitForIdle()
         compose.onNodeWithText("Folders").assertExists()
-        compose.onNodeWithText("Rescan").assertExists()
+        compose.onNodeWithText("Tap to view its songs").assertExists()
+        compose.onNodeWithText(TREE_URI).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Folder details").assertExists()
+        compose.onNodeWithContentDescription("Rescan").assertExists()
     }
 
     @Test

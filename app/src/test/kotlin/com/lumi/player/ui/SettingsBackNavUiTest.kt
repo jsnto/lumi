@@ -25,7 +25,8 @@ import org.robolectric.shadows.ShadowLooper
  * Behavioral coverage for the settings navigation back gesture: system back
  * (driven through the real [androidx.activity.OnBackPressedDispatcher]) and
  * the in-pane back arrow unwind one level at a time - the tag detail page is
- * a child of the NFC tags pane, so its back lands on the NFC tags list and
+ * a child of the NFC tags pane and the folder detail page a child of the
+ * content pane, so each one's back lands on the list it lives under and
  * only the next back reaches the menu - and the menu is left at the exact
  * scroll position it was left at. The screen is configured short (300dp) so
  * the settings menu list genuinely overflows and the scroll position is a
@@ -97,6 +98,22 @@ class SettingsBackNavUiTest {
         waitForText(name)
         compose.onNodeWithText(name).performScrollTo()
         compose.onNodeWithText(name).performClick()
+        compose.waitForIdle()
+        return activity
+    }
+
+    /**
+     * Opens settings, the content pane, and the [label] folder's detail
+     * page (the folder row arrives through an async Room round trip, so
+     * wait for it before clicking).
+     */
+    private fun openFolderPage(label: String): MainActivity {
+        val activity = openSettings()
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+        waitForText(label)
+        compose.onNodeWithText(label).performScrollTo()
+        compose.onNodeWithText(label).performClick()
         compose.waitForIdle()
         return activity
     }
@@ -207,7 +224,55 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Play mode").assertDoesNotExist()
     }
 
+    // ---------- the folder detail page unwinds to the content pane, not the menu ----------
+
+    @Test
+    fun systemBackFromTheFolderDetailPageUnwindsToTheContentPaneAndOnlyThenTheMenu() {
+        dbAndGet { app().repository.rememberFolder(FOLDER_URI, "Music") }
+
+        val activity = openFolderPage("Music")
+        // The detail page is showing.
+        waitForText("Folder details")
+
+        // The first system back unwinds the detail page one level, to the
+        // content pane it lives under - not the menu, and not out of
+        // settings (the folder's row is back).
+        systemBack(activity)
+        compose.onNodeWithText("Folder details").assertDoesNotExist()
+        compose.onNodeWithText("Music").assertExists()
+        compose.onNodeWithText("Tap to view its songs").assertExists()
+
+        // The second system back leaves the content pane for the menu.
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
+
+        // The third back leaves the menu entirely and returns to the player
+        // screen (the two-level unwind, then the host's back handling).
+        systemBack(activity)
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    @Test
+    fun theInPaneBackArrowFromTheFolderDetailPageLandsOnTheContentPane() {
+        dbAndGet { app().repository.rememberFolder(FOLDER_URI, "Music") }
+
+        openFolderPage("Music")
+        waitForText("Folder details")
+
+        // The pane's own back arrow (the top bar) lands on the content
+        // pane, the detail page's parent pane - not the menu.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Folder details").assertDoesNotExist()
+        compose.onNodeWithText("Tap to view its songs").assertExists()
+        // The menu is not showing either.
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
     companion object {
         const val TAG_UID = "04:CA:FE:99:99"
+        const val FOLDER_URI = "content://docs/tree/primary%3AMusic"
     }
 }

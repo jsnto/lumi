@@ -130,6 +130,16 @@ class LumiRepository(private val db: LumiDatabase) {
             .sumOf { chunk -> dao.countEntriesByPayloads(chunk.toSet()) }
 
     /**
+     * The stored content rows whose payload is in [payloads] - the folder
+     * detail page's song list (the rows a folder's walk identified, in the
+     * content list's order). An empty set returns nothing without a query.
+     */
+    suspend fun entriesByPayloads(payloads: Set<String>): List<EntryEntity> =
+        payloads
+            .chunked(PAYLOAD_QUERY_BATCH)
+            .flatMap { chunk -> dao.entriesByPayloads(chunk.toSet()) }
+
+    /**
      * Removes a remembered folder and the content rows imported from it in
      * ONE Room transaction, so a partial failure can't leave the folder
      * gone with its songs still stored (or the songs gone with the folder

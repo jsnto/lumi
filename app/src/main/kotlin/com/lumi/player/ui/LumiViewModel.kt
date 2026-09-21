@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.nfc.Tag
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -551,6 +552,9 @@ class LumiViewModel(
                     else -> "Added ${newSongs.size} new songs from that folder."
                 },
             )
+            // The folder page (if it is open on this folder) shows the new
+            // songs.
+            if (selectedFolder?.id == folder.id) refreshFolderSongs()
         }
     }
 
@@ -637,22 +641,74 @@ class LumiViewModel(
         _folderRemovalPreview.value = null
     }
 
+    // ---- settings: the folder detail page ----
+
     /**
-     * The label for a picked folder: the first `_display_name` row of the
-     * tree query, or the uri itself when no name can be read. On the real
-     * documents provider a `:tree` listing includes the tree's own root row
-     * first, so the label is the folder's own name (a provider that lists no
-     * root row yields the first child's name instead - cosmetic). Querying
-     * a SAF tree uri lists the root's children, so an empty root (no direct
-     * children) yields a zero-row cursor - reading it unguarded threw
-     * (CursorIndexOutOfBoundsException) and crashed the add, so the read is
-     * guarded and any provider failure falls back to the uri string instead
-     * of aborting the add.
+     * The folder detail page's song list: the stored content rows the
+     * folder's walk identified (the same walk the rescan and the removal
+     * use), or nothing + unreadable when the tree can no longer be read.
+     * Null while the walk is in flight.
+     */
+    data class FolderSongsState(
+        val entries: List<EntryEntity>,
+        val readable: Boolean = true,
+    )
+
+    private val _folderSongs = MutableStateFlow<FolderSongsState?>(null)
+    val folderSongs: StateFlow<FolderSongsState?> = _folderSongs.asStateFlow()
+
+    private var selectedFolder: FolderEntity? = null
+    private var folderSongsJob: Job? = null
+
+    /**
+     * Recomputes the folder detail page's song list for [folder]: the walk
+     * (the same one the rescan and the removal use) identifies the imported
+     * payloads, and the stored rows that match become the page's song list.
+     * Re-selecting cancels any in-flight walk; a walk that fails (the tree
+     * can no longer be read) settles to the unreadable state.
+     */
+    fun selectFolder(folder: FolderEntity) {
+        selectedFolder = folder
+        refreshFolderSongs()
+    }
+
+    /** Recomputes the current folder page's song list (a rescan's new rows need it). */
+    private fun refreshFolderSongs() {
+        val folder = selectedFolder ?: return
+        folderSongsJob?.cancel()
+        _folderSongs.value = null
+        folderSongsJob = viewModelScope.launch {
+            val payloads: Set<String>? = try {
+                withContext(Dispatchers.IO) {
+                    collectAudioFiles(folder.uri) { folderUri ->
+                        folderChildrenAttributed(Uri.parse(folderUri))
+                    }.map { it.uri }.toSet()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read the songs of folder ${folder.uri} for the folder page", e)
+                null
+            }
+            // The folder (or the page) may have changed while the walk ran.
+            if (selectedFolder?.id != folder.id) return@launch
+            _folderSongs.value = payloads?.let {
+                FolderSongsState(entries = repository.entriesByPayloads(it))
+            } ?: FolderSongsState(entries = emptyList(), readable = false)
+        }
+    }
+
+    /**
+     * The label for a picked folder: the `_display_name` of the folder's own
+     * row, read at the folder's own document uri (see the [folderChildren]
+     * seam's grammar note - the tree uri itself is NOT a listing uri, so the
+     * label is a single-row document query, not a listing read). The
+     * provider may still answer empty (or throw, e.g. on a revoked grant),
+     * so the read is guarded and any provider failure falls back to the uri
+     * string instead of aborting the add.
      */
     private fun folderDisplayName(treeUri: Uri): String =
         try {
             context.contentResolver
-                .query(canonicalTreeUri(treeUri), arrayOf("_display_name"), null, null, null)
+                .query(Uri.parse(documentUri(treeUri, folderDocIdOf(treeUri))), arrayOf("_display_name"), null, null, null)
                 ?.use { cursor ->
                     if (!cursor.moveToFirst()) return@use null
                     cursor.getString(cursor.getColumnIndexOrThrow("_display_name"))
@@ -667,70 +723,64 @@ class LumiViewModel(
      * Test seam: the documents provider's folder listing (a folder uri to
      * its direct children), replaced in unit tests with a fake tree.
      *
-     * The documents provider's uri grammar is strict, and a picked tree's
-     * docIds contain `/` and `:` (e.g. `primary:Music/Album/song.mp3`), so
-     * every uri this seam builds must carry the docId percent-encoded into
-     * ONE path segment:
-     * - a file's document uri is `scheme://authority/document/<docId>` with
-     *   exactly two path segments - a raw docId splits the path into extra
-     *   segments, the provider's uri parse throws
-     *   (`IllegalArgumentException: Invalid document id`), and a stored
-     *   payload would be a uri the player cannot open;
-     * - a subfolder's children are listed at the tree's CHILD uri
-     *   `scheme://authority/child/<treeSeg>:tree/<docId>`, never at the
-     *   subfolder's document uri (which answers with the folder's own single
-     *   row, not its children);
-     * - querying the tree uri itself lists the root's children AND the
-     *   tree's own root row (`_id` = the tree's own segment, dir flag) -
-     *   that row is skipped: its children are the very rows of the listing,
-     *   so recursing into it would re-list the root through an invalid uri.
-     * The document-provider protocol constants are kept as inline literals
-     * on purpose (the stub jar now carries `DocumentsContract`, see
-     * AGENTS.md): the "_id" / "_display_name" / "_flags" columns and the
-     * directory flag value 1.
+     * The real documents provider's query grammar (AOSP
+     * `android.provider.DocumentsProvider`, API 26-35) answers exactly the
+     * shapes `document/<docId>` (the document's own row),
+     * `document/<docId>/children` (its direct children - files and
+     * subfolders alike, NO root row) and the tree-scoped twins
+     * `tree/<treeId>/document/<docId>(/children)`. EVERY other shape - in
+     * particular the tree uri itself (`tree/<treeId>`) and any `child/...`
+     * listing - is refused with `UnsupportedOperationException`: that
+     * rejection is what used to make every folder scan die at its first
+     * query and surface as the generic "Couldn't read that folder's songs."
+     * So this seam lists every folder - the tree's root and each subfolder
+     * alike - at `document/<docId>/children`, and a folder's node uri is
+     * always its own document uri, never the tree uri and never a `child/`
+     * uri. (The tree-scoped twins are additionally gated by the provider's
+     * descendant-containment check, which the stock providers answer
+     * `false` for - the plain `document/` shapes are the ones that work on
+     * every provider.)
+     *
+     * A picked tree's docIds contain `/` and `:` (e.g.
+     * `primary:Music/Album/song.mp3`), so every uri this seam builds carries
+     * the docId percent-encoded into ONE path segment (`Uri.encode(docId,
+     * null)` + `encodedPath`): a raw docId splits the path into extra
+     * segments the provider no longer recognizes as a document uri (refused
+     * with `UnsupportedOperationException`), and a stored payload would be a
+     * uri the player can't open either.
+     *
+     * Rows are directories when their `_mime_type` is
+     * `vnd.android.document/directory` ([DocumentsContract.Document.MIME_TYPE_DIR]):
+     * the real providers mark directories that way. The `_flags` bit 0 is
+     * `FLAG_SUPPORTS_THUMBNAIL` on API 26+ - a flags-based check would
+     * misread every subfolder as a file and every thumbnailable file as a
+     * subfolder.
+     *
+     * The tree uri's docId is its second path segment; a trailing
+     * `:openable` picker suffix on that segment (android.net.Uri has no
+     * `:`-fragment parsing, so it rides in the path) is stripped before the
+     * query - the provider answers only the bare docId. The folders table
+     * stores the picker uri verbatim (normalization is at query time only).
      */
     internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
-        // A tree uri's ":openable" picker suffix (if the picker appends one)
-        // rides in its last path segment: the provider answers only the
-        // canonical ":tree" shape, so query it and derive the tree segment
-        // (root-row skip + child-uri treeId) from the canonical form.
-        val queryUri = canonicalTreeUri(folderUri)
+        val docId = folderDocIdOf(folderUri)
         context.contentResolver
-            .query(queryUri, null, null, null, null)
+            .query(listChildrenUri(folderUri, docId), null, null, null, null)
             ?.use { cursor ->
-                val docId = cursor.getColumnIndexOrThrow("_id")
-                val name = cursor.getColumnIndexOrThrow("_display_name")
-                val flags = cursor.getColumnIndexOrThrow("_flags")
-                // The tree's own document-id segment (with its ":tree"
-                // suffix, no ":openable"): path segment 2 of both the
-                // tree uri (/tree/<seg>) and the child uri
-                // (/child/<seg>/<parentId>) this seam recurses with.
-                val treeSeg = queryUri.pathSegments.getOrNull(1)
-                val listingTheTree = folderUri.pathSegments.getOrNull(0) == "tree"
+                val docIdColumn = cursor.getColumnIndexOrThrow("_id")
+                val nameColumn = cursor.getColumnIndexOrThrow("_display_name")
+                val mimeColumn = cursor.getColumnIndexOrThrow("_mime_type")
                 buildList {
                     while (cursor.moveToNext()) {
-                        val rawDocId = cursor.getString(docId)
-                        // The tree's own root row: listed with the root's
-                        // children, but its children are those same rows -
-                        // recursing into it is both invalid and a loop.
-                        if (rawDocId == null || (listingTheTree && rawDocId == treeSeg)) continue
-                        val isDirectory = (cursor.getLong(flags) and DOCUMENT_FLAG_DIR) != 0L
+                        val rawDocId = cursor.getString(docIdColumn) ?: continue
+                        // The child's own document uri is the walk node for a
+                        // subfolder AND the stored payload for a file - one
+                        // uri shape for both.
                         add(
                             FolderChild(
-                                displayName = cursor.getString(name) ?: "",
-                                isDirectory = isDirectory,
-                                childUri = if (isDirectory) {
-                                    // A subfolder's children are listed at the
-                                    // tree's child uri, never at the
-                                    // subfolder's document uri (which answers
-                                    // with the folder's own single row).
-                                    childDocumentsUri(folderUri, treeSeg, rawDocId)
-                                } else {
-                                    // A fresh builder: the parent's ":tree"
-                                    // suffix must not leak into the child's
-                                    // document uri.
-                                    documentUri(folderUri, rawDocId)
-                                },
+                                displayName = cursor.getString(nameColumn) ?: "",
+                                isDirectory = cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR,
+                                childUri = documentUri(folderUri, rawDocId),
                             ),
                         )
                     }
@@ -739,33 +789,31 @@ class LumiViewModel(
             ?: emptyList()
     }
 
-    /** A tree uri's canonical form: a trailing ":openable" on its last path segment (the picker's suffix, which android.net.Uri keeps in the path) stripped so the provider receives the `:tree` shape. Non-tree uris and tree uris without the suffix pass through unchanged; the ":tree" suffix is never stripped. */
-    private fun canonicalTreeUri(treeUri: Uri): Uri {
-        if (treeUri.pathSegments.getOrNull(0) != "tree") return treeUri
-        val lastSegment = treeUri.pathSegments.lastOrNull() ?: return treeUri
-        if (!lastSegment.endsWith(":openable")) return treeUri
-        return Uri.Builder()
-            .scheme(treeUri.scheme)
-            .authority(treeUri.authority)
-            .encodedPath("/tree/${Uri.encode(lastSegment.removeSuffix(":openable"), null)}")
-            .build()
-    }
+    /**
+     * The docId of the folder a listing is asked for: the tree uri carries
+     * it as its second path segment (a trailing `:openable` picker suffix on
+     * that segment is stripped - the provider answers only the bare docId),
+     * and every other node uri this seam builds is a plain
+     * `document/<docId>` uri, whose docId is the same second segment (the
+     * percent-encoding is already undone by [Uri.pathSegments]).
+     */
+    private fun folderDocIdOf(folderUri: Uri): String =
+        folderUri.pathSegments.getOrNull(1)?.removeSuffix(":openable").orEmpty()
 
-    /** A file's document uri `scheme://authority/document/<docId>` built from [folderUri]'s scheme + authority, the docId percent-encoded into a single path segment. */
+    /** A folder's children listing uri `scheme://authority/document/<docId>/children`, the docId percent-encoded into a single path segment. */
+    private fun listChildrenUri(folderUri: Uri, docId: String): Uri =
+        Uri.Builder()
+            .scheme(folderUri.scheme)
+            .authority(folderUri.authority)
+            .encodedPath("/document/${Uri.encode(docId, null)}/children")
+            .build()
+
+    /** A child's own uri `scheme://authority/document/<docId>` built from [folderUri]'s scheme + authority, the docId percent-encoded into a single path segment. It is the walk node for a subfolder AND the stored payload for a file. */
     private fun documentUri(folderUri: Uri, docId: String): String =
         Uri.Builder()
             .scheme(folderUri.scheme)
             .authority(folderUri.authority)
             .encodedPath("/document/${Uri.encode(docId, null)}")
-            .build()
-            .toString()
-
-    /** A folder-children listing uri `scheme://authority/child/<treeSeg>:tree/<docId>` for the folder [docId] inside [folderUri]'s tree, the docId percent-encoded into a single path segment. */
-    private fun childDocumentsUri(folderUri: Uri, treeSeg: String?, docId: String): String =
-        Uri.Builder()
-            .scheme(folderUri.scheme)
-            .authority(folderUri.authority)
-            .encodedPath("/child/${Uri.encode(treeSeg.orEmpty(), null)}/${Uri.encode(docId, null)}")
             .build()
             .toString()
 
@@ -840,9 +888,6 @@ fun lumiViewModelFactory(app: LumiApp): ViewModelProvider.Factory = object : Vie
     override fun <T : ViewModel> create(modelClass: Class<T>): T =
         LumiViewModel(app, app.repository) as T
 }
-
-/** DocumentsContract.Document.FLAG_DIR_DIR (kept as an inline literal; see AGENTS.md). */
-private const val DOCUMENT_FLAG_DIR = 1L
 
 /** Log tag: folder read failures are attributed here (the failing uri + the exception). */
 private const val TAG = "LumiViewModel"

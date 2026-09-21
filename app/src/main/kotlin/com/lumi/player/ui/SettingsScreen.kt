@@ -96,6 +96,7 @@ private enum class SettingsPane {
     Tags,
     Content,
     TagDetail,
+    FolderDetail,
 }
 
 /**
@@ -105,10 +106,11 @@ private enum class SettingsPane {
  * screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
- * child of the NFC tags pane, so its system back and back arrow take it back
- * to the NFC tags list (and its deleted-while-open fallback lands there too);
- * every other sub-screen's system back and back arrow go back to the menu,
- * and from the menu the host's back handling (the NavHost in [LumiRoot])
+ * child of the NFC tags pane, and the folder detail page is a child of the
+ * content pane, so each one's system back and back arrow take it back to
+ * the list it lives under (and its removed-while-open fallback lands there
+ * too); every other sub-screen's system back and back arrow go back to the
+ * menu, and from the menu the host's back handling (the NavHost in [LumiRoot])
  * returns to the player screen. The
  * [SettingsPane] state and the menu's scroll position live here at the top
  * level, so returning from a sub-screen lands in the menu at the exact scroll
@@ -140,6 +142,9 @@ fun SettingsScreen(
     // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
+    // The selected folder's song list (the folder detail page's plumbing;
+    // null while the folder's walk is in flight).
+    val folderSongs by viewModel.folderSongs.collectAsState(null)
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
@@ -151,6 +156,11 @@ fun SettingsScreen(
     // tags pane is tapped, or when a scan settles on a registered tag;
     // cleared when the tag is removed or the page leaves it).
     var tagDetailId by remember { mutableStateOf<Long?>(null) }
+
+    // The folder whose detail page is showing (set when a folder row in the
+    // content pane is tapped; cleared when the folder is removed or the
+    // page leaves it).
+    var folderDetailId by remember { mutableStateOf<Long?>(null) }
 
     // A settled scan hands its resolved (registered) tag to the detail
     // page (which overlays any pane); the result is consumed so a later
@@ -197,11 +207,16 @@ fun SettingsScreen(
 
     // System back must unwind the settings screen itself (one level at a
     // time) before the host can pop settings away entirely: the tag detail
-    // page unwinds to the NFC tags list it lives under, every other
-    // sub-screen to the menu; only when the menu is showing is the default
-    // back handler allowed through.
+    // page unwinds to the NFC tags list it lives under, the folder detail
+    // page to the content pane it lives under, and every other sub-screen
+    // to the menu; only when the menu is showing is the default back
+    // handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
-        pane = if (pane == SettingsPane.TagDetail) SettingsPane.Tags else SettingsPane.Menu
+        pane = when (pane) {
+            SettingsPane.TagDetail -> SettingsPane.Tags
+            SettingsPane.FolderDetail -> SettingsPane.Content
+            else -> SettingsPane.Menu
+        }
     }
 
     when (pane) {
@@ -242,8 +257,10 @@ fun SettingsScreen(
                 audioPicker.launch(arrayOf("audio/*"))
             },
             onAddFolder = { folderPicker.launch(null) },
-            onRescanFolder = { viewModel.rescanFolder(it) },
-            onRemoveFolder = { viewModel.requestFolderRemoval(it) },
+            onFolderOpened = { folder ->
+                folderDetailId = folder.id
+                pane = SettingsPane.FolderDetail
+            },
             onEntryDeleted = { deleteEntry = it },
         )
         SettingsPane.TagDetail -> {
@@ -269,6 +286,28 @@ fun SettingsScreen(
                     },
                     onEdit = { editTag = it },
                     onDelete = { deleteTag = it },
+                )
+            }
+        }
+        SettingsPane.FolderDetail -> {
+            // The folder may have been removed while the page is open (the
+            // danger zone's own confirm does this); when it is gone, fall
+            // back to the content pane the folder's row lived in rather than
+            // hold a page for a folder that no longer exists.
+            val folder = folders.firstOrNull { it.id == folderDetailId }
+            if (folder == null) {
+                LaunchedEffect(Unit) {
+                    folderDetailId = null
+                    pane = SettingsPane.Content
+                }
+            } else {
+                FolderDetailPane(
+                    viewModel = viewModel,
+                    folder = folder,
+                    songs = folderSongs,
+                    onBack = { pane = SettingsPane.Content },
+                    onRescan = { viewModel.rescanFolder(folder) },
+                    onRemove = { viewModel.requestFolderRemoval(folder) },
                 )
             }
         }
@@ -947,6 +986,150 @@ private fun TagDetailPane(
     }
 }
 
+/**
+ * One added folder, opened by tapping its row in the content pane. The
+ * page shows the folder's details (label + the picked tree uri), its
+ * imported songs (the stored content rows the folder's walk identified -
+ * the same walk the rescan and the removal use), a rescan action that
+ * re-walks the tree for new songs, and ends in a danger zone whose delete
+ * removes the folder FROM THE APP - and only the folder and its imported
+ * songs; the music files on the phone are untouched.
+ *
+ * The page is a child of the content pane: its back (the in-pane arrow AND
+ * system back) unwinds one level to the content pane, and the content pane
+ * still goes straight to the menu.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderDetailPane(
+    viewModel: LumiViewModel,
+    folder: FolderEntity,
+    songs: LumiViewModel.FolderSongsState?,
+    onBack: () -> Unit,
+    onRescan: () -> Unit,
+    onRemove: (FolderEntity) -> Unit,
+) {
+    // The page's song list: selecting the folder walks its tree and settles
+    // the observed [songs] state (null while the walk is in flight).
+    LaunchedEffect(folder.id) { viewModel.selectFolder(folder) }
+    val scheme = MaterialTheme.colorScheme
+    Scaffold(topBar = { PaneTopAppBar(folder.label, onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard(title = "Folder details") {
+                SettingRow(
+                    leading = {
+                        IconChip(
+                            icon = Icons.Filled.Folder,
+                            background = scheme.tertiaryContainer,
+                            content = scheme.onTertiaryContainer,
+                        )
+                    },
+                    title = folder.label,
+                    detail = folder.uri,
+                )
+            }
+            // The rescan action sits on this section's title row (the
+            // settled title-row action language): it re-walks the tree and
+            // adds the songs the folder gained since the last scan.
+            SectionCard(
+                title = "Songs",
+                trailing = {
+                    SoftIconButton(
+                        icon = Icons.Default.Refresh,
+                        contentDescription = "Rescan",
+                        onClick = onRescan,
+                    )
+                },
+            ) {
+                when {
+                    songs == null -> Text(
+                        text = "Reading that folder's songs…",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    !songs.readable -> Text(
+                        text = "That folder's songs can't be read right now, so they can't be listed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    songs.entries.isEmpty() -> Text(
+                        text = "No songs imported from that folder yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    else -> songs.entries.forEach { entry ->
+                        SettingRow(
+                            leading = {
+                                IconChip(
+                                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                    background = scheme.primaryContainer,
+                                    content = scheme.onPrimaryContainer,
+                                )
+                            },
+                            title = entry.label,
+                            detail = detailFor(entry.type, entry.payload),
+                        )
+                    }
+                }
+            }
+            // The danger zone: a visually separated, clearly destructive
+            // section. The detail copy states the effect the confirm will
+            // carry out - the folder and its imported songs leave the app's
+            // content list; the music files on the phone are not touched.
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = scheme.errorContainer),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "Danger zone",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onErrorContainer,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconChip(
+                            icon = Icons.Default.Delete,
+                            background = scheme.error,
+                            content = scheme.onError,
+                            size = 36.dp,
+                            iconSize = 19.dp,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Delete folder from the app",
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                color = scheme.onErrorContainer,
+                            )
+                            Text(
+                                "Removes the folder and its imported songs from the app. The music files stay on the phone.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onErrorContainer,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        DestructivePillButton("Delete", onClick = { onRemove(folder) })
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Content: register and manage audio entries. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -956,8 +1139,7 @@ private fun ContentPane(
     onBack: () -> Unit,
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
-    onRescanFolder: (FolderEntity) -> Unit,
-    onRemoveFolder: (FolderEntity) -> Unit,
+    onFolderOpened: (FolderEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -1026,39 +1208,12 @@ private fun ContentPane(
                                 content = MaterialTheme.colorScheme.onTertiaryContainer,
                             )
                         },
+                        // The row body is the folder page's entry point (the
+                        // rescan and the removal live on the page now, not
+                        // on the row).
+                        modifier = Modifier.clickable { onFolderOpened(folder) },
                         title = folder.label,
-                        detail = "Rescan to pick up new songs.",
-                        trailing = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                FilledTonalButton(
-                                    onClick = { onRescanFolder(folder) },
-                                    shape = RoundedCornerShape(500.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    ),
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(15.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Rescan", fontSize = 13.sp)
-                                }
-                                // The folder's removal: the settled row-level
-                                // delete treatment (48 dp target, 40 dp soft
-                                // circle), right next to the rescan action it
-                                // shares the row with. The confirmation names
-                                // the effect before anything is deleted.
-                                SoftIconButton(
-                                    icon = Icons.Default.Delete,
-                                    contentDescription = "Remove folder",
-                                    onClick = { onRemoveFolder(folder) },
-                                )
-                            }
-                        },
+                        detail = "Tap to view its songs",
                     )
                 }
             }

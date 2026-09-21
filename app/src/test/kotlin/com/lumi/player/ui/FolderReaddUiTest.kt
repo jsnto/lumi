@@ -39,11 +39,11 @@ import org.robolectric.shadows.ShadowLooper
  * once.
  *
  * A realistic documents provider is registered by authority and answers the
- * tree uri's children listing (the walk's root) and the subfolder's
- * children with real cursors, so the cursor parsing and the child document
- * uri construction run for real. The tree uri uses the same shape the SAF
- * picker returns (`/tree/<docId>:tree`), with a root docId that contains a
- * colon, like `primary:Music`.
+ * folder's children listing (`document/<docId>/children` - the walk's root
+ * and each subfolder's listing) with real cursors, so the cursor parsing
+ * and the child document uri construction run for real. The tree uri uses
+ * the same shape the SAF picker returns (`/tree/<docId>`), with a root
+ * docId that contains a colon, like `primary:Music`.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -141,8 +141,9 @@ class FolderReaddUiTest {
 
         // Session 2: the app is reopened - fresh activity, fresh view model,
         // the same database. The stored audio must be visible in the content
-        // pane. ("track 01.mp3" also names the remembered-folder row - the
-        // label's first-child quirk - so existence is asserted over all nodes.)
+        // pane. (The remembered-folder row carries the folder's own name -
+        // the label read at the folder's own document uri - so the entry
+        // row's text is unique on the pane.)
         reopenApp()
         val viewModel2 = openContentPane()
         assertTrue(
@@ -192,8 +193,8 @@ class FolderReaddUiTest {
         val viewModel = openContentPane()
         val events = eventsOf(viewModel)
 
-        // The provider's tree query throws: the document provider denies the
-        // listing the same way a revoked grant does.
+        // The provider's folder query throws: the document provider denies
+        // the listing the same way a revoked grant does.
         ShadowContentResolver.registerProviderInternal("docs", ThrowingTreeProvider())
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
@@ -210,39 +211,33 @@ class FolderReaddUiTest {
      *
      * ```
      * primary:Music/
-     *   track 01.mp3     (file)
+     *   track 01.mp3     (file, audio/mpeg)
      *   Album/           (subfolder)
-     *     deep 01.flac   (file)
+     *     deep 01.flac   (file, audio/x-flac)
      *   readme.txt       (file, not audio)
      * ```
      *
-     * A query on the tree uri lists the root's children; a query on a
-     * subfolder's children uri (the tree's `child/<treeId>:tree/<docId>`
-     * listing - the shape the production seam builds, since a subfolder's
-     * document uri answers with the folder's own single row, not its
-     * children) lists that subfolder's children; a query on a file's
-     * document uri answers with the file's own row - the shape the real
-     * ExternalStorageProvider takes.
-     *
-     * android.net.Uri has no `:`-fragment parsing, so the tree uri's
-     * `:tree`/`:openable` suffix is part of the LAST PATH SEGMENT (the same
-     * way the real picker's tree uris look) - the root docId is recovered by
-     * stripping it, exactly as the system provider does.
+     * It answers the real documents-provider grammar: `document/<docId>`
+     * with the document's own single row (files AND directories), and
+     * `document/<docId>/children` with the document's direct children only
+     * (no root row). Directory rows carry the
+     * `vnd.android.document/directory` mime type - the way the real
+     * providers mark directories.
      */
     private class FakeDocumentsProvider : ContentProvider() {
         override fun onCreate(): Boolean = true
 
-        private val rootRows = arrayOf(
-            row("primary:Music/track 01.mp3", "track 01.mp3", 0L),
-            row("primary:Music/Album", "Album", 1L),
-            row("primary:Music/readme.txt", "readme.txt", 0L),
+        private val rootChildren = arrayOf(
+            row("primary:Music/track 01.mp3", "track 01.mp3", 0L, "audio/mpeg"),
+            row("primary:Music/Album", "Album", 0L, MIME_DIR),
+            row("primary:Music/readme.txt", "readme.txt", 0L, "text/plain"),
         )
-        private val albumRows = arrayOf(
-            row("primary:Music/Album/deep 01.flac", "deep 01.flac", 0L),
+        private val albumChildren = arrayOf(
+            row("primary:Music/Album/deep 01.flac", "deep 01.flac", 0L, "audio/x-flac"),
         )
 
-        private fun row(docId: String, displayName: String, flags: Long): Array<Any?> =
-            arrayOf<Any?>(docId, displayName, flags)
+        private fun row(docId: String, displayName: String, flags: Long, mime: String): Array<Any?> =
+            arrayOf<Any?>(docId, displayName, flags, mime)
 
         override fun query(
             uri: Uri,
@@ -251,31 +246,43 @@ class FolderReaddUiTest {
             selectionArgs: Array<out String>?,
             sortOrder: String?,
         ): Cursor? {
-            val path = uri.encodedPath ?: return null
-            val docId = when {
-                path.startsWith("/tree/") ->
-                    // The walk's root: the root folder's own children.
-                    Uri.decode(path.removePrefix("/tree/"))
-                        .removeSuffix(":tree")
-                        .removeSuffix(":openable")
-                path.startsWith("/child/") ->
-                    // A subfolder's children are listed at the tree's child
-                    // uri (child/<treeId>:tree/<parentDocId>), never at the
-                    // subfolder's document uri - the production seam's shape.
-                    Uri.decode(path.removePrefix("/child/").substringAfterLast('/'))
-                path.startsWith("/document/") -> Uri.decode(path.removePrefix("/document/"))
-                else -> return null
-            }
-            return when (docId) {
-                "primary:Music" -> MatrixCursor(COLUMNS, rootRows.size).also { c ->
-                    rootRows.forEach { c.addRow(it) }
+            val segments = uri.pathSegments
+            return when (segments.getOrNull(0)) {
+                "document" -> {
+                    val docId = segments.getOrNull(1)
+                    when {
+                        segments.size == 2 ->
+                            // The document's own single row.
+                            MatrixCursor(COLUMNS).also { c ->
+                                c.addRow(
+                                    when (docId) {
+                                        "primary:Music" -> row("primary:Music", "Music", 0L, MIME_DIR)
+                                        "primary:Music/Album" -> row("primary:Music/Album", "Album", 0L, MIME_DIR)
+                                        else -> row(
+                                            docId ?: "",
+                                            (docId ?: "").substringAfterLast('/'),
+                                            0L,
+                                            "audio/mpeg",
+                                        )
+                                    },
+                                )
+                            }
+                        segments.size == 3 && segments[2] == "children" -> when (docId) {
+                            "primary:Music" -> MatrixCursor(COLUMNS, rootChildren.size).also { c ->
+                                rootChildren.forEach { c.addRow(it) }
+                            }
+                            "primary:Music/Album" -> MatrixCursor(COLUMNS, albumChildren.size).also { c ->
+                                albumChildren.forEach { c.addRow(it) }
+                            }
+                            else -> MatrixCursor(COLUMNS)
+                        }
+                        else -> throw UnsupportedOperationException("Unsupported Uri $uri")
+                    }
                 }
-                "primary:Music/Album" -> MatrixCursor(COLUMNS, albumRows.size).also { c ->
-                    albumRows.forEach { c.addRow(it) }
-                }
-                else -> MatrixCursor(COLUMNS).also { c ->
-                    c.addRow(row(docId, docId.substringAfterLast('/'), 0L))
-                }
+                // The tree uri itself and any child/... listing have no
+                // matcher entry in the real provider - the fixed seam never
+                // issues them.
+                else -> throw UnsupportedOperationException("Unsupported Uri $uri")
             }
         }
 
@@ -290,7 +297,8 @@ class FolderReaddUiTest {
         ): Int = 0
 
         private companion object {
-            val COLUMNS = arrayOf("_id", "_display_name", "_flags")
+            const val MIME_DIR = "vnd.android.document/directory"
+            val COLUMNS = arrayOf("_id", "_display_name", "_flags", "_mime_type")
         }
     }
 
@@ -317,6 +325,6 @@ class FolderReaddUiTest {
 
     companion object {
         /** A documents tree uri in the shape the SAF picker returns. */
-        const val TREE_URI = "content://docs/tree/primary%3AMusic:tree"
+        const val TREE_URI = "content://docs/tree/primary%3AMusic"
     }
 }
