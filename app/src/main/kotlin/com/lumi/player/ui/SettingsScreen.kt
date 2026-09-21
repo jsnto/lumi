@@ -68,6 +68,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1055,10 +1056,23 @@ private fun ReorderableSongList(
     var dragCurrentIndex by remember { mutableIntStateOf(-1) }
     // The order the last completed drag wrote, shown until the observed
     // list echoes it back - so releasing a drag never snaps the list back
-    // to the pre-drag order for a frame while the write lands.
+    // to the pre-drag order for a frame while the write lands. The
+    // baseline is the observed list at that release: an observed list
+    // that settles to something that is neither the baseline nor the
+    // pending order means the write did not land as dragged (the list
+    // changed in flight), and the provisional order is dropped so the
+    // page shows the observed list.
     var pending by remember { mutableStateOf<List<EntryEntity>?>(null) }
-    LaunchedEffect(pending, observed) {
-        if (pending != null && pending == observed) pending = null
+    var pendingBaseline by remember { mutableStateOf<List<EntryEntity>?>(null) }
+    LaunchedEffect(pending, pendingBaseline, observed) {
+        val pendingOrder = pending
+        if (pendingOrder != null) {
+            val settled = observed
+            if (settled != pendingOrder && settled != pendingBaseline) {
+                pending = null
+                pendingBaseline = null
+            }
+        }
     }
 
     // The measured row tops (root coordinates) and the row pitch - the gap
@@ -1103,6 +1117,7 @@ private fun ReorderableSongList(
         if (dragStartIndex < 0) return
         if (dragCurrentIndex != dragStartIndex) {
             pending = order
+            pendingBaseline = observed
             onReordered(order)
         }
         draggedId = null
@@ -1139,8 +1154,9 @@ private fun ReorderableSongList(
                     },
                 trailing = {
                     SongDragHandle(
+                        entryId = entry.id,
                         contentDescription = "Reorder ${entry.label}",
-                        onDrag = { delta -> handleDragged(entry.id, delta) },
+                        onDrag = { id, delta -> handleDragged(id, delta) },
                         onDragEnd = { handleDragEnded() },
                     )
                 },
@@ -1162,39 +1178,47 @@ private fun List<EntryEntity>.moved(from: Int, to: Int): List<EntryEntity> {
 /**
  * A song row's drag handle: the settled 40 dp soft circle (the row-level
  * action buttons' own treatment) carrying the drag grip. Pressing it and
- * moving the pointer vertically drags the row: every move is reported to
- * [onDrag] as the CUMULATIVE vertical delta (pixels, up negative - measured
- * from the press point in the handle's own coordinates) and [onDragEnd]
- * fires when the pointer lifts. A plain tap reports nothing - no delta, no
- * reorder.
+ * moving the pointer vertically drags the row the handle renders at the
+ * press: every move is reported to [onDrag] (with that row's id) as the
+ * CUMULATIVE vertical delta (pixels, up negative - measured from the press
+ * point in the handle's own coordinates) and [onDragEnd] fires when the
+ * pointer lifts; the press-drag-lift cycle repeats for the life of the
+ * node (the list reuses the node positionally across reorders), so the
+ * handle is ready for the next gesture on whatever row it now shows. A
+ * plain tap reports nothing - no delta, no reorder.
  *
  * The handle consumes every move from the first one on, so the page's
  * vertical scroll does not run while the handle is held.
  */
 @Composable
 private fun SongDragHandle(
+    entryId: Long,
     contentDescription: String,
-    onDrag: (totalDeltaY: Float) -> Unit,
+    onDrag: (entryId: Long, totalDeltaY: Float) -> Unit,
     onDragEnd: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val rowId = rememberUpdatedState(entryId)
     Box(
         modifier = Modifier
             .size(40.dp)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
-                    // Press and hold: report the cumulative vertical delta
-                    // (from the press point, in the handle's own coordinates)
-                    // on every move; end the drag when the pointer lifts.
-                    val down = awaitFirstDown()
                     while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        onDrag(change.position.y - down.position.y)
-                        change.consume()
+                        // Press and hold: report the cumulative vertical delta
+                        // (from the press point, in the handle's own coordinates)
+                        // on every move; end the drag when the pointer lifts.
+                        val down = awaitFirstDown()
+                        val id = rowId.value
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            onDrag(id, change.position.y - down.position.y)
+                            change.consume()
+                        }
+                        onDragEnd()
                     }
-                    onDragEnd()
                 }
             }
             .semantics { this.contentDescription = contentDescription }

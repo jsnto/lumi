@@ -665,24 +665,25 @@ class TagDetailPageUiTest {
         waitForText("Third song")
         compose.waitForIdle()
 
-        compose.onNodeWithContentDescription("Reorder Second song").performScrollTo()
+        compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
         compose.waitForIdle()
         val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
         val secondTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
         assertTrue("the rows must be laid out", firstTop > 0f && secondTop > firstTop)
         val pitch = (secondTop - firstTop).toLong()
 
-        // First drag: the second song up one pitch.
-        compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
+        // First drag: the leading song down one pitch - the gesture's
+        // handle node is the row that keeps the top position.
+        compose.onNodeWithContentDescription("Reorder First song").performTouchInput {
             down(center)
-            moveBy(Offset(0f, -pitch.toFloat()))
+            moveBy(Offset(0f, pitch.toFloat()))
             up()
         }
         idleUntil({ tagLinks(tagId).map { it.id } == listOf(secondId, firstId, thirdId) })
         compose.waitForIdle()
 
-        // Second drag on the SAME handle: the song now leads, so it goes
-        // back down one pitch.
+        // Second drag on the SAME node: the song now leading (the second
+        // song, on the first song's old handle node) goes down one pitch.
         compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
             down(center)
             moveBy(Offset(0f, pitch.toFloat()))

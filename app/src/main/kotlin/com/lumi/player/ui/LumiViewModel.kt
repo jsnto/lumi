@@ -969,14 +969,18 @@ class LumiViewModel(
         viewModelScope.launch {
             val ids = ordered.map { it.id }
             if (repository.entriesForTag(tag.id).map { it.id } == ids) return@launch
+            var accepted = false
             repository.updateTagEntries(tag.id) { current ->
                 // The list may have changed between the drag and the write
                 // (a song added or removed in flight); only a permutation of
                 // the current set is a reorder - anything else keeps the
                 // current order.
-                if (current.toSet() == ids.toSet()) ids else current
+                if (current.toSet() == ids.toSet()) {
+                    accepted = true
+                    ids
+                } else current
             }
-            event("Order saved.")
+            if (accepted) event("Order saved.")
         }
     }
 
