@@ -137,6 +137,12 @@ class TagPickerDispatchUiTest {
         compose.onNodeWithText("Porch").performClick()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").assertExists()
+        // The detail page's back unwinds one level to the NFC tags list...
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scan NFC").assertExists()
+        // ...and the tags list's back reaches the menu, whose Content row
+        // is the next hop.
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()

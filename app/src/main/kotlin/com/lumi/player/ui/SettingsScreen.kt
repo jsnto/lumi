@@ -104,9 +104,12 @@ private enum class SettingsPane {
  * content); clicking a row navigates into that setting's own configuration
  * screen.
  *
- * Back navigation unwinds one level at a time: system back and the back arrow
- * take a sub-screen back to the menu, and from the menu the host's back
- * handling (the NavHost in [LumiRoot]) returns to the player screen. The
+ * Back navigation unwinds one level at a time: the tag detail page is a
+ * child of the NFC tags pane, so its system back and back arrow take it back
+ * to the NFC tags list (and its deleted-while-open fallback lands there too);
+ * every other sub-screen's system back and back arrow go back to the menu,
+ * and from the menu the host's back handling (the NavHost in [LumiRoot])
+ * returns to the player screen. The
  * [SettingsPane] state and the menu's scroll position live here at the top
  * level, so returning from a sub-screen lands in the menu at the exact scroll
  * position it was left at, with every dialog and selection intact.
@@ -192,11 +195,13 @@ fun SettingsScreen(
         if (uri != null) viewModel.addFolderEntry(uri)
     }
 
-    // System back must unwind the settings screen itself (sub-screen → menu)
-    // before the host can pop settings away entirely; only when the menu is
-    // showing is the default back handler allowed through.
+    // System back must unwind the settings screen itself (one level at a
+    // time) before the host can pop settings away entirely: the tag detail
+    // page unwinds to the NFC tags list it lives under, every other
+    // sub-screen to the menu; only when the menu is showing is the default
+    // back handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
-        pane = SettingsPane.Menu
+        pane = if (pane == SettingsPane.TagDetail) SettingsPane.Tags else SettingsPane.Menu
     }
 
     when (pane) {
@@ -244,20 +249,20 @@ fun SettingsScreen(
         SettingsPane.TagDetail -> {
             // The tag may have been removed while the page is open (the
             // danger zone's own confirm does this); when it is gone, fall
-            // back to the menu rather than hold a page for a tag that no
-            // longer exists.
+            // back to the NFC tags list the tag's row lived in rather than
+            // hold a page for a tag that no longer exists.
             val tag = tags.firstOrNull { it.id == tagDetailId }
             if (tag == null) {
                 LaunchedEffect(Unit) {
                     tagDetailId = null
-                    pane = SettingsPane.Menu
+                    pane = SettingsPane.Tags
                 }
             } else {
                 TagDetailPane(
                     viewModel = viewModel,
                     tag = tag,
                     linked = linked,
-                    onBack = { pane = SettingsPane.Menu },
+                    onBack = { pane = SettingsPane.Tags },
                     onAddSong = { tagId ->
                         pendingTagPickId = tagId
                         audioPicker.launch(arrayOf("audio/*"))
