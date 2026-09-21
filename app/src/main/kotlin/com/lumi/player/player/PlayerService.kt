@@ -54,6 +54,14 @@ class PlayerService : Service(), Player.Listener {
     private var position: Int = 0
     /** Consecutive load/playback errors; guards against looping on a bad file. */
     private var consecutiveErrors: Int = 0
+    /**
+     * The service's intent to play: true after a start/resume, false after a
+     * pause/stop. [loadCurrent] honours it so an error-driven advance while
+     * the session is paused does not override the pause (a bad-file loop
+     * re-armed playback every cycle on-device and made the pause look like a
+     * no-op).
+     */
+    private var wantsPlay: Boolean = false
     /** Remembered position to seek to once the first media item is ready. */
     private var pendingSeekMs: Long = 0
     private var scope: CoroutineScope? = null
@@ -123,6 +131,7 @@ class PlayerService : Service(), Player.Listener {
         position = if (entries.isEmpty()) 0 else startIndex.coerceIn(0, entries.lastIndex)
         pendingSeekMs = startSeekMs
         consecutiveErrors = 0
+        wantsPlay = true
         startForegroundWithNotification()
         PlayerStateHolder.update { it.copy(activeTagUid = uid) }
         ensurePlayer()
@@ -148,7 +157,7 @@ class PlayerService : Service(), Player.Listener {
         when (EntryType.fromStorage(spec.type)) {
             EntryType.AUDIO -> {
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
-                p.playWhenReady = true
+                p.playWhenReady = wantsPlay
                 p.prepare()
                 armPositionSaver()
             }
@@ -183,6 +192,7 @@ class PlayerService : Service(), Player.Listener {
             else -> {
                 val play = !p.playWhenReady
                 p.playWhenReady = play
+                wantsPlay = play
                 if (!play) saveCurrentPosition()
             }
         }
@@ -192,6 +202,7 @@ class PlayerService : Service(), Player.Listener {
     private fun resumePlayback() {
         if (queue.isEmpty()) return stopPlayback()
         Log.i(TAG, "ACTION_RESUME: resuming (playWhenReady=${player?.playWhenReady})")
+        wantsPlay = true
         player?.playWhenReady = true
     }
 
@@ -203,6 +214,7 @@ class PlayerService : Service(), Player.Listener {
     private fun pausePlayback() {
         if (queue.isEmpty()) return stopPlayback()
         val p = player ?: return
+        wantsPlay = false
         if (p.playWhenReady) {
             Log.i(TAG, "ACTION_PAUSE: pausing playback")
             p.playWhenReady = false
@@ -214,6 +226,7 @@ class PlayerService : Service(), Player.Listener {
 
     private fun stopPlayback() {
         Log.i(TAG, "stopPlayback: stopping the session")
+        wantsPlay = false
         main.removeCallbacks(positionSaver)
         pendingSeekMs = 0
         saveCurrentPosition()
@@ -284,7 +297,14 @@ class PlayerService : Service(), Player.Listener {
                     else -> PlaybackStatus.PLAYING
                 }
                 PlayerStateHolder.update { it.copy(status = status) }
-                if (status == PlaybackStatus.PLAYING) {
+                // Reset the error guard only when audio is actually being
+                // produced (STATE_READY + playing). A failed prepare stays
+                // BUFFERING without ever becoming isPlaying, so a queue of
+                // unplayable files cannot reset the guard on every error
+                // cycle (that made the loop run forever on-device: the
+                // per-cycle BUFFERING state kept clearing consecutiveErrors
+                // before onPlayerError could count it).
+                if (p.isPlaying) {
                     consecutiveErrors = 0
                     armPositionSaver()
                 }
