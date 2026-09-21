@@ -265,10 +265,12 @@ class FolderAddUiTest {
     }
 
     /**
-     * A documents provider whose tree query answers with a zero-row cursor:
-     * a folder whose root has no direct children. Querying a SAF tree uri
-     * lists the root's children, so an empty root yields no rows - the input
-     * that crashed the add path before the label read guarded the cursor.
+     * A documents provider that answers every query with a zero-row cursor:
+     * a folder whose root has no direct children. The label read (the
+     * folder's own tree-scoped document row) and the root listing (the
+     * folder's tree-scoped children listing) can both answer a zero-row
+     * cursor, so the guarded reads are what let the add complete - and add
+     * nothing.
      */
     private fun registerEmptyTreeProvider() {
         val provider = object : ContentProvider() {
@@ -279,7 +281,7 @@ class FolderAddUiTest {
                 selection: String?,
                 selectionArgs: Array<out String>?,
                 sortOrder: String?,
-            ): Cursor? = MatrixCursor(arrayOf("_id", "_display_name", "_flags"))
+            ): Cursor? = MatrixCursor(arrayOf("document_id", "_display_name", "flags", "mime_type"))
             override fun getType(uri: Uri): String? = null
             override fun insert(uri: Uri, values: ContentValues?): Uri? = null
             override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
@@ -301,13 +303,15 @@ class FolderAddUiTest {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
-        // The crash input: the label read sees a zero-row cursor (no direct
-        // children at the root). Must complete - and add nothing.
+        // The crash input: the label read and the root listing both see a
+        // zero-row cursor (no name, no direct children). Must complete -
+        // and add nothing.
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
         idleUntil({ events.any { it.startsWith("No songs found") } })
 
         // The folder is remembered (so it stays rescannable) with the tree
-        // uri as its label fallback, and no entries were stored.
+        // uri as its label fallback (the folder's own row is empty), and no
+        // entries were stored.
         val folders = dbAndGet { app().repository.observeFolders().first() }
         assertEquals("the empty folder is remembered once", 1, folders.size)
         assertEquals(TREE_URI, folders.single().uri)

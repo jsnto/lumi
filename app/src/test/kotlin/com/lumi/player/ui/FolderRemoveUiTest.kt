@@ -30,15 +30,17 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Behavioral coverage for removing an added folder: the Content pane's
- * Folders section offers a remove affordance next to the rescan action, and
- * removing a folder removes the folder row AND the songs imported from it
- * (matched by re-walking the tree - the rescan precedent - so removal
- * matches exactly what the add stored), behind a destructive confirmation
- * that states the effect: the folder and its imported songs leave the
- * app's content list, the music files on the device are not touched. When
- * the tree can no longer be read the count cannot be determined and the
- * confirmation says so plainly; only the folder row is then removed.
+ * Behavioral coverage for removing an added folder: the folder's detail
+ * page (opened by tapping the folder's row in the content pane) offers the
+ * removal in its danger zone - the rescan and the removal live on the page,
+ * not on the row - and removing a folder removes the folder row AND the
+ * songs imported from it (matched by re-walking the tree - the rescan
+ * precedent - so removal matches exactly what the add stored), behind a
+ * destructive confirmation that states the effect: the folder and its
+ * imported songs leave the app's content list, the music files on the
+ * device are not touched. When the tree can no longer be read the count
+ * cannot be determined and the confirmation says so plainly; only the
+ * folder row is then removed.
  *
  * The removal is driven through the view model (the confirmation dialog's
  * buttons are asserted by copy) with the faked [LumiViewModel.folderChildren]
@@ -117,18 +119,29 @@ class FolderRemoveUiTest {
     }
 
     @Test
-    fun theFoldersSectionOffersARemoveAffordanceNextToRescan() {
+    fun theFolderRowOffersNoRowActions_andOpensTheFolderPage() {
         val viewModel = openContentPane()
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         addFolder(viewModel, eventsOf(viewModel), "Added 1 song from the folder.")
 
-        // On the small test screen the section sits below the viewport, so
-        // existence is the layout assertion - the affordance is right next
-        // to the rescan button it shares the row with.
+        // The rescan and the removal are no longer row-level actions: the
+        // row body opens the folder's detail page instead. The label read
+        // falls back to the tree uri (no provider is registered in this
+        // test), so the row's title is the tree uri itself.
         compose.waitForIdle()
         compose.onNodeWithText("Folders").assertExists()
-        compose.onNodeWithText("Rescan").assertExists()
-        compose.onNodeWithContentDescription("Remove folder").assertExists()
+        compose.onNodeWithText("Rescan").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Remove folder").assertDoesNotExist()
+
+        // Tapping the folder's row opens its detail page, which carries the
+        // rescan action (the Songs section's title-row refresh icon) and
+        // the danger zone whose delete removes the folder from the app.
+        compose.onNodeWithText(TREE_URI).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Folder details").assertExists()
+        compose.onNodeWithContentDescription("Rescan").assertExists()
+        compose.onNodeWithText("Danger zone").assertExists()
+        compose.onNodeWithText("Delete folder from the app").assertExists()
     }
 
     @Test
