@@ -52,7 +52,7 @@ interface LumiDao {
     @Query("SELECT COUNT(*) FROM entries WHERE payload IN (:payloads)")
     suspend fun countEntriesByPayloads(payloads: Set<String>): Int
 
-    /** The stored content rows whose payload is in [payloads] (the folder detail page's song list), in the content list's order. */
+    /** The stored content rows whose payload is in [payloads] (the per-clause result of the folder detail page's song list - the caller, [LumiRepository.entriesByPayloads], re-sorts the concatenated clauses into the content list's order). */
     @Query("SELECT * FROM entries WHERE payload IN (:payloads) ORDER BY createdAt ASC, id ASC")
     suspend fun entriesByPayloads(payloads: Set<String>): List<EntryEntity>
 
