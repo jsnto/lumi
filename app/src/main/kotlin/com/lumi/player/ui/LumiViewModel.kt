@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.nfc.Tag
+import android.os.Build
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -220,17 +221,20 @@ class LumiViewModel(
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
             val tag = repository.tagByUid(uid) ?: return@launch
+            val entries = repository.entriesForTag(tag.id)
+            if (entries.isEmpty()) {
+                // A tag with no linked songs plays nothing: it must not become
+                // the active tag (that would hold the policy, and arm the
+                // presence poll, for a list that never plays).
+                event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
+                return@launch
+            }
             when (policy.onTagDetected(uid, paused)) {
                 NfcAction.StartPlayback -> {
                     // This read made [uid] the active tag (start or switch);
                     // let the activity seed its presence record with it.
                     _tagActivated.tryEmit(uid)
-                    val entries = repository.entriesForTag(tag.id)
-                    if (entries.isEmpty()) {
-                        event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
-                    } else {
-                        startPlayer(entries.map { it.toSpec() }, uid)
-                    }
+                    startPlayer(entries.map { it.toSpec() }, uid)
                 }
 
                 // Re-read of the tag already playing while the user had
@@ -443,10 +447,14 @@ class LumiViewModel(
      * exception the caller settles to no metadata. The pruned framework's
      * metadata surface is [MediaMetadataRetriever.extractMetadata] with the
      * int [MediaMetadataRetriever.METADATA_KEY_ARTIST]-style keys (a
-     * duration comes back as its millisecond count's text).
+     * duration comes back as its millisecond count's text). The retriever is
+     * released with [MediaMetadataRetriever.close] on API 29+ and the native
+     * [MediaMetadataRetriever.release] below - [MediaMetadataRetriever.close]
+     * does not exist before API 29, and minSdk is 26.
      */
     internal var metadataReader: (Uri) -> SongMetadata = { uri ->
-        MediaMetadataRetriever().use { retriever ->
+        val retriever = MediaMetadataRetriever()
+        try {
             retriever.setDataSource(context, uri)
             SongMetadata(
                 artist = retriever
@@ -460,6 +468,12 @@ class LumiViewModel(
                     ?.toLongOrNull()
                     ?.takeIf { it > 0 },
             )
+        } finally {
+            if (Build.VERSION.SDK_INT >= 29) {
+                retriever.close()
+            } else {
+                retriever.release()
+            }
         }
     }
 

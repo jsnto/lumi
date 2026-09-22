@@ -1,5 +1,6 @@
 package com.lumi.player.ui
 
+import android.net.Uri
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -296,6 +298,27 @@ class SongProfileUiTest {
         // Back unwinds one level to the content pane.
         compose.onNodeWithContentDescription("Back").performClick()
         idleUntil(cond = { compose.onNodeWithText("Sort by title").isDisplayed() })
+    }
+
+    @Test
+    fun theDefaultMetadataReaderSettlesWithoutCrashing() {
+        val app = ApplicationProvider.getApplicationContext<LumiApp>()
+        val viewModel = LumiViewModel(app, app.repository)
+        // The default reader (not the test seam) does a real content-resolver
+        // read that cannot succeed for this synthetic uri, so it must settle
+        // to a catchable failure - and release the retriever - rather than
+        // crash. A close() on API < 29 would throw NoSuchMethodError (an
+        // Error, not an Exception); runCatching still catches it, and the
+        // assertion below rejects a non-Exception failure.
+        val result = runCatching {
+            viewModel.metadataReader(Uri.parse("content://docs/ProfileSong"))
+        }
+        if (result.isFailure) {
+            assertTrue(
+                "the default reader must fail with a catchable Exception, not an Error (a crash)",
+                result.exceptionOrNull() is Exception,
+            )
+        }
     }
 
     private companion object {

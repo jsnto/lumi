@@ -15,10 +15,13 @@ import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
 import com.lumi.player.player.PlaybackStatus
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -142,6 +145,38 @@ class ManualPlayTagSwitchUiTest {
         folder
     }
 
+    /** Proximity mode; an empty registered tag (no linked songs) + a manual song. */
+    private fun setupEmptyTag(): EntryEntity = runBlocking {
+        app().repository.setPlayMode(PlayMode.PROXIMITY)
+        app().repository.addTag(UID_EMPTY, "Empty tag")
+        app().repository.addEntry(EntryType.AUDIO, "Manual song", "content://manual-empty")
+    }
+
+    private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch {
+            viewModel.uiEvents.collect { e -> events += e }
+        }
+        return events
+    }
+
+    private fun tagActivationsOf(viewModel: LumiViewModel): MutableList<String> {
+        val activations = mutableListOf<String>()
+        viewModel.viewModelScope.launch {
+            viewModel.tagActivated.collect { uid -> activations += uid }
+        }
+        return activations
+    }
+
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the read to settle") {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!cond() && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+        check(cond()) { "timed out waiting for $message" }
+    }
+
     @Test
     fun manualPlay_thenTagRead_startsTheTagList_notIgnored() {
         val manual = setupDb()
@@ -224,7 +259,60 @@ class ManualPlayTagSwitchUiTest {
         assertEquals(UID_A, switch.getStringExtra(PlayerService.EXTRA_TAG_UID))
     }
 
+    @Test
+    fun readingAnEmptyTag_leavesThePolicyUnchanged_andDoesNotResumeTheManualSession() {
+        val manual = setupEmptyTag()
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller)
+        val events = eventsOf(viewModel)
+        val activations = tagActivationsOf(viewModel)
+
+        // A manual song is playing, then the user pauses it (the session
+        // stays, unattached to any tag).
+        viewModel.playEntry(manual)
+        val manualStart = nextServiceIntent()
+        assertNotNull("the content play button must start the player service", manualStart)
+        assertEquals(PlayerService.ACTION_START, manualStart!!.action)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PAUSED, activeTagUid = null)
+        }
+
+        // Reading a tag that plays nothing must not make it the active tag:
+        // it would hold the policy (and arm the presence poll) for a list
+        // that never plays.
+        sendTag(controller, UID_EMPTY)
+        idleUntil(cond = { events.any { it.startsWith("Nothing is linked") } }, message = "the empty-tag report")
+        assertNull(
+            "a tag with no linked songs must not become the active tag",
+            viewModel.activeTagUid,
+        )
+        assertTrue(
+            "reading an empty tag must not arm the presence poll",
+            activations.isEmpty(),
+        )
+        assertNull(
+            "a read of an empty tag starts nothing",
+            shadowOf(app() as Application).nextStartedService,
+        )
+
+        // Re-reading the empty tag while the manual session is paused must
+        // not resume the manual queue - "reading overrides pause" applies to
+        // the tag's own list, and this tag has none.
+        sendTag(controller, UID_EMPTY)
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        assertNull(
+            "a re-read of an empty tag over a paused manual session must not resume (or start) any list",
+            shadowOf(app() as Application).nextStartedService,
+        )
+        assertNull(
+            "a re-read of an empty tag must not make it the active tag",
+            viewModel.activeTagUid,
+        )
+    }
+
     companion object {
         const val UID_A = "04A1B2C3"
+        const val UID_EMPTY = "04C0FFEE01"
     }
 }
