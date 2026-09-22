@@ -5,16 +5,16 @@ import android.content.Intent
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.isDisplayed
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.FolderChild
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.PlayerService
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -33,11 +33,11 @@ import org.robolectric.shadows.ShadowLooper
 /**
  * The content pane's sort control and play buttons. The list sorts by
  * title (descending is the default order; a pick reorders the list and
- * persists in the settings table). Every row carries a play button that
- * starts playback through the app's existing playback path (the service's
- * ACTION_START, unattached to any tag): a song's button plays just that
- * song, a folder's plays every song the folder holds, in the list's
- * order.
+ * persists in the settings table). The individual rows carry a play
+ * button that starts playback through the app's existing playback path
+ * (the service's ACTION_START, unattached to any tag), playing just that
+ * song; the folder rows carry NO play button - a folder's row opens the
+ * folder's own page, where its songs carry the play buttons instead.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -87,14 +87,6 @@ class ContentSortPlayUiTest {
             Thread.sleep(10)
         }
         check(cond()) { "timed out waiting for $message" }
-    }
-
-    private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
-        val events = mutableListOf<String>()
-        viewModel.viewModelScope.launch {
-            viewModel.uiEvents.collect { e -> events += e }
-        }
-        return events
     }
 
     /** The ACTION_START intent the play buttons most recently started. */
@@ -217,50 +209,59 @@ class ContentSortPlayUiTest {
     }
 
     @Test
-    fun aFolderRowPlayButtonPlaysAllOfItsSongsInListOrder() {
-        openContentPane()
+    fun aFolderRowCarriesNoPlayButton_andItsRowStillOpensTheFolderPage() {
+        val (_, viewModel) = openContentPane()
         // Two songs (stored in this order) marked as imported from one
-        // folder; the folder row's play button must queue both, in that
-        // order.
+        // folder.
         dbAndGet {
             val a = checkNotNull(app().repository.addEntryUnique(EntryType.AUDIO, "song-one", "content://one"))
             val b = checkNotNull(app().repository.addEntryUnique(EntryType.AUDIO, "song-two", "content://two"))
             val folder = app().repository.rememberFolder("content://docs/tree:walkin", "Walkin")
             app().repository.markEntriesFromFolder(folder.id, setOf(a.payload, b.payload))
         }
-        idleUntil(cond = { compose.onNodeWithContentDescription("Play Walkin").isDisplayed() })
-        compose.onNodeWithContentDescription("Play Walkin").performClick()
+        idleUntil(cond = { compose.onNodeWithText("Walkin").isDisplayed() })
 
-        val intent = waitForStartIntent()
-        assertEquals(PlayerService.ACTION_START, intent.action)
-        assertNull(
-            "manual playback must not attach a tag",
-            intent.getStringExtra(PlayerService.EXTRA_TAG_UID),
+        // The folder row's play button is gone - and its songs' buttons
+        // are not on the content pane at all: the folder-imported rows
+        // live on the folder's own page, not in the individual list.
+        compose.onNodeWithContentDescription("Play Walkin").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Play song-one").assertDoesNotExist()
+
+        // The row body is still the folder page's entry point - the
+        // folder's songs (and their play buttons) live on that page now.
+        // The page's own walk goes through the faked seam (it lists the
+        // stored rows' payloads, so the page's list shows).
+        viewModel.folderChildren = {
+            listOf(
+                FolderChild("song-one.mp3", isDirectory = false, childUri = "content://one"),
+                FolderChild("song-two.mp3", isDirectory = false, childUri = "content://two"),
+            )
+        }
+        compose.onNodeWithText("Walkin").performClick()
+        compose.waitForIdle()
+        waitForFolderPage()
+        // The page's walk settles asynchronously (a Room round trip); the
+        // song rows (and their play buttons) arrive with it.
+        idleUntil(
+            cond = { compose.onNodeWithContentDescription("Play song-one").isDisplayed() },
+            timeoutMs = 10_000,
+            message = "the folder page's song play buttons",
         )
-        val specs = (intent.getSerializableExtra(PlayerService.EXTRA_ENTRIES) as ArrayList<*>).map { it as EntrySpec }
-        assertEquals(
-            "the folder's songs play in the list's order",
-            listOf("song-one", "song-two"),
-            specs.map { it.label },
-        )
-        assertEquals(
-            listOf("content://one", "content://two"),
-            specs.map { it.payload },
-        )
+        compose.onNodeWithContentDescription("Play song-two").assertExists()
+        // The page's own rows are the songs' - the folder's label carries
+        // no play button of its own there either.
+        compose.onNodeWithContentDescription("Play Walkin").assertDoesNotExist()
     }
 
-    @Test
-    fun playingAnEmptyFolderReportsInsteadOfStartingAnything() {
-        val (_, viewModel) = openContentPane()
-        dbAndGet { app().repository.rememberFolder("content://docs/tree:empty", "Empty folder") }
-        idleUntil(cond = { compose.onNodeWithContentDescription("Play Empty folder").isDisplayed() })
-
-        val events = eventsOf(viewModel)
-        compose.onNodeWithContentDescription("Play Empty folder").performClick()
-        idleUntil(cond = { events.any { it == "That folder has no songs to play." } })
-        assertNull(
-            "an empty folder must not start the service",
-            shadowOf(app() as Application).nextStartedService,
-        )
+    /** Waits for the folder detail page to show. */
+    private fun waitForFolderPage() {
+        var deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            if (compose.onAllNodesWithText("Folder details").fetchSemanticsNodes().isNotEmpty()) return
+            Thread.sleep(20)
+        }
+        compose.onNodeWithText("Folder details").assertExists()
     }
 }

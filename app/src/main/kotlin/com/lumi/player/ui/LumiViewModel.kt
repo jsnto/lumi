@@ -410,20 +410,16 @@ class LumiViewModel(
     }
 
     /**
-     * Plays every song of a folder in the order the rows were stored (the
-     * folder row's play button): the folder's stored content rows become
-     * the queue - no tree walk needed, the stored rows are the folder's
-     * songs.
+     * Toggles the currently playing song between play and pause (the
+     * folder page's song-row play/pause button): the service's own
+     * ACTION_TOGGLE - a paused current song resumes the SAME song (no
+     * fresh start, no new queue), and a playing one pauses in place. The
+     * button's state is live off the shared playback holder's status and
+     * current label, so the row tracks the toggle without a second source
+     * of playback truth.
      */
-    fun playFolder(folder: FolderEntity) {
-        viewModelScope.launch {
-            val songs = repository.entriesForFolder(folder.id)
-            if (songs.isEmpty()) {
-                event("That folder has no songs to play.")
-                return@launch
-            }
-            startPlayer(songs.map { it.toSpec() }, uid = null)
-        }
+    fun toggleCurrentPlayback() {
+        command(PlayerService.ACTION_TOGGLE)
     }
 
     // ---- song profile page: metadata ----
