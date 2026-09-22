@@ -91,8 +91,6 @@ class LumiViewModel(
     /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
     fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>> = repository.observeTagsForEntry(entryId)
 
-    // ---- NFC registration flow ----
-
     // ---- tag scan: the "Scan NFC" action of the NFC tags pane ----
 
     /**
@@ -157,7 +155,6 @@ class LumiViewModel(
     // ---- tag detail page: selected tag + its live entry list ----
 
     private val _selectedTagId = MutableStateFlow<Long?>(null)
-    val selectedTagId: StateFlow<Long?> = _selectedTagId.asStateFlow()
 
     fun selectTag(id: Long?) {
         _selectedTagId.value = id
@@ -209,35 +206,7 @@ class LumiViewModel(
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (_scanActive.value) {
-            // A tag scan was in progress (the NFC tags pane's "Scan NFC"
-            // action, or the song profile's scan-to-assign): settle it. A
-            // registered tag resolves to its profile page (the settings
-            // screen consumes [pendingTagProfile] and opens the tag detail
-            // page) - or, for a scan-to-assign, links its target song to
-            // it; an unknown one goes into the registration flow (capture +
-            // naming dialog, with the optional write-to-tag), and a
-            // scan-to-assign's song waits for the tag's save. Either way the
-            // scan is over, so further reads are normal playback reads.
-            _scanActive.value = false
-            viewModelScope.launch {
-                val existing = repository.tagByUid(uid)
-                val assignEntry = _scanAssignEntry.value
-                if (existing != null) {
-                    if (assignEntry != null) {
-                        // The song profile's scan-to-assign: link the song
-                        // to the scanned tag (the picker's own mechanism -
-                        // a tag that already plays it is reported, not
-                        // duplicated). The profile page's live assigned-tags
-                        // list picks the link up; the user stays on it.
-                        _scanAssignEntry.value = null
-                        linkEntryToTag(existing, assignEntry)
-                    } else {
-                        _pendingTagProfile.value = existing
-                    }
-                } else {
-                    capture(uid, tag)
-                }
-            }
+            settleTagScan(uid, tag)
             return
         }
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
@@ -268,6 +237,40 @@ class LumiViewModel(
                 // playing (Ignore), or a proximity pause (handled via
                 // [onTagLost] instead of the read path).
                 NfcAction.Ignore, NfcAction.PausePlayback -> Unit
+            }
+        }
+    }
+
+    /**
+     * Settles a tag read while a tag scan is in progress (the NFC tags
+     * pane's "Scan NFC" action, or the song profile's scan-to-assign): a
+     * registered tag resolves to its profile page (the settings screen
+     * consumes [pendingTagProfile] and opens the tag detail page) - or, for
+     * a scan-to-assign, links its target song to it; an unknown one goes
+     * into the registration flow (capture + naming dialog, with the
+     * optional write-to-tag), and a scan-to-assign's song waits for the
+     * tag's save. Either way the scan is over, so further reads are normal
+     * playback reads.
+     */
+    private fun settleTagScan(uid: String, tag: Tag?) {
+        _scanActive.value = false
+        viewModelScope.launch {
+            val existing = repository.tagByUid(uid)
+            val assignEntry = _scanAssignEntry.value
+            if (existing != null) {
+                if (assignEntry != null) {
+                    // The song profile's scan-to-assign: link the song
+                    // to the scanned tag (the picker's own mechanism -
+                    // a tag that already plays it is reported, not
+                    // duplicated). The profile page's live assigned-tags
+                    // list picks the link up; the user stays on it.
+                    _scanAssignEntry.value = null
+                    linkEntryToTag(existing, assignEntry)
+                } else {
+                    _pendingTagProfile.value = existing
+                }
+            } else {
+                capture(uid, tag)
             }
         }
     }
@@ -307,17 +310,24 @@ class LumiViewModel(
             action = PlayerService.ACTION_START
             putExtra(PlayerService.EXTRA_ENTRIES, ArrayList(specs))
             putExtra(PlayerService.EXTRA_TAG_UID, uid)
-            if (uid != null) {
-                when (val restore = decideRestore(repository.positionFor(uid), fingerprintOf(specs), specs.size)) {
-                    is PositionRestore.StartFresh -> Unit
-                    is PositionRestore.SeekTo -> {
-                        putExtra(PlayerService.EXTRA_START_ENTRY_INDEX, restore.entryIndex)
-                        putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
-                    }
-                }
-            }
+            if (uid != null) applyStartPosition(uid, specs)
         }
         ContextCompat.startForegroundService(context, intent)
+    }
+
+    /**
+     * The remembered-position start extras for a tag's list: when the tag
+     * has a position saved against this exact linked list, the start entry
+     * index and the position the service seeks to on its first ready state.
+     */
+    private suspend fun Intent.applyStartPosition(uid: String, specs: List<EntrySpec>) {
+        when (val restore = decideRestore(repository.positionFor(uid), fingerprintOf(specs), specs.size)) {
+            is PositionRestore.StartFresh -> Unit
+            is PositionRestore.SeekTo -> {
+                putExtra(PlayerService.EXTRA_START_ENTRY_INDEX, restore.entryIndex)
+                putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
+            }
+        }
     }
 
     fun command(action: String) {
@@ -444,19 +454,28 @@ class LumiViewModel(
         _songMetadata.value = null
         metadataJob?.cancel()
         metadataJob = viewModelScope.launch {
-            val metadata: SongMetadata? = try {
-                withTimeout(METADATA_READ_TIMEOUT_MS) {
-                    withContext(Dispatchers.IO) { metadataReader(Uri.parse(entry.payload)) }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Couldn't read the metadata of ${entry.label}", e)
-                null
-            }
+            val metadata = readEntryMetadata(entry)
             if (selectedEntryId == entry.id) _songMetadata.value = metadata
         }
     }
+
+    /**
+     * The best-effort metadata read for [entry]: off the main thread with a
+     * time limit, settling to no metadata on any failure (an unreadable
+     * file, a revoked grant) rather than an error - the page shows its
+     * placeholders instead.
+     */
+    private suspend fun readEntryMetadata(entry: EntryEntity): SongMetadata? =
+        try {
+            withTimeout(METADATA_READ_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) { metadataReader(Uri.parse(entry.payload)) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Couldn't read the metadata of ${entry.label}", e)
+            null
+        }
 
     /**
      * Test seam: the song profile's media-metadata read, replaced in unit
@@ -625,19 +644,27 @@ class LumiViewModel(
                 _scanAssignEntry.value = null
                 (saved ?: repository.tagByUid(uid))?.let { linkEntryToTag(it, entry) }
             }
-            if (writeToTag) {
-                // The DB stores the name trimmed; write it trimmed to the
-                // tag as well so the two can never diverge.
-                val written = withContext(Dispatchers.IO) {
-                    tagWriter(tag, LumiTagData(name.trim(), mode))
-                }
-                if (written) {
-                    if (saved == null) repository.renameTag(uid, name)
-                    event("Name written to the tag.")
-                } else {
-                    event("Couldn't write to the tag - keep it on the phone and try again.")
-                }
-            }
+            if (writeToTag) writeTagPayload(tag, uid, name, mode, saved != null)
+        }
+    }
+
+    /**
+     * Writes the tag payload (the trimmed name + the registration mode) to
+     * the captured [tag] while it is in range. The DB stores the name
+     * trimmed, so it is written trimmed as well - the two can never
+     * diverge. A write that lands on an already-registered tag renames the
+     * stored record to follow the written payload; a tag that left range
+     * makes the write fail gracefully (the tag is still saved).
+     */
+    private suspend fun writeTagPayload(tag: Tag?, uid: String, name: String, mode: PlayMode, wasSaved: Boolean) {
+        val written = withContext(Dispatchers.IO) {
+            tagWriter(tag, LumiTagData(name.trim(), mode))
+        }
+        if (written) {
+            if (!wasSaved) repository.renameTag(uid, name)
+            event("Name written to the tag.")
+        } else {
+            event("Couldn't write to the tag - keep it on the phone and try again.")
         }
     }
 
@@ -711,22 +738,31 @@ class LumiViewModel(
                 event("No songs found in that folder.")
                 return@launch
             }
-            val fresh = scanned.count {
-                repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id) != null
-            }
-            event(
-                when {
-                    fresh == 0 ->
-                        if (scanned.size == 1) {
-                            "The song from the folder is already in your content list."
-                        } else {
-                            "All ${scanned.size} songs from the folder are already in your content list."
-                        }
-                    fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
-                    else -> "Added ${scanned.size} ${if (scanned.size == 1) "song" else "songs"} from the folder."
-                },
-            )
+            storeFolderSongs(folder, scanned)
         }
+    }
+
+    /**
+     * Stores a picked folder's scanned songs (the already stored ones are
+     * skipped, so re-adding a folder adds no duplicates) and reports the
+     * outcome.
+     */
+    private suspend fun storeFolderSongs(folder: FolderEntity, scanned: List<ScannedSong>) {
+        val fresh = scanned.count {
+            repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id) != null
+        }
+        event(
+            when {
+                fresh == 0 ->
+                    if (scanned.size == 1) {
+                        "The song from the folder is already in your content list."
+                    } else {
+                        "All ${scanned.size} songs from the folder are already in your content list."
+                    }
+                fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
+                else -> "Added ${scanned.size} ${if (scanned.size == 1) "song" else "songs"} from the folder."
+            },
+        )
     }
 
     /**
@@ -800,16 +836,8 @@ class LumiViewModel(
     fun requestFolderRemoval(folder: FolderEntity) {
         if (_folderRemovalPreview.value != null || removalJob?.isActive == true) return
         removalJob = viewModelScope.launch {
-            val walked: List<ScannedSong>? = try {
-                withContext(Dispatchers.IO) {
-                    collectAudioFiles(folder.uri) { folderUri ->
-                        folderChildrenAttributed(Uri.parse(folderUri))
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to read the songs of folder ${folder.uri} for removal", e)
-                null
-            }
+            val walked: List<ScannedSong>? =
+                walkFolderTree("Failed to read the songs of folder ${folder.uri} for removal", folder.uri)
             _folderRemovalPreview.value =
                 if (walked == null) {
                     FolderRemovalPreview(folder, null, null)
@@ -886,16 +914,9 @@ class LumiViewModel(
         folderSongsJob?.cancel()
         _folderSongs.value = null
         folderSongsJob = viewModelScope.launch {
-            val payloads: Set<String>? = try {
-                withContext(Dispatchers.IO) {
-                    collectAudioFiles(folder.uri) { folderUri ->
-                        folderChildrenAttributed(Uri.parse(folderUri))
-                    }.map { it.uri }.toSet()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to read the songs of folder ${folder.uri} for the folder page", e)
-                null
-            }
+            val payloads: Set<String>? =
+                walkFolderTree("Failed to read the songs of folder ${folder.uri} for the folder page", folder.uri)
+                    ?.let { songs -> songs.map { it.uri }.toSet() }
             // The folder (or the page) may have changed while the walk ran.
             if (selectedFolder?.id != folder.id) return@launch
             _folderSongs.value = payloads?.let {
@@ -1075,6 +1096,24 @@ class LumiViewModel(
         }
 
     /**
+     * The guarded tree walk behind the folder reads: the full
+     * [collectAudioFiles] walk through the attributed seam, settling to
+     * null (and logging [what] with the exception) when the tree can no
+     * longer be read - a revoked grant makes the provider query throw.
+     */
+    private suspend fun walkFolderTree(what: String, folderUri: String): List<ScannedSong>? =
+        try {
+            withContext(Dispatchers.IO) {
+                collectAudioFiles(folderUri) { childUri ->
+                    folderChildrenAttributed(Uri.parse(childUri))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, what, e)
+            null
+        }
+
+    /**
      * The v3 -> v4 backfill (see [com.lumi.player.data.LumiDatabase.MIGRATION_3_4]):
      * content rows stored before the folder marker existed are stamped with
      * the folder that imported them, re-walking each remembered folder with
@@ -1089,16 +1128,9 @@ class LumiViewModel(
         val folders = repository.observeFolders().first()
         if (folders.isEmpty()) return
         folders.forEach { folder ->
-            val payloads: Set<String>? = try {
-                withContext(Dispatchers.IO) {
-                    collectAudioFiles(folder.uri) { folderUri ->
-                        folderChildrenAttributed(Uri.parse(folderUri))
-                    }.map { it.uri }.toSet()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to backfill the songs of folder ${folder.uri}", e)
-                null
-            }
+            val payloads: Set<String>? =
+                walkFolderTree("Failed to backfill the songs of folder ${folder.uri}", folder.uri)
+                    ?.let { songs -> songs.map { it.uri }.toSet() }
             if (!payloads.isNullOrEmpty()) {
                 repository.markEntriesFromFolder(folder.id, payloads)
             }
