@@ -1,5 +1,9 @@
 # Per-repo no-mistakes overrides.
 
+# This repository has no CI workflows or check-runs; the pipeline CI step
+# must not babysit an open PR for checks that will never register.
+no_ci: true
+
 # Pin the deterministic test gate to the project's canonical unit-test suite.
 # The toolchain lives in /home/jasonto/.lumi-dev (no system Java or Android
 # SDK; see AGENTS.md), so the environment is pinned explicitly. Without this,
