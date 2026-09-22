@@ -249,10 +249,11 @@ class MainActivity : ComponentActivity() {
     private var lastSeenUid: String? = null
     @Volatile private var lastSeenAt: Long = 0L
 
-    // Continuous-reading fast path (proximity mode, Mifare Ultralight tags
-    // only): the Tag handle from the most recent foreground-dispatch
-    // delivery, kept so the active tag can be read continuously instead of
-    // waiting for the NFC stack to re-report it.
+    // Continuous-reading fast path (proximity mode): the Tag handle from
+    // the most recent foreground-dispatch delivery, kept so the active tag
+    // can be read continuously (the Mifare page-0 reads, or the generic
+    // tag-tech probes) instead of waiting for the NFC stack to re-report
+    // it.
     @Volatile private var lastSeenTag: Tag? = null
     @Volatile private var lastSeenTagUid: String? = null
 
@@ -490,8 +491,10 @@ class MainActivity : ComponentActivity() {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
             if (currentMode == PlayMode.PROXIMITY) {
-                // A (re-)presentation of the active tag starts (or restarts,
-                // cancelling any stale loop) the continuous-reading poll.
+                // A (re-)presentation of the active tag starts the
+                // continuous-reading poll - or is a no-op when that tag's
+                // poll is still running (a re-delivery must not restart it,
+                // see startPresencePoll's same-uid skip).
                 startPresencePoll(tag, uid)
             }
         } else if (currentMode == PlayMode.PROXIMITY) {
