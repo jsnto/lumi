@@ -44,7 +44,10 @@ import java.util.concurrent.TimeUnit
  * [MainActivity.handleNfcIntent]) to verify a registered tag read
  * starts/switches playback, overrides a user pause, and that the
  * mode-specific tag-loss semantics hold (proximity pauses on absence and a
- * re-read of the removed tag resumes; continuous keeps playing). Also pins that a tag capture during a
+ * re-read of the removed tag resumes; continuous keeps playing). Also pins that the
+ * ACTION_START start-up transient (the service sets the holder's active tag while
+ * the status is still IDLE, before ExoPlayer is ready) is not mistaken for a stop,
+ * that a tag capture during a
  * registration session ends the session while leaving the receive path live,
  * that the receive path survives pause/resume, and that a consumed tag
  * intent is not reprocessed on a later resume.
@@ -388,6 +391,58 @@ class NfcAlwaysListeningUiTest {
         val resume = nextServiceIntent(1_000)
         assertNotNull("bringing the tag back must resume playback", resume)
         assertEquals(PlayerService.ACTION_RESUME, resume!!.action)
+    }
+
+    @Test
+    fun proximityMode_serviceStartTransientIdle_disownsNothing_removalPauses_rereadResumes() {
+        // The on-device bug (2026-09-21, tag "hotel"): while the service
+        // starts an ACTION_START it sets the holder's active tag while the
+        // status is still IDLE (ExoPlayer is not ready yet). The IDLE
+        // collector used to treat that transient as a stop: it cleared the
+        // policy's active tag and tore the presence poll down mid-hold.
+        // Result: the first removal paused nothing (the policy no longer
+        // owned the tag, so onTagLost ignored the loss) and the re-hold
+        // RESTARTED the queue from the top (the read took the StartPlayback
+        // branch instead of the early-return / Resume).
+        setupDb(mode = PlayMode.PROXIMITY)
+        val controller = startMainActivity()
+        sendTag(controller, UID_A)
+        val start = nextServiceIntent()
+        assertNotNull("a fresh tag read must start the player service", start)
+        assertEquals(PlayerService.ACTION_START, start!!.action)
+        // The service's startQueue sets the active tag on the holder while
+        // the status is still IDLE - the exact start-up transient the real
+        // service emits before ExoPlayer reaches READY. It must not be
+        // treated as a stop.
+        PlayerStateHolder.update { it.copy(activeTagUid = UID_A) }
+        compose.waitForIdle()
+        ShadowLooper.idleMainLooper()
+        // ExoPlayer reaches READY: playback is running.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.PLAYING) }
+        compose.waitForIdle()
+        // The tag leaves range: the presence poll (which the transient must
+        // not have torn down) must derive the loss and PAUSE.
+        ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
+        val pause = nextServiceIntent(1_000)
+        assertNotNull(
+            "the ACTION_START start-up transient (IDLE + active tag) must " +
+                "not disown the tag: a removal must still pause playback",
+            pause,
+        )
+        assertEquals(PlayerService.ACTION_PAUSE, pause!!.action)
+        // Settle the state the way the paused service would.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
+        // Bringing the tag back must RESUME the paused list, not restart it:
+        // the policy still owns the tag, so the read takes the Resume branch.
+        sendTag(controller, UID_A)
+        val resume = nextServiceIntent(1_000)
+        assertNotNull("the re-hold must command the service", resume)
+        assertEquals(
+            "a re-hold of the paused active tag must resume, not restart " +
+                "the queue (no second ACTION_START)",
+            PlayerService.ACTION_RESUME,
+            resume!!.action,
+        )
     }
 
     @Test

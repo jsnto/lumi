@@ -11,9 +11,14 @@ import java.io.IOException
  *
  * In the app this wraps a connected [android.nfc.tech.TagTechnology]
  * session: a probe is a real low-level read command to the tag, and it
- * succeeds only while the tag is physically in the reader's field, so a
- * failed probe is a reliable "tag removed" signal even when the NFC stack
- * itself reports nothing about a stationary tag.
+ * succeeds only while the tag is physically in the reader's field AND its
+ * RF session is still alive. Note that a failed probe on a stale session is
+ * NOT by itself a reliable "tag removed" signal - under foreground dispatch
+ * a tag held still in range can go cold (its RF session drops while the tag
+ * is still in the field). The app therefore pairs this with
+ * [ReconnectingPresenceSession], which re-establishes a fresh session on a
+ * failed probe: only when the fresh session also cannot read the tag is the
+ * failure a genuine "tag removed" strike.
  */
 interface GenericPresenceSession {
     /**
