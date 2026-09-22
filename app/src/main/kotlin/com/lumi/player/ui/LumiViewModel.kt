@@ -959,6 +959,20 @@ class LumiViewModel(
     }
 
     /**
+     * Removes one song from one tag - the inverse of [linkEntryToTag]: the
+     * tag's link to [entry] goes, and nothing else - the song stays in the
+     * content list (its folder membership untouched), its links to any
+     * other tags are untouched, and the remaining songs keep their
+     * persisted order (the play order of what stays is unchanged).
+     */
+    fun unlinkEntryFromTag(tag: TagEntity, entry: EntryEntity) {
+        viewModelScope.launch {
+            val removed = repository.unlinkEntryFromTag(tag.id, entry.id)
+            event(if (removed) "Song removed from the tag" else "Could not remove the song from that tag.")
+        }
+    }
+
+    /**
      * Reorders the tag's song list - the tag detail page's drag reorder:
      * the persisted link order is replaced with [ordered] through the same
      * transactional seam the add-song flow appends through, so the play

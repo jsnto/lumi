@@ -352,6 +352,160 @@ class TagDetailPageUiTest {
         }
     }
 
+    // ---------- remove one song from the tag: the rows' remove action ----------
+
+    @Test
+    fun theSongRowsExposeARemoveActionAndCancellingKeepsTheSong() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(firstId, secondId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Second song")
+        compose.waitForIdle()
+
+        // Every song row exposes its own remove action, and the drag handle
+        // (the row's reorder region) is still there - the two are separate
+        // affordances on the row.
+        compose.onNodeWithContentDescription("Remove First song from the tag").assertExists()
+        compose.onNodeWithContentDescription("Remove Second song from the tag").assertExists()
+        compose.onNodeWithContentDescription("Reorder First song").assertExists()
+        compose.onNodeWithContentDescription("Reorder Second song").assertExists()
+
+        // The remove action confirms before it bites: the dialog states the
+        // effect - only this song's link to the tag goes; the song stays in
+        // the content list.
+        compose.onNodeWithContentDescription("Remove First song from the tag").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Remove First song from the tag").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Remove song from the tag?").assertIsDisplayed()
+        compose.onNodeWithText("“First song” will be removed from Porch. It stays in the content list.").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+
+        // Cancelling keeps the song on the tag and closes the dialog.
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Remove song from the tag?").assertDoesNotExist()
+        assertEquals(
+            "a cancelled removal changes nothing",
+            listOf(firstId, secondId),
+            tagLinks(tagId).map { it.id },
+        )
+        compose.onNodeWithText("First song").assertExists()
+        compose.onNodeWithText("Second song").assertExists()
+    }
+
+    @Test
+    fun removingASongDropsItFromTheTagsListKeepingTheRestInOrder() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val owlId = dbAndGet { app().repository.addTag(OWL_UID, "Owl")?.id ?: 0L }
+        val firstId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+        val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
+        val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
+        dbAndGet {
+            app().repository.updateTagEntries(tagId) { listOf(firstId, secondId, thirdId) }
+            // The second tag plays the same middle song too (the removal must
+            // only touch THIS tag's link).
+            app().repository.updateTagEntries(owlId) { listOf(secondId) }
+            true
+        }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        val events = mutableListOf<String>()
+        viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Third song")
+        compose.waitForIdle()
+
+        // Remove the MIDDLE song: the page confirms, then the link goes.
+        compose.onNodeWithContentDescription("Remove Second song from the tag").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Remove Second song from the tag").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Remove song from the tag?").assertIsDisplayed()
+        compose.onNodeWithText("“Second song” will be removed from Porch. It stays in the content list.").assertIsDisplayed()
+        compose.onNodeWithText("Remove").performClick()
+        compose.waitForIdle()
+
+        // The tag's list loses exactly the removed song - the rest keep
+        // their order (the middle one is out, the order of what stays is
+        // unchanged).
+        idleUntil({ tagLinks(tagId).map { it.id } == listOf(firstId, thirdId) })
+        assertEquals(
+            "the remaining songs keep their persisted order",
+            listOf(firstId, thirdId),
+            tagLinks(tagId).map { it.id },
+        )
+        assertTrue(
+            "the removal is reported as an event",
+            events.contains("Song removed from the tag"),
+        )
+
+        // The other tag's link to the same song is untouched.
+        assertEquals(
+            "the other tag still plays the removed song",
+            listOf(secondId),
+            tagLinks(owlId).map { it.id },
+        )
+
+        // The song row leaves the page (the dialog's copy carried the label
+        // while open, so wait for the node to actually go away).
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            if (compose.onAllNodesWithText("Second song").fetchSemanticsNodes().isEmpty()) break
+            Thread.sleep(20)
+        }
+        compose.onNodeWithText("Second song").assertDoesNotExist()
+        // The remaining rows are on the page in their order.
+        val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
+        val thirdTop = compose.onNodeWithText("Third song").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the remaining rows keep their order on the page",
+            firstTop > 0f && firstTop < thirdTop,
+        )
+
+        // The removed song stays in the app's content list - removing a
+        // song from a tag never deletes the entry.
+        dbAndGet {
+            check(app().repository.observeEntries().first().any { it.id == secondId }) {
+                "the removed song must stay in the content list"
+            }
+            true
+        }
+    }
+
+    @Test
+    fun removingTheLastSongFallsBackToTheEmptyListText() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val onlyId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Only song", "content://only").id }
+        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(onlyId) }; true }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        waitForText("Only song")
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Remove Only song from the tag").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Remove Only song from the tag").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Remove").performClick()
+        compose.waitForIdle()
+
+        idleUntil({ tagLinks(tagId).isEmpty() })
+        // An empty list falls back to the existing empty state (the observed
+        // list drives it).
+        waitForText("This tag plays nothing yet.")
+    }
+
     // ---------- back navigation: the page unwinds one level to the tags list ----------
 
     @Test
