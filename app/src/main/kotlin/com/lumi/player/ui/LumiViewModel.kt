@@ -27,6 +27,7 @@ import com.lumi.player.data.ScannedSong
 import com.lumi.player.data.collectAudioFiles
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
+import com.lumi.player.data.folderDocIdOf
 import com.lumi.player.data.rescanNewSongs
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
@@ -109,6 +110,15 @@ class LumiViewModel(
      */
     private val _pendingTagProfile = MutableStateFlow<TagEntity?>(null)
     val pendingTagProfile: StateFlow<TagEntity?> = _pendingTagProfile.asStateFlow()
+
+    /**
+     * The song an assign-to-tag scan targets (null for the NFC tags pane's
+     * plain scan): while set, a read links the song to the tag the read
+     * resolves to - registering the tag first, through the usual flow, when
+     * it is not registered yet (the song is linked once the tag is saved).
+     */
+    private val _scanAssignEntry = MutableStateFlow<EntryEntity?>(null)
+    val scanAssignEntry: StateFlow<EntryEntity?> = _scanAssignEntry.asStateFlow()
 
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
@@ -200,17 +210,30 @@ class LumiViewModel(
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (_scanActive.value) {
             // A tag scan was in progress (the NFC tags pane's "Scan NFC"
-            // action): settle it. A registered tag resolves to its profile
-            // page (the settings screen consumes [pendingTagProfile] and
-            // opens the tag detail page); an unknown one goes into the
-            // registration flow (capture + naming dialog, with the
-            // optional write-to-tag). Either way the scan is over, so
-            // further reads are normal playback reads.
+            // action, or the song profile's scan-to-assign): settle it. A
+            // registered tag resolves to its profile page (the settings
+            // screen consumes [pendingTagProfile] and opens the tag detail
+            // page) - or, for a scan-to-assign, links its target song to
+            // it; an unknown one goes into the registration flow (capture +
+            // naming dialog, with the optional write-to-tag), and a
+            // scan-to-assign's song waits for the tag's save. Either way the
+            // scan is over, so further reads are normal playback reads.
             _scanActive.value = false
             viewModelScope.launch {
                 val existing = repository.tagByUid(uid)
+                val assignEntry = _scanAssignEntry.value
                 if (existing != null) {
-                    _pendingTagProfile.value = existing
+                    if (assignEntry != null) {
+                        // The song profile's scan-to-assign: link the song
+                        // to the scanned tag (the picker's own mechanism -
+                        // a tag that already plays it is reported, not
+                        // duplicated). The profile page's live assigned-tags
+                        // list picks the link up; the user stays on it.
+                        _scanAssignEntry.value = null
+                        linkEntryToTag(existing, assignEntry)
+                    } else {
+                        _pendingTagProfile.value = existing
+                    }
                 } else {
                     capture(uid, tag)
                 }
@@ -494,11 +517,28 @@ class LumiViewModel(
      */
     fun startTagScan() {
         _capturedUid.value = null
+        _scanAssignEntry.value = null
+        _scanActive.value = true
+    }
+
+    /**
+     * Arms the unified scan targeting [entry] (the song profile's
+     * "Scan a tag to assign" action): a read of a registered tag links the
+     * song to it through the existing link mechanism, and a read of an
+     * unregistered one registers it first (the naming dialog) and links
+     * the song once the tag is saved. The scan dialog ([scanActive]) and
+     * the foreground-dispatch read path ([onTagDetected]) are the app's
+     * only ones - only what a settled read links differs.
+     */
+    fun startTagScanForEntry(entry: EntryEntity) {
+        _capturedUid.value = null
+        _scanAssignEntry.value = entry
         _scanActive.value = true
     }
 
     fun cancelTagScan() {
         _scanActive.value = false
+        _scanAssignEntry.value = null
     }
 
     /** Consumes the resolved scan target (the settings screen has opened the tag's profile page). */
@@ -553,6 +593,7 @@ class LumiViewModel(
 
     fun discardCaptured() {
         _capturedUid.value = null
+        _scanAssignEntry.value = null
         _capturedTagData.value = null
         _capturedTagWritable.value = false
         capturedTag = null
@@ -570,6 +611,9 @@ class LumiViewModel(
     fun confirmTagName(name: String, mode: PlayMode, writeToTag: Boolean) {
         val uid = _capturedUid.value ?: return
         val tag = capturedTag
+        // A scan-to-assign's target song, if the capture came from one: it
+        // is linked once this save settles (below).
+        val assignEntry = _scanAssignEntry.value
         _capturedUid.value = null
         _capturedTagData.value = null
         _capturedTagWritable.value = false
@@ -578,6 +622,13 @@ class LumiViewModel(
             val saved = repository.addTag(uid, name)
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
             if (saved != null) _selectedTagId.value = saved.id
+            // The scan-to-assign's song is assigned once its tag is saved -
+            // the tag it was scanned against, looked up by uid when the tag
+            // already existed.
+            assignEntry?.let { entry ->
+                _scanAssignEntry.value = null
+                (saved ?: repository.tagByUid(uid))?.let { linkEntryToTag(it, entry) }
+            }
             if (writeToTag) {
                 // The DB stores the name trimmed; write it trimmed to the
                 // tag as well so the two can never diverge.
@@ -988,37 +1039,6 @@ class LumiViewModel(
         if (segments.firstOrNull() != "tree") return ""
         val treeId = segments.getOrNull(1) ?: return ""
         return if (segments.size == 2) treeId.removeSuffix(":openable") else treeId
-    }
-
-    /**
-     * The docId of the folder a listing is asked for: the picker's tree
-     * uri carries it as its second path segment (a trailing `:openable`
-     * picker suffix on that segment is stripped - the provider answers
-     * only the bare docId), and a tree-scoped node uri
-     * (`tree/<treeId>/document/<docId>`) carries it as its fourth path
-     * segment, verbatim (the percent-encoding is already undone by
-     * [Uri.pathSegments]).
-     *
-     * The `:openable` strip applies to the picker's tree uri ONLY - the
-     * picker appends it to the tree uri's docId segment and to nothing
-     * else. The tree-scoped node uris this seam builds never carry it, so
-     * a subfolder's docId is used verbatim: a raw docId may legitimately
-     * end in `:openable` (legal on ext4), and stripping it there would
-     * corrupt the children listing and lose a fully readable folder.
-     */
-    private fun folderDocIdOf(folderUri: Uri): String {
-        val segments = folderUri.pathSegments
-        return when {
-            // A tree-scoped node uri: the docId is the fourth segment, verbatim.
-            segments.size == 4 && segments.getOrNull(0) == "tree" && segments.getOrNull(2) == "document" ->
-                segments.getOrNull(3).orEmpty()
-            // The picker's tree uri: the docId is the second segment, with the
-            // optional `:openable` picker suffix stripped.
-            segments.getOrNull(0) == "tree" -> segments.getOrNull(1)?.removeSuffix(":openable").orEmpty()
-            // The walk never builds any other uri; kept verbatim for the
-            // tests' synthetic tree uris.
-            else -> segments.getOrNull(1).orEmpty()
-        }
     }
 
     /** A folder's children listing uri `scheme://authority/tree/<treeId>/document/<docId>/children`, the treeId and the docId each percent-encoded into a single path segment. */

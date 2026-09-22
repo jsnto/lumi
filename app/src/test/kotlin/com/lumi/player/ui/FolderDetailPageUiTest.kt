@@ -15,6 +15,7 @@ import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -49,6 +50,7 @@ import java.io.FileNotFoundException
     sdk = [35],
     application = LumiApp::class,
     shadows = [ShadowNfcAdapterForTest::class],
+    qualifiers = "w412dp-h900dp",
 )
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FolderDetailPageUiTest {
@@ -84,7 +86,7 @@ class FolderDetailPageUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -94,7 +96,7 @@ class FolderDetailPageUiTest {
     }
 
     /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+    private fun waitForText(text: String, timeoutMs: Long = 60_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -128,8 +130,13 @@ class FolderDetailPageUiTest {
     }
 
     /** Adds a folder through the view model until its add event settles. */
-    private fun addFolder(viewModel: LumiViewModel, events: MutableList<String>, expected: String) {
-        viewModel.addFolderEntry(Uri.parse(TREE_URI))
+    private fun addFolder(
+        viewModel: LumiViewModel,
+        events: MutableList<String>,
+        expected: String,
+        treeUri: String = TREE_URI,
+    ) {
+        viewModel.addFolderEntry(Uri.parse(treeUri))
         idleUntil({ events.any { it == expected } })
     }
 
@@ -138,12 +145,20 @@ class FolderDetailPageUiTest {
      * label - the tree uri string here, since no provider is registered)
      * and waits for the detail page to show.
      */
-    private fun openFolderPage() {
-        compose.onNodeWithText(TREE_URI).performScrollTo()
-        compose.onNodeWithText(TREE_URI).performClick()
+    private fun openFolderPage(treeUri: String = TREE_URI) {
+        compose.onNodeWithText(treeUri).performScrollTo()
+        compose.onNodeWithText(treeUri).performClick()
         compose.waitForIdle()
         waitForText("Folder details")
     }
+
+    /** The left edge of the first row whose title is [text]. */
+    private fun leftOf(text: String): Float =
+        compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.left
+
+    /** The top edge of the first row whose title is [text]. */
+    private fun topOf(text: String): Float =
+        compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top
 
     @Test
     fun thePageShowsTheFolderDetailsAndItsImportedSongs() {
@@ -167,6 +182,101 @@ class FolderDetailPageUiTest {
         compose.onNodeWithContentDescription("Rescan").assertExists()
         compose.onNodeWithText("Delete folder from the app").assertExists()
         compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
+    }
+
+    @Test
+    fun thePageShowsTheImportedFolderStructureWithSubfoldersIndented() {
+        val viewModel = openContentPane()
+        // The tree's real SAF uri grammar: the picker's tree uri names the
+        // picked folder's docId, and every file's payload is the tree-scoped
+        // content uri whose docId encodes the full path below the root.
+        viewModel.folderChildren = { folderUri ->
+            when (val s = folderUri.toString()) {
+                WALKIN_TREE -> listOf(
+                    file("mango.mp3", treeDoc("$WALKIN_ROOT/mango.mp3")),
+                    FolderChild("Albums", isDirectory = true, childUri = treeDoc("$WALKIN_ROOT/Albums")),
+                    file("alpha.mp3", treeDoc("$WALKIN_ROOT/alpha.mp3")),
+                )
+                treeDoc("$WALKIN_ROOT/Albums") -> listOf(
+                    file("deep.flac", treeDoc("$WALKIN_ROOT/Albums/deep.flac")),
+                )
+                else -> emptyList()
+            }
+        }
+        addFolder(viewModel, eventsOf(viewModel), "Added 3 songs from the folder.", WALKIN_TREE)
+
+        openFolderPage(WALKIN_TREE)
+        // The subfolder is a row of its own (the imported structure, not a
+        // flat list) and its song nests under it: the nested song's row is
+        // indented exactly one step (16 dp, the tree's per-depth indent)
+        // beyond the root songs, and the subfolder row sits above it.
+        waitForText("Albums")
+        compose.onNodeWithText("deep.flac").assertExists()
+        assertEquals(
+            "the subfolder's song is indented one step (16 dp) beyond the " +
+                "root songs (got ${leftOf("deep.flac")} vs root ${leftOf("mango.mp3")})",
+            leftOf("mango.mp3") + 16f,
+            leftOf("deep.flac"),
+        )
+        assertTrue(
+            "the subfolder row comes above its own nested song",
+            topOf("Albums") < topOf("deep.flac"),
+        )
+        // The root songs sit at the top level (flush with each other).
+        assertEquals(
+            "the root songs are flush",
+            leftOf("mango.mp3"),
+            leftOf("alpha.mp3"),
+        )
+        // The subfolder row is display-only: tapping it opens no profile.
+        compose.onNodeWithText("Albums").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Song details").assertDoesNotExist()
+        compose.onNodeWithText("Folder details").assertExists()
+        // The root songs stay rows that open the song's profile.
+        compose.onNodeWithText("mango.mp3").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Song details").assertExists()
+    }
+
+    @Test
+    fun thePageSortsItsTreeLevelsWithTheSharedDirectionControl() {
+        val viewModel = openContentPane()
+        viewModel.folderChildren = { folderUri ->
+            when (val s = folderUri.toString()) {
+                WALKIN_TREE -> listOf(
+                    file("mango.mp3", treeDoc("$WALKIN_ROOT/mango.mp3")),
+                    FolderChild("Albums", isDirectory = true, childUri = treeDoc("$WALKIN_ROOT/Albums")),
+                    file("alpha.mp3", treeDoc("$WALKIN_ROOT/alpha.mp3")),
+                )
+                treeDoc("$WALKIN_ROOT/Albums") -> listOf(
+                    file("deep.flac", treeDoc("$WALKIN_ROOT/Albums/deep.flac")),
+                )
+                else -> emptyList()
+            }
+        }
+        addFolder(viewModel, eventsOf(viewModel), "Added 3 songs from the folder.", WALKIN_TREE)
+
+        openFolderPage(WALKIN_TREE)
+        waitForText("mango.mp3")
+        // The content pane's own sort control, with its per-level caption.
+        compose.onNodeWithText("Sort by title").assertExists()
+        compose.onNodeWithText("Applies to the folders and the songs at each level below.").assertExists()
+        // The list's default order (descending): the subfolder leads the
+        // level, then the songs Z->A - mango above alpha.
+        assertTrue(
+            "the subfolder row comes before the songs at its level",
+            topOf("Albums") < topOf("mango.mp3"),
+        )
+        assertTrue(
+            "descending puts mango above alpha (got ${topOf("mango.mp3")} vs ${topOf("alpha.mp3")})",
+            topOf("mango.mp3") < topOf("alpha.mp3"),
+        )
+        // The A-Z pick flips the level to the content list's ascending order
+        // (alpha above mango), and the subfolder still leads.
+        compose.onNodeWithText("A-Z").performClick()
+        idleUntil({ topOf("alpha.mp3") < topOf("mango.mp3") })
+        assertTrue("the subfolder row still comes before the songs", topOf("Albums") < topOf("alpha.mp3"))
     }
 
     @Test
@@ -284,5 +394,15 @@ class FolderDetailPageUiTest {
     companion object {
         /** The documents tree uri the folder is picked at. */
         const val TREE_URI = "content://docs/document/audio%3A1:tree"
+
+        /** A picked folder's docId, in the real tree- uri grammar. */
+        const val WALKIN_ROOT = "primary:Music/Walkin"
+
+        /** The picker's tree uri for [WALKIN_ROOT]. */
+        val WALKIN_TREE: String = "content://docs/tree/" + Uri.encode(WALKIN_ROOT, null)
+
+        /** The tree-scoped content uri of the document [docId] under [WALKIN_TREE] (the stored payload's shape). */
+        fun treeDoc(docId: String): String =
+            "content://docs/tree/" + Uri.encode(WALKIN_ROOT, null) + "/document/" + Uri.encode(docId, null)
     }
 }

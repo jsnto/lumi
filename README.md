@@ -16,7 +16,10 @@ server or account — everything is stored locally on the device.
    the list is sorted by title, Z-A by default, and every song and folder
    row has a play button that plays it directly with no tag attached;
    tapping a song opens its profile, which shows the file's artist, album
-   and length and lets you assign the song to a registered tag), and link a
+   and length, the tags the song is currently on, and lets you assign the
+   song to a registered tag — by picking one, or by scanning a tag right
+   on the page (an unregistered one is registered first, and the song is
+   assigned once it is saved)), and link a
    tag to the songs it should play. Scanning a tag that is
    already registered opens its page instead. The NFC tags section lists
    the registered tags, and tapping a tag opens its own page — the tag's
@@ -99,7 +102,10 @@ the video/URL actions later does not require reworking storage.
   read grant is persisted per file / folder. Re-adding a file or folder
   already in the list adds no duplicates. An added folder can be opened from
   its row (Settings → Content → Folders): the folder's page shows the
-  folder's details and the songs imported from it, with a rescan that picks
+  folder's details and the songs imported from it, shown as the folder
+  structure the import walked (subfolders nested, indented one step per
+  depth, with the shared title sort applied at each level), with a rescan
+  that picks
   up songs added to the folder or its subfolders since the last scan
   (rescanning an unchanged folder adds nothing) and a danger zone that
   removes the folder from the app: after a confirmation that names the

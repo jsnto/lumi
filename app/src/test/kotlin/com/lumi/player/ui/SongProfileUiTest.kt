@@ -81,10 +81,20 @@ class SongProfileUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the profile to settle") {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the profile to settle") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
+            // Settle composition before re-checking the MERGED tree (the
+            // sibling classes' own pattern): the merged tree only updates
+            // once Compose has recomposed and produced a frame, and a poll
+            // that idles only the looper can read a stale tree. The budget
+            // is generous on purpose: the class JVM's first test pays the
+            // Robolectric/native-graphics cold start (~9 s even when green),
+            // and suite load has stretched a warm convergence to ~16 s - the
+            // loop exits on the first satisfied condition, so the margin
+            // costs nothing when green.
+            compose.waitForIdle()
             Thread.sleep(10)
         }
         check(cond()) { "timed out waiting for $message" }
@@ -237,8 +247,10 @@ class SongProfileUiTest {
         compose.onNodeWithText("Already on this tag").assertExists()
 
         // Picking the flagged tag is a no-op: no duplicate link, the pick
-        // is reported, and the list stays open.
-        clickOnceVisible("Porch")
+        // is reported, and the list stays open. The flag text is the
+        // dialog's own marker (the profile's assigned-tags section shows
+        // the tag's name only), so the pick goes through it.
+        clickOnceVisible("Already on this tag")
         idleUntil(cond = { events.any { it == "That song is already on the tag." } }, message = "the no-op report")
         assertEquals(
             "a re-pick must not duplicate the link",
@@ -255,7 +267,7 @@ class SongProfileUiTest {
         openSongProfile()
 
         // The action is disabled with a clear message.
-        compose.onNodeWithText("No registered NFC tags yet. Scan a tag in the NFC tags setting first.").assertExists()
+        compose.onNodeWithText("No tags registered yet. Scan a tag below to add this song to it.").assertExists()
         compose.onNodeWithText("Choose a tag").assertDoesNotExist()
         // Only the section title carries the action's copy.
         idleUntil(

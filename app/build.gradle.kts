@@ -63,6 +63,11 @@ android {
 // each class starts with clean Compose/native state.
 tasks.withType<Test>().configureEach {
     forkEvery = 1
+    // The Robolectric NATIVE-graphics workers live tight at the default
+    // 512 m heap (Compose + Room + native rendering); give them a full
+    // gigabyte so GC pressure can't stretch a main-thread convergence past
+    // the tests' wall-clock poll budgets.
+    maxHeapSize = "1g"
 }
 
 dependencies {
