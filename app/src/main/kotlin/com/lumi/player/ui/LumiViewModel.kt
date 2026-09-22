@@ -2,8 +2,10 @@ package com.lumi.player.ui
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.nfc.Tag
+import android.os.Build
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -13,8 +15,10 @@ import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.EntryEntity
+import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
+import com.lumi.player.data.SongMetadata
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.FolderChild
 import com.lumi.player.data.FolderEntity
@@ -33,6 +37,7 @@ import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -50,6 +55,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * Single view model for the whole app (front screen + settings). It owns the
@@ -80,6 +86,9 @@ class LumiViewModel(
 
     /** The individual content list: the stored rows with no folder marker. */
     fun observeIndividualEntries(): Flow<List<EntryEntity>> = repository.observeIndividualEntries()
+
+    /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
+    fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>> = repository.observeTagsForEntry(entryId)
 
     // ---- NFC registration flow ----
 
@@ -212,17 +221,20 @@ class LumiViewModel(
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
             val tag = repository.tagByUid(uid) ?: return@launch
+            val entries = repository.entriesForTag(tag.id)
+            if (entries.isEmpty()) {
+                // A tag with no linked songs plays nothing: it must not become
+                // the active tag (that would hold the policy, and arm the
+                // presence poll, for a list that never plays).
+                event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
+                return@launch
+            }
             when (policy.onTagDetected(uid, paused)) {
                 NfcAction.StartPlayback -> {
                     // This read made [uid] the active tag (start or switch);
                     // let the activity seed its presence record with it.
                     _tagActivated.tryEmit(uid)
-                    val entries = repository.entriesForTag(tag.id)
-                    if (entries.isEmpty()) {
-                        event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
-                    } else {
-                        startPlayer(entries.map { it.toSpec() }, uid)
-                    }
+                    startPlayer(entries.map { it.toSpec() }, uid)
                 }
 
                 // Re-read of the tag already playing while the user had
@@ -258,18 +270,27 @@ class LumiViewModel(
     /**
      * Starts the service to play [specs] for tag [uid]. When the tag has a
      * remembered position saved against this exact linked list, it is passed
-     * to the service so playback resumes where it stopped.
+     * to the service so playback resumes where it stopped. A null [uid] is
+     * manual playback (the content play buttons): no remembered position
+     * applies and the policy's active tag is cleared, so a later tag read
+     * starts that tag's own list instead of resuming or being ignored
+     * against the manual queue.
      */
-    private suspend fun startPlayer(specs: List<EntrySpec>, uid: String) {
+    private suspend fun startPlayer(specs: List<EntrySpec>, uid: String?) {
+        if (uid == null) {
+            policy.onPlaybackStopped()
+        }
         val intent = Intent(context, PlayerService::class.java).apply {
             action = PlayerService.ACTION_START
             putExtra(PlayerService.EXTRA_ENTRIES, ArrayList(specs))
             putExtra(PlayerService.EXTRA_TAG_UID, uid)
-            when (val restore = decideRestore(repository.positionFor(uid), fingerprintOf(specs), specs.size)) {
-                is PositionRestore.StartFresh -> Unit
-                is PositionRestore.SeekTo -> {
-                    putExtra(PlayerService.EXTRA_START_ENTRY_INDEX, restore.entryIndex)
-                    putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
+            if (uid != null) {
+                when (val restore = decideRestore(repository.positionFor(uid), fingerprintOf(specs), specs.size)) {
+                    is PositionRestore.StartFresh -> Unit
+                    is PositionRestore.SeekTo -> {
+                        putExtra(PlayerService.EXTRA_START_ENTRY_INDEX, restore.entryIndex)
+                        putExtra(PlayerService.EXTRA_START_POSITION_MS, restore.positionMs)
+                    }
                 }
             }
         }
@@ -329,6 +350,136 @@ class LumiViewModel(
 
     fun setNfcRereadSeconds(seconds: Long) {
         viewModelScope.launch { repository.setNfcRereadSeconds(seconds) }
+    }
+
+    // ---- settings: content sort direction ----
+
+    /**
+     * The content list's title sort direction (both the Folders section and
+     * the individual content follow it). Descending is the default - the
+     * list shows Z->A until the user picks otherwise; the pick persists in
+     * the database.
+     */
+    val contentSortDirection: StateFlow<ContentSortDirection> =
+        repository.observeContentSortDirection()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                ContentSortDirection.DESCENDING,
+            )
+
+    fun setContentSortDirection(direction: ContentSortDirection) {
+        viewModelScope.launch { repository.setContentSortDirection(direction) }
+    }
+
+    // ---- content: manual playback (the play buttons) ----
+
+    /**
+     * Plays a single stored song (a content row's play button): starts the
+     * session with just that entry through the app's existing playback path
+     * (the service's ACTION_START), unattached to any tag - a later tag
+     * read still switches to the tag's own list.
+     */
+    fun playEntry(entry: EntryEntity) {
+        viewModelScope.launch {
+            startPlayer(listOf(entry.toSpec()), uid = null)
+        }
+    }
+
+    /**
+     * Plays every song of a folder in the order the rows were stored (the
+     * folder row's play button): the folder's stored content rows become
+     * the queue - no tree walk needed, the stored rows are the folder's
+     * songs.
+     */
+    fun playFolder(folder: FolderEntity) {
+        viewModelScope.launch {
+            val songs = repository.entriesForFolder(folder.id)
+            if (songs.isEmpty()) {
+                event("That folder has no songs to play.")
+                return@launch
+            }
+            startPlayer(songs.map { it.toSpec() }, uid = null)
+        }
+    }
+
+    // ---- song profile page: metadata ----
+
+    /** The open song's media metadata; null while the read is in flight. */
+    private val _songMetadata = MutableStateFlow<SongMetadata?>(null)
+    val songMetadata: StateFlow<SongMetadata?> = _songMetadata.asStateFlow()
+
+    private var selectedEntryId: Long? = null
+    private var metadataJob: Job? = null
+
+    /**
+     * Points the song profile page at [entry] and loads its media metadata
+     * (artist / album / duration) best-effort: the read runs off the main
+     * thread with a time limit, and any failure (an unreadable file, a
+     * revoked grant) settles to no metadata rather than an error - the page
+     * shows its placeholders instead. Re-selecting cancels an in-flight
+     * read; a read that settles after the page moved on writes nothing.
+     */
+    fun selectEntry(entry: EntryEntity) {
+        selectedEntryId = entry.id
+        _songMetadata.value = null
+        metadataJob?.cancel()
+        metadataJob = viewModelScope.launch {
+            val metadata: SongMetadata? = try {
+                withTimeout(METADATA_READ_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) { metadataReader(Uri.parse(entry.payload)) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't read the metadata of ${entry.label}", e)
+                null
+            }
+            if (selectedEntryId == entry.id) _songMetadata.value = metadata
+        }
+    }
+
+    /**
+     * Test seam: the song profile's media-metadata read, replaced in unit
+     * tests. The default reads the file's tags with a [MediaMetadataRetriever]
+     * (a blocking content-resolver read - [selectEntry] keeps it off the
+     * main thread and time-limited); any read failure surfaces as the
+     * exception the caller settles to no metadata. The pruned framework's
+     * metadata surface is [MediaMetadataRetriever.extractMetadata] with the
+     * int [MediaMetadataRetriever.METADATA_KEY_ARTIST]-style keys (a
+     * duration comes back as its millisecond count's text). The retriever is
+     * released with [MediaMetadataRetriever.close] on API 29+ and the native
+     * [MediaMetadataRetriever.release] below - [MediaMetadataRetriever.close]
+     * does not exist before API 29, and minSdk is 26.
+     */
+    internal var metadataReader: (Uri) -> SongMetadata = { uri ->
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            SongMetadata(
+                artist = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    ?.ifEmpty { null },
+                album = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                    ?.ifEmpty { null },
+                durationMs = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                    ?.takeIf { it > 0 },
+            )
+        } finally {
+            if (Build.VERSION.SDK_INT >= 29) {
+                retriever.close()
+            } else {
+                retriever.release()
+            }
+        }
+    }
+
+    private companion object {
+        /** How long a song's metadata read may take before it gives up. */
+        const val METADATA_READ_TIMEOUT_MS = 5_000L
     }
 
     // ---- settings: tags ----

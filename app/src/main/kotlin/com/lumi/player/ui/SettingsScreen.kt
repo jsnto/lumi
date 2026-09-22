@@ -90,10 +90,13 @@ import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongOption
+import com.lumi.player.data.formatDuration
+import com.lumi.player.data.sortedByTitle
 import com.lumi.player.data.tagSongOptions
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
@@ -108,6 +111,7 @@ private enum class SettingsPane {
     Content,
     TagDetail,
     FolderDetail,
+    EntryDetail,
 }
 
 /**
@@ -153,6 +157,9 @@ fun SettingsScreen(
     val capturedUid by viewModel.capturedUid.collectAsState(null)
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
+    // The content list's title sort direction (the content pane's sort
+    // control; descending by default).
+    val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.DESCENDING)
     // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
@@ -179,6 +186,11 @@ fun SettingsScreen(
     // content pane is tapped; cleared when the folder is removed or the
     // page leaves it).
     var folderDetailId by remember { mutableStateOf<Long?>(null) }
+
+    // The entry whose profile page is showing (set when a song row in the
+    // content pane or a folder page's song row is tapped; cleared when the
+    // entry is removed or the page leaves it).
+    var entryDetailId by remember { mutableStateOf<Long?>(null) }
 
     // The tag detail page's in-app add-song list: the tag the list is for,
     // while it is open. A pick links one of the app's existing content
@@ -232,6 +244,7 @@ fun SettingsScreen(
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
+            SettingsPane.EntryDetail -> SettingsPane.Content
             else -> SettingsPane.Menu
         }
     }
@@ -268,12 +281,20 @@ fun SettingsScreen(
         SettingsPane.Content -> ContentPane(
             individualEntries = individualEntries,
             folders = folders,
+            sortDirection = contentSort,
+            onSortDirectionChange = { viewModel.setContentSortDirection(it) },
             onBack = { pane = SettingsPane.Menu },
             onAddContent = { audioPicker.launch(arrayOf("audio/*")) },
             onAddFolder = { folderPicker.launch(null) },
             onFolderOpened = { folder ->
                 folderDetailId = folder.id
                 pane = SettingsPane.FolderDetail
+            },
+            onPlayFolder = { viewModel.playFolder(it) },
+            onPlayEntry = { viewModel.playEntry(it) },
+            onEntryOpened = { entry ->
+                entryDetailId = entry.id
+                pane = SettingsPane.EntryDetail
             },
             onEntryDeleted = { deleteEntry = it },
         )
@@ -324,6 +345,29 @@ fun SettingsScreen(
                     onBack = { pane = SettingsPane.Content },
                     onRescan = { viewModel.rescanFolder(folder) },
                     onRemove = { viewModel.requestFolderRemoval(folder) },
+                    onEntryOpened = { entry ->
+                        entryDetailId = entry.id
+                        pane = SettingsPane.EntryDetail
+                    },
+                )
+            }
+        }
+        SettingsPane.EntryDetail -> {
+            // The entry may have been removed while the page is open (the
+            // content pane's row-level delete does this); when it is gone,
+            // fall back to the content pane the song's row lived in rather
+            // than hold a page for a song that no longer exists.
+            val entry = entries.firstOrNull { it.id == entryDetailId }
+            if (entry == null) {
+                LaunchedEffect(Unit) {
+                    entryDetailId = null
+                    pane = SettingsPane.Content
+                }
+            } else {
+                EntryDetailPane(
+                    viewModel = viewModel,
+                    entry = entry,
+                    onBack = { pane = SettingsPane.Content },
                 )
             }
         }
@@ -1320,6 +1364,7 @@ private fun FolderDetailPane(
     onBack: () -> Unit,
     onRescan: () -> Unit,
     onRemove: (FolderEntity) -> Unit,
+    onEntryOpened: (EntryEntity) -> Unit,
 ) {
     // The page's song list: selecting the folder walks its tree and settles
     // the observed [songs] state (null while the walk is in flight).
@@ -1382,6 +1427,9 @@ private fun FolderDetailPane(
                                     content = scheme.onPrimaryContainer,
                                 )
                             },
+                            // The row body opens the song's profile page
+                            // (the content pane's own language).
+                            modifier = Modifier.clickable { onEntryOpened(entry) },
                             title = entry.label,
                             detail = detailFor(entry.type, entry.payload),
                         )
@@ -1443,21 +1491,239 @@ private fun FolderDetailPane(
 }
 
 /**
+ * One song, opened by tapping its row (an individual content row in the
+ * content pane or a song row on a folder's page). The page shows the
+ * song's details - its title and type, the source uri, and the file's own
+ * metadata (artist, album, length) where the file carries it - plus an
+ * assign-to-tag action: a pick among the app's registered NFC tags links
+ * the stored entry to that tag's song list (the tag-creation flow's own
+ * mechanism, [LumiViewModel.linkEntryToTag]). A tag that already plays the
+ * song is flagged "Already on this tag" and a re-pick is a reported no-op
+ * (no duplicate link); with no registered tags the action is disabled with
+ * a clear message.
+ *
+ * The page is a child of the content pane: its back (the in-pane arrow and
+ * system back) unwinds one level to the content pane, and the content pane
+ * still goes straight to the menu from there.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EntryDetailPane(
+    viewModel: LumiViewModel,
+    entry: EntryEntity,
+    onBack: () -> Unit,
+) {
+    // Points the shared selection at this song: its media metadata
+    // (artist / album / duration) loads best-effort - null while the read
+    // is in flight, and a read failure settles to the placeholders below.
+    LaunchedEffect(entry.id) { viewModel.selectEntry(entry) }
+    val metadata by viewModel.songMetadata.collectAsState(null)
+    // The tags that already play this song (live - a fresh link re-emits
+    // it, so the "already on this tag" flags update as picks land).
+    val tags by viewModel.observeTags().collectAsState(emptyList())
+    val linkedTags by viewModel.observeTagsForEntry(entry.id).collectAsState(emptyList())
+    val scheme = MaterialTheme.colorScheme
+    var showAssignDialog by remember { mutableStateOf(false) }
+    Scaffold(topBar = { PaneTopAppBar(entry.label, onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SectionCard(title = "Song details") {
+                SettingRow(
+                    leading = {
+                        IconChip(
+                            icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                            background = scheme.primaryContainer,
+                            content = scheme.onPrimaryContainer,
+                        )
+                    },
+                    title = entry.label,
+                    detail = detailFor(entry.type, entry.payload),
+                )
+                // The file's own metadata, best-effort: a placeholder for a
+                // field the file does not carry (or could not be read).
+                MetadataField("Type", detailFor(entry.type, entry.payload))
+                MetadataField("Artist", metadata?.artist ?: "—")
+                MetadataField("Album", metadata?.album ?: "—")
+                MetadataField(
+                    "Length",
+                    metadata?.durationMs?.let { formatDuration(it) } ?: "—",
+                )
+                MetadataField("Source", entry.payload)
+            }
+            // Assign this song to one of the registered NFC tags: the
+            // stored entry is linked to the tag's ordered song list (no new
+            // content row, the existing grant is reused) and plays with
+            // that tag's list. Disabled with a clear message when no tag is
+            // registered yet.
+            SectionCard(title = "Assign to a tag") {
+                if (tags.isEmpty()) {
+                    Text(
+                        "No registered NFC tags yet. Scan a tag in the NFC tags setting first.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Button(
+                        onClick = { showAssignDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = scheme.primaryContainer,
+                            contentColor = scheme.onPrimaryContainer,
+                        ),
+                    ) {
+                        Icon(
+                            Icons.Filled.Label,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Choose a tag",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                }
+            }
+        }
+    }
+    if (showAssignDialog) {
+        AlertDialog(
+            onDismissRequest = { showAssignDialog = false },
+            containerColor = scheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Assign to a tag", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "Add “${entry.label}” to one of your tags; it will play with that tag's list.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    tags.forEach { tag ->
+                        val alreadyOnTag = linkedTags.any { it.id == tag.id }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp)
+                                .clickable {
+                                    viewModel.linkEntryToTag(tag, entry)
+                                    // A fresh link closes the list; a tag
+                                    // that already plays the song keeps it
+                                    // open (the view model reports the pick
+                                    // with its own toast rather than a
+                                    // duplicate link).
+                                    if (!alreadyOnTag) showAssignDialog = false
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconChip(
+                                icon = Icons.Filled.Label,
+                                background = scheme.secondaryContainer,
+                                content = scheme.onSecondaryContainer,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    tag.name.ifEmpty { tag.uid },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    if (alreadyOnTag) "Already on this tag" else tag.uid,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (alreadyOnTag) {
+                                        scheme.onSurface
+                                    } else {
+                                        scheme.onSurfaceVariant
+                                    },
+                                )
+                            }
+                            if (alreadyOnTag) {
+                                Spacer(Modifier.width(8.dp))
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = scheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAssignDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/**
+ * One detail field of the song profile: a label column and a single-line
+ * value (or the "—" placeholder for a field the file does not carry).
+ */
+@Composable
+private fun MetadataField(label: String, value: String) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
  * Content: register and manage audio content. The Folders section comes
  * first (a folder's imported songs live on the folder's own page, so the
  * folder is browsed as a unit), then the individual content - the songs
  * added one at a time. The folder-imported rows are NOT in the individual
- * list: they stay visible only inside their folder's page.
+ * list: they stay visible only inside their folder's page. Both sections
+ * follow the sort control's title order (descending by default), and every
+ * row carries a play button: a folder's plays all of its stored songs in
+ * the order the rows were stored, a song's plays just that song. Tapping a
+ * song row opens its profile page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ContentPane(
     individualEntries: List<EntryEntity>,
     folders: List<FolderEntity>,
+    sortDirection: ContentSortDirection,
+    onSortDirectionChange: (ContentSortDirection) -> Unit,
     onBack: () -> Unit,
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
     onFolderOpened: (FolderEntity) -> Unit,
+    onPlayFolder: (FolderEntity) -> Unit,
+    onPlayEntry: (EntryEntity) -> Unit,
+    onEntryOpened: (EntryEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
 ) {
     Scaffold(topBar = { PaneTopAppBar("Content", onBack) }) { padding ->
@@ -1469,10 +1735,18 @@ private fun ContentPane(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // The sort control: both sections below follow this title
+            // order. Descending (Z->A) is the list's default; a pick
+            // persists through the view model.
+            ContentSortRow(
+                direction = sortDirection,
+                onDirectionChange = onSortDirectionChange,
+            )
             // The folders come first: their imported songs live on the
             // folder's own page, and the folder rows get the violet folder
             // chip (D-03). "Add folder" is the + button on the section's
-            // title row.
+            // title row. A row's play button plays every song the folder
+            // holds, in the order the rows were stored.
             SectionCard(
                 title = "Folders",
                 addLabel = "Add folder",
@@ -1484,7 +1758,7 @@ private fun ContentPane(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                folders.forEach { folder ->
+                folders.sortedByTitle({ it.label }, { it.id }, sortDirection).forEach { folder ->
                     SettingRow(
                         leading = {
                             IconChip(
@@ -1499,6 +1773,13 @@ private fun ContentPane(
                         modifier = Modifier.clickable { onFolderOpened(folder) },
                         title = folder.label,
                         detail = "Tap to view its songs",
+                        trailing = {
+                            SoftIconButton(
+                                icon = Icons.Filled.PlayArrow,
+                                contentDescription = "Play ${folder.label}",
+                                onClick = { onPlayFolder(folder) },
+                            )
+                        },
                     )
                 }
             }
@@ -1517,7 +1798,7 @@ private fun ContentPane(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                individualEntries.forEach { entry ->
+                individualEntries.sortedByTitle({ it.label }, { it.id }, sortDirection).forEach { entry ->
                     SettingRow(
                         leading = {
                             IconChip(
@@ -1526,18 +1807,90 @@ private fun ContentPane(
                                 content = MaterialTheme.colorScheme.onPrimaryContainer,
                             )
                         },
+                        // The row body opens the song's profile page (the
+                        // play and delete buttons are separate regions, so
+                        // they never fight the row tap).
+                        modifier = Modifier.clickable { onEntryOpened(entry) },
                         title = entry.label,
                         detail = detailFor(entry.type, entry.payload),
                         trailing = {
-                            SoftIconButton(
-                                icon = Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                onClick = { onEntryDeleted(entry) },
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SoftIconButton(
+                                    icon = Icons.Filled.PlayArrow,
+                                    contentDescription = "Play ${entry.label}",
+                                    onClick = { onPlayEntry(entry) },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                SoftIconButton(
+                                    icon = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    onClick = { onEntryDeleted(entry) },
+                                )
+                            }
                         },
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The content list's sort control: orders the sections below by title in
+ * the chosen direction. Descending (Z->A) is the list's default order; a
+ * pick persists through the view model. The chips carry the list's own
+ * A-Z / Z-A copy.
+ */
+@Composable
+private fun ContentSortRow(
+    direction: ContentSortDirection,
+    onDirectionChange: (ContentSortDirection) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Sort by title", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Applies to the folders and the songs below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            FilterChip(
+                selected = direction == ContentSortDirection.ASCENDING,
+                onClick = { onDirectionChange(ContentSortDirection.ASCENDING) },
+                border = playModeItemBorder,
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = scheme.surfaceContainerLow,
+                    labelColor = scheme.onSurface,
+                    selectedContainerColor = scheme.primaryContainer,
+                    selectedLabelColor = scheme.onPrimaryContainer,
+                ),
+                label = { Text("A-Z") },
+            )
+            Spacer(Modifier.width(8.dp))
+            FilterChip(
+                selected = direction == ContentSortDirection.DESCENDING,
+                onClick = { onDirectionChange(ContentSortDirection.DESCENDING) },
+                border = playModeItemBorder,
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = scheme.surfaceContainerLow,
+                    labelColor = scheme.onSurface,
+                    selectedContainerColor = scheme.primaryContainer,
+                    selectedLabelColor = scheme.onPrimaryContainer,
+                ),
+                label = { Text("Z-A") },
+            )
         }
     }
 }

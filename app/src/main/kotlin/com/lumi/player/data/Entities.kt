@@ -101,5 +101,8 @@ data class SettingsEntity(
 
         /** "1" when the user wants the screen to stay on while the app is open. */
         const val KEEP_SCREEN_ON = "keep_screen_on"
+
+        /** "asc"/"desc": the content list's title sort direction; unset sorts descending. */
+        const val CONTENT_SORT_DIRECTION = "content_sort_direction"
     }
 }
