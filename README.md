@@ -13,8 +13,9 @@ server or account — everything is stored locally on the device.
    optionally store that on the tag itself so re-registering it later
    pre-fills the form), register content (pick an audio file from the
    device, or a whole folder to add every song in it and its subfolders —
-   the list is sorted by title, Z-A by default, and every song and folder
-   row has a play button that plays it directly with no tag attached;
+   the list is sorted by title, Z-A by default, and every song row has a
+   play button that plays that song directly with no tag attached (a folder
+   row opens the folder's own page, where its songs carry the buttons);
    tapping a song opens its profile, which shows the file's artist, album
    and length, the tags the song is currently on, and lets you assign the
    song to a registered tag — by picking one, or by scanning a tag right
@@ -103,8 +104,11 @@ the video/URL actions later does not require reworking storage.
   already in the list adds no duplicates. An added folder can be opened from
   its row (Settings → Content → Folders): the folder's page shows the
   folder's details and the songs imported from it, shown as the folder
-  structure the import walked (subfolders nested, indented one step per
-  depth, with the shared title sort applied at each level), with a rescan
+  structure the import walked (subfolders nested with left-side connector
+  lines, indented one step per depth, with the shared title sort applied at
+  each level; a subfolder's row hides or shows the rows nested under it),
+  with every song row carrying a play/pause button (the current song pauses
+  and resumes in place; any other song starts just that one), and a rescan
   that picks
   up songs added to the folder or its subfolders since the last scan
   (rescanning an unchanged folder adds nothing) and a danger zone that
