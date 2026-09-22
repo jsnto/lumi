@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -292,7 +293,11 @@ class FolderDetailPageUiTest {
         // nested subfolder's rows - and tapping it again restores them.
         compose.onNodeWithContentDescription("Collapse Albums").assertExists()
         compose.onNodeWithText("Albums").performClick()
-        compose.waitForIdle()
+        // The merged tree can lag a pending recomposition by a frame (the
+        // documented sharp edge) - settle on the flipped chevron (the
+        // state's own affordance) before the hard asserts read the
+        // post-toggle composition.
+        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Albums").isDisplayed() })
         compose.onNodeWithText("deep.flac").assertDoesNotExist()
         compose.onNodeWithText("Deep").assertDoesNotExist()
         compose.onNodeWithText("deepest.wav").assertDoesNotExist()
@@ -300,7 +305,7 @@ class FolderDetailPageUiTest {
         compose.onNodeWithText("Song details").assertDoesNotExist()
         compose.onNodeWithText("Folder details").assertExists()
         compose.onNodeWithText("Albums").performClick()
-        compose.waitForIdle()
+        idleUntil(cond = { compose.onNodeWithContentDescription("Collapse Albums").isDisplayed() })
         compose.onNodeWithText("deep.flac").assertExists()
         compose.onNodeWithText("deepest.wav").assertExists()
         compose.onNodeWithContentDescription("Collapse Albums").assertExists()
@@ -308,7 +313,7 @@ class FolderDetailPageUiTest {
         // no matter what collapses, and a song row's body still opens the
         // song's profile page.
         compose.onNodeWithText("mango.mp3").performClick()
-        compose.waitForIdle()
+        idleUntil(cond = { compose.onNodeWithText("Song details").isDisplayed() })
         compose.onNodeWithText("Song details").assertExists()
     }
 
@@ -341,7 +346,7 @@ class FolderDetailPageUiTest {
         // row (the toggle itself) stays - with the chevron pointing the
         // other way.
         compose.onNodeWithText("Deep").performClick()
-        compose.waitForIdle()
+        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
         compose.onNodeWithText("deep.wav").assertDoesNotExist()
         compose.onNodeWithText("mid.flac").assertExists()
         compose.onNodeWithText("Deep").assertExists()
@@ -353,6 +358,9 @@ class FolderDetailPageUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Tap to view its songs").assertExists()
         openFolderPage(WALKIN_TREE)
+        // The re-entered page re-walks the tree (async) - settle on the
+        // surviving collapsed state's own affordance before the asserts.
+        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
         compose.onNodeWithText("deep.wav").assertDoesNotExist()
         compose.onNodeWithText("mid.flac").assertExists()
         compose.onNodeWithContentDescription("Expand Deep").assertExists()
