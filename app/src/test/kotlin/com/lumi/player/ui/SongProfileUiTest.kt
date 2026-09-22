@@ -301,24 +301,25 @@ class SongProfileUiTest {
     }
 
     @Test
+    @Config(sdk = [26])
     fun theDefaultMetadataReaderSettlesWithoutCrashing() {
         val app = ApplicationProvider.getApplicationContext<LumiApp>()
         val viewModel = LumiViewModel(app, app.repository)
-        // The default reader (not the test seam) does a real content-resolver
-        // read that cannot succeed for this synthetic uri, so it must settle
-        // to a catchable failure - and release the retriever - rather than
-        // crash. A close() on API < 29 would throw NoSuchMethodError (an
-        // Error, not an Exception); runCatching still catches it, and the
-        // assertion below rejects a non-Exception failure.
+        // Runs under the minSdk (API 26) so the version guard in the default
+        // reader takes its below-API-29 branch (the native release()); an
+        // unguarded close() there would throw NoSuchMethodError - an Error,
+        // not an Exception - and mask the settle. The default reader (not
+        // the test seam) does a real content-resolver read for this
+        // synthetic uri; whatever it settles to - a value or a catchable
+        // read failure - must not be an Error. runCatching catches even the
+        // Error; the assertion below rejects it in either outcome.
         val result = runCatching {
             viewModel.metadataReader(Uri.parse("content://docs/ProfileSong"))
         }
-        if (result.isFailure) {
-            assertTrue(
-                "the default reader must fail with a catchable Exception, not an Error (a crash)",
-                result.exceptionOrNull() is Exception,
-            )
-        }
+        assertTrue(
+            "the default reader must settle to a value or a catchable Exception, never an Error (a crash)",
+            result.isSuccess || result.exceptionOrNull() is Exception,
+        )
     }
 
     private companion object {
