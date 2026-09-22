@@ -9,7 +9,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
-import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
@@ -137,12 +136,11 @@ class ManualPlayTagSwitchUiTest {
         app().repository.addEntry(EntryType.AUDIO, "Manual song", "content://manual")
     }
 
-    /** A stored folder holding one manual song (the folder-play variant). */
-    private fun setupFolder(): FolderEntity = runBlocking {
-        val song = app().repository.addEntry(EntryType.AUDIO, "Folder manual song", "content://manual-folder")
-        val folder = app().repository.rememberFolder("content://docs/tree:manual", "Manual folder")
-        app().repository.markEntriesFromFolder(folder.id, setOf(song.payload))
-        folder
+    /** A stored manual song (the folder-play variant's single-song form: the
+     * folder row's play button is gone, the manual queue is started through
+     * the same single-song path). */
+    private fun setupManualSong(): EntryEntity = runBlocking {
+        app().repository.addEntry(EntryType.AUDIO, "Folder manual song", "content://manual-folder")
     }
 
     /** Proximity mode; an empty registered tag (no linked songs) + a manual song. */
@@ -218,7 +216,7 @@ class ManualPlayTagSwitchUiTest {
     @Test
     fun pausedManualPlay_thenTagRead_startsTheTagList_notResumesManualQueue() {
         setupDb()
-        val folder = setupFolder()
+        val manual = setupManualSong()
         val controller = startMainActivity()
 
         // Tag A's list is playing (its read started it).
@@ -231,11 +229,11 @@ class ManualPlayTagSwitchUiTest {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
 
-        // The folder's play button starts the manual queue, and the user
-        // pauses it (the session stays, unattached to any tag).
-        viewModelOf(controller).playFolder(folder)
+        // The content pane's play button starts the manual queue, and the
+        // user pauses it (the session stays, unattached to any tag).
+        viewModelOf(controller).playEntry(manual)
         val manualStart = nextServiceIntent()
-        assertNotNull("the folder play button must start the player service", manualStart)
+        assertNotNull("the content play button must start the player service", manualStart)
         assertEquals(PlayerService.ACTION_START, manualStart!!.action)
         assertNull(
             "manual playback must not attach a tag",

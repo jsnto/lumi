@@ -180,6 +180,72 @@ class FolderTreeTest {
         assertTrue(tree.folders.isEmpty())
     }
 
+    // ---- the show/hide row count ----
+
+    @Test
+    fun expandedLevelsRenderEveryRow() {
+        val tree = folderTreeStructure(
+            Uri.parse(treeUri),
+            listOf(
+                entry(1, "root-a.mp3", "$ROOT_DOC_ID/root-a.mp3"),
+                entry(2, "albums-b.flac", "$ROOT_DOC_ID/Albums/albums-b.flac"),
+                entry(3, "deep-c.flac", "$ROOT_DOC_ID/Albums/Deep/deep-c.flac"),
+            ),
+        )
+        // root-a, Albums, albums-b, Deep, deep-c: every row of the tree.
+        assertEquals(5, tree.visibleRowCount(emptySet()))
+    }
+
+    @Test
+    fun collapsingAFolderHidesItsDescendantsButKeepsItsOwnRow() {
+        val tree = folderTreeStructure(
+            Uri.parse(treeUri),
+            listOf(
+                entry(1, "root-a.mp3", "$ROOT_DOC_ID/root-a.mp3"),
+                entry(2, "albums-b.flac", "$ROOT_DOC_ID/Albums/albums-b.flac"),
+                entry(3, "deep-c.flac", "$ROOT_DOC_ID/Albums/Deep/deep-c.flac"),
+            ),
+        )
+        // Albums collapsed: its song AND its nested subfolder's rows are
+        // hidden, Albums' own row stays, and the root's row is untouched.
+        assertEquals(2, tree.visibleRowCount(setOf(listOf("Albums"))))
+    }
+
+    @Test
+    fun collapsingANestedFolderHidesOnlyThatFolderContent() {
+        val tree = folderTreeStructure(
+            Uri.parse(treeUri),
+            listOf(
+                entry(1, "root-a.mp3", "$ROOT_DOC_ID/root-a.mp3"),
+                entry(2, "albums-b.flac", "$ROOT_DOC_ID/Albums/albums-b.flac"),
+                entry(3, "deep-c.flac", "$ROOT_DOC_ID/Albums/Deep/deep-c.flac"),
+            ),
+        )
+        // Deep collapsed: only its own song hides; Albums' direct song and
+        // Deep's row stay.
+        assertEquals(4, tree.visibleRowCount(setOf(listOf("Albums", "Deep"))))
+    }
+
+    @Test
+    fun collapseKeysArePathFromTheRoot_soSameNamesAtDifferentLevelsDoNotCollide() {
+        val tree = folderTreeStructure(
+            Uri.parse(treeUri),
+            listOf(
+                // Two "Inner" folders under different roots: the keys must
+                // name the full path, not the bare name.
+                entry(1, "a-x.mp3", "$ROOT_DOC_ID/Alpha/Inner/a-x.mp3"),
+                entry(2, "b-y.mp3", "$ROOT_DOC_ID/Beta/Inner/b-y.mp3"),
+            ),
+        )
+        assertEquals(6, tree.visibleRowCount(emptySet()))
+        // Colliding on the bare name would hide nothing specific; the path
+        // key hides exactly the named folder's content.
+        assertEquals(5, tree.visibleRowCount(setOf(listOf("Alpha", "Inner"))))
+        assertEquals(5, tree.visibleRowCount(setOf(listOf("Beta", "Inner"))))
+        // A stale key at the wrong depth hides nothing.
+        assertEquals(6, tree.visibleRowCount(setOf(listOf("Inner"))))
+    }
+
     // ---- the per-level order ----
 
     @Test

@@ -54,15 +54,18 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.ModeEdit
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +80,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -102,9 +106,11 @@ import com.lumi.player.data.folderTreeStructure
 import com.lumi.player.data.sortedByTitle
 import com.lumi.player.data.sortedTree
 import com.lumi.player.data.tagSongOptions
+import com.lumi.player.data.visibleRowCount
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.player.PlayerStateHolder
+import com.lumi.player.player.PlayerUiState
 import kotlin.math.roundToInt
 
 /** Which settings sub-screen the settings screen shows. */
@@ -193,6 +199,17 @@ fun SettingsScreen(
     // content pane is tapped; cleared when the folder is removed or the
     // page leaves it).
     var folderDetailId by remember { mutableStateOf<Long?>(null) }
+
+    // The folder pages' collapsed subfolders (the tree's show/hide state):
+    // each remembered folder id maps to an observed set of the paths -
+    // chains of name segments from the picked root - of the subfolders
+    // whose rows are hidden. It lives here, like the pane state and the
+    // menu scroll, so leaving a folder's page and coming back keeps its
+    // tree exactly as it was left. (The sets are observed state: a toggle
+    // must re-compose the page's tree.)
+    val folderCollapsed = remember {
+        mutableMapOf<Long, MutableState<Set<List<String>>>>()
+    }
 
     // The entry whose profile page is showing (set when a song row in the
     // content pane or a folder page's song row is tapped; cleared when the
@@ -297,7 +314,6 @@ fun SettingsScreen(
                 folderDetailId = folder.id
                 pane = SettingsPane.FolderDetail
             },
-            onPlayFolder = { viewModel.playFolder(it) },
             onPlayEntry = { viewModel.playEntry(it) },
             onEntryOpened = { entry ->
                 entryDetailId = entry.id
@@ -350,13 +366,26 @@ fun SettingsScreen(
                     folder = folder,
                     songs = folderSongs,
                     sortDirection = contentSort,
+                    playState = playState,
+                    collapsed = folderCollapsed.getOrPut(folder.id) { mutableStateOf(emptySet()) }.value,
                     onBack = { pane = SettingsPane.Content },
                     onRescan = { viewModel.rescanFolder(folder) },
                     onRemove = { viewModel.requestFolderRemoval(folder) },
+                    onToggleCollapsed = { path ->
+                        val state = folderCollapsed.getOrPut(folder.id) { mutableStateOf(emptySet()) }
+                        // A plain mutable copy (the set operators resolve
+                        // oddly against the pruned stdlib mirror here):
+                        // remove the path if present, add it otherwise.
+                        val next = java.util.HashSet<List<String>>(state.value)
+                        if (!next.remove(path)) next.add(path)
+                        state.value = next
+                    },
                     onEntryOpened = { entry ->
                         entryDetailId = entry.id
                         pane = SettingsPane.EntryDetail
                     },
+                    onPlayEntry = { viewModel.playEntry(it) },
+                    onTogglePlayPause = { viewModel.toggleCurrentPlayback() },
                 )
             }
         }
@@ -1365,10 +1394,14 @@ private fun SongDragHandle(
  * One added folder, opened by tapping its row in the content pane. The
  * page shows the folder's details (label + the picked tree uri), its
  * imported songs (the stored content rows the folder's walk identified -
- * the same walk the rescan and the removal use), a rescan action that
- * re-walks the tree for new songs, and ends in a danger zone whose delete
- * removes the folder FROM THE APP - and only the folder and its imported
- * songs; the music files on the phone are untouched.
+ * the same walk the rescan and the removal use) as the picked folder's own
+ * tree: the subfolders lead at every level, the songs follow, each row
+ * carries the tree's left connector lines, each subfolder's row toggles
+ * the rows nested under it (show/hide), and every song row carries a
+ * play/pause button. A rescan action re-walks the tree for new songs, and
+ * the page ends in a danger zone whose delete removes the folder FROM THE
+ * APP - and only the folder and its imported songs; the music files on the
+ * phone are untouched.
  *
  * The page is a child of the content pane: its back (the in-pane arrow AND
  * system back) unwinds one level to the content pane, and the content pane
@@ -1381,10 +1414,15 @@ private fun FolderDetailPane(
     folder: FolderEntity,
     songs: LumiViewModel.FolderSongsState?,
     sortDirection: ContentSortDirection,
+    playState: PlayerUiState,
+    collapsed: Set<List<String>>,
     onBack: () -> Unit,
     onRescan: () -> Unit,
     onRemove: (FolderEntity) -> Unit,
+    onToggleCollapsed: (List<String>) -> Unit,
     onEntryOpened: (EntryEntity) -> Unit,
+    onPlayEntry: (EntryEntity) -> Unit,
+    onTogglePlayPause: () -> Unit,
 ) {
     // The page's song list: selecting the folder walks its tree and settles
     // the observed [songs] state (null while the walk is in flight).
@@ -1455,7 +1493,28 @@ private fun FolderDetailPane(
                         text = "No songs imported from that folder yet.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    else -> level?.let { FolderTreeRows(it, 0, scheme, onEntryOpened) }
+                    else -> level?.let { tree ->
+                        // The rows the tree renders, in render order: the
+                        // count lets every row know whether it is the
+                        // tree's last one (the last row carries no bottom
+                        // spacing, so no connector line dangles past it).
+                        val remaining = intArrayOf(tree.visibleRowCount(collapsed))
+                        Column {
+                            FolderTreeRows(
+                                level = tree,
+                                depth = 0,
+                                path = emptyList(),
+                                scheme = scheme,
+                                collapsed = collapsed,
+                                playState = playState,
+                                onToggleCollapsed = onToggleCollapsed,
+                                onPlayEntry = onPlayEntry,
+                                onTogglePlayPause = onTogglePlayPause,
+                                onEntryOpened = onEntryOpened,
+                                remaining = remaining,
+                            )
+                        }
+                    }
                 }
             }
             // The danger zone: a visually separated, clearly destructive
@@ -1516,49 +1575,218 @@ private fun FolderDetailPane(
  * One level of the folder page's song tree, mirroring the structure the
  * import walked: the subfolders (each carrying its own nested levels) come
  * first, then the songs sitting directly at this depth - a row per node,
- * indented one step per subfolder down. Folder rows are display-only; a
- * song row's body opens the song's profile page (the content pane's own
- * language).
+ * each carrying the tree's left connector lines and indented one rail step
+ * per subfolder down ([TreeRowFrame]).
+ *
+ * The caller groups the whole tree under a single non-spaced [Column]: the
+ * rows' own 12 dp bottom spacing is the only inter-row spacing, so the
+ * section's own 12 dp row spacing cannot sit between the rows and break
+ * the connector rails (each row draws its rails only inside its own
+ * frame).
+ *
+ * A subfolder's row is tappable: it toggles the display of that
+ * subfolder's rows (its direct songs and any nested subfolders' content) -
+ * the toggle is keyed by the subfolder's path from the root ([path] plus
+ * its display name; siblings carry distinct names, so the key names one
+ * node). The songs directly in the picked root (depth zero) are always
+ * displayed: no subfolder owns them. A song row's body opens the song's
+ * profile page (the content pane's own language), and its play/pause
+ * button is a separate region beside the body (the content pane's own
+ * pattern), so it never fights the row tap.
  */
 @Composable
 private fun FolderTreeRows(
     level: FolderTreeLevel,
     depth: Int,
+    path: List<String>,
     scheme: ColorScheme,
+    collapsed: Set<List<String>>,
+    playState: PlayerUiState,
+    onToggleCollapsed: (List<String>) -> Unit,
+    onPlayEntry: (EntryEntity) -> Unit,
+    onTogglePlayPause: () -> Unit,
     onEntryOpened: (EntryEntity) -> Unit,
+    remaining: IntArray,
 ) {
-    val indent = 16.dp * depth
     level.folders.forEach { node ->
-        SettingRow(
-            modifier = Modifier.padding(start = indent),
-            leading = {
-                IconChip(
-                    icon = Icons.Filled.Folder,
-                    background = scheme.tertiaryContainer,
-                    content = scheme.onTertiaryContainer,
-                )
-            },
-            title = node.displayName,
-        )
-        FolderTreeRows(node.children, depth + 1, scheme, onEntryOpened)
+        val nodePath = path + node.displayName
+        val isCollapsed = nodePath in collapsed
+        // The folder's own branch rail (from its vertical center down, so
+        // its first child's row continues it) is drawn only while the
+        // children are actually displayed - a collapsed folder carries no
+        // dangling line.
+        val hasVisibleBranch =
+            !isCollapsed &&
+                (node.children.folders.isNotEmpty() || node.children.songs.isNotEmpty())
+        val isLast = remaining[0] == 1
+        remaining[0]--
+        TreeRowFrame(depth = depth, hasVisibleBranch = hasVisibleBranch, isLast = isLast) {
+            SettingRow(
+                // The row body is the show/hide toggle: tapping it hides
+                // (or restores) the rows nested under this subfolder.
+                modifier = Modifier.clickable { onToggleCollapsed(nodePath) },
+                leading = {
+                    IconChip(
+                        icon = Icons.Filled.Folder,
+                        background = scheme.tertiaryContainer,
+                        content = scheme.onTertiaryContainer,
+                    )
+                },
+                title = node.displayName,
+                trailing = {
+                    // The state's own affordance: the chevron points down
+                    // while the rows are displayed and right while they are
+                    // hidden (display-only - the row body is the tap
+                    // target).
+                    Icon(
+                        imageVector = if (isCollapsed) {
+                            Icons.Filled.KeyboardArrowRight
+                        } else {
+                            Icons.Filled.KeyboardArrowDown
+                        },
+                        contentDescription = if (isCollapsed) {
+                            "Expand ${node.displayName}"
+                        } else {
+                            "Collapse ${node.displayName}"
+                        },
+                        modifier = Modifier.size(20.dp),
+                        tint = scheme.onSurfaceVariant,
+                    )
+                },
+            )
+        }
+        if (!isCollapsed) {
+            FolderTreeRows(
+                level = node.children,
+                depth = depth + 1,
+                path = nodePath,
+                scheme = scheme,
+                collapsed = collapsed,
+                playState = playState,
+                onToggleCollapsed = onToggleCollapsed,
+                onPlayEntry = onPlayEntry,
+                onTogglePlayPause = onTogglePlayPause,
+                onEntryOpened = onEntryOpened,
+                remaining = remaining,
+            )
+        }
     }
     level.songs.forEach { entry ->
-        SettingRow(
-            // The row body opens the song's profile page (the content
-            // pane's own language).
-            modifier = Modifier
-                .padding(start = indent)
-                .clickable { onEntryOpened(entry) },
-            leading = {
-                IconChip(
-                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                    background = scheme.primaryContainer,
-                    content = scheme.onPrimaryContainer,
-                )
-            },
-            title = entry.label,
-            detail = detailFor(entry.type, entry.payload),
-        )
+        val isLast = remaining[0] == 1
+        remaining[0]--
+        TreeRowFrame(depth = depth, hasVisibleBranch = false, isLast = isLast) {
+            SettingRow(
+                // The row body opens the song's profile page (the content
+                // pane's own language).
+                modifier = Modifier.clickable { onEntryOpened(entry) },
+                leading = {
+                    IconChip(
+                        icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                        background = scheme.primaryContainer,
+                        content = scheme.onPrimaryContainer,
+                    )
+                },
+                title = entry.label,
+                detail = detailFor(entry.type, entry.payload),
+                trailing = {
+                    // The live play/pause state from the shared playback
+                    // holder: while this song is the current track the
+                    // button shows pause (while it plays) or play (while it
+                    // is paused) and toggles it - pausing then resuming the
+                    // SAME song; while any other song is current (or
+                    // nothing plays) it starts this one.
+                    val isCurrent = playState.currentLabel == entry.label
+                    val isPlayingNow = isCurrent && playState.isPlaying
+                    SoftIconButton(
+                        icon = if (isPlayingNow) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlayingNow) "Pause ${entry.label}" else "Play ${entry.label}",
+                        onClick = {
+                            if (isCurrent) onTogglePlayPause() else onPlayEntry(entry)
+                        },
+                    )
+                },
+            )
+        }
+    }
+}
+
+/** The folder page's tree: the per-depth rail column (the indent step). */
+private val TREE_RAIL_STEP_Dp = 16.dp
+
+/** The folder page's tree: the connector lines' width. */
+private val TREE_RAIL_WIDTH_Dp = 1.dp
+
+/** The folder page's tree: the horizontal stub from a rail out to its row. */
+private val TREE_STUB_WIDTH_Dp = 8.dp
+
+/**
+ * One row of the folder page's tree, carrying the tree's left-side
+ * connectors: a 1 dp vertical rail in each of the levels' rail columns
+ * above the row (every rail spans the row's full frame height, so the
+ * rails run continuously down a column from the first nested row to the
+ * last), plus - for a row nested at least one level - a short horizontal
+ * stub from the innermost rail out to the row. A folder row with
+ * displayed children also carries its children's rail from its own
+ * vertical center down (its first child's row picks the line up at its
+ * top), so each branch's line starts where its folder row sits. The row's
+ * content indents one rail step per level: the rails occupy the indent,
+ * replacing the bare padding.
+ *
+ * The row's bottom spacing (12 dp, the section's own row spacing) lives
+ * inside the row's frame and is the row's only inter-row spacing - the
+ * caller groups the tree's rows under a single non-spaced [Column], so the
+ * section's own 12 dp row spacing cannot also sit between the rows and
+ * break the rails, which the row draws only inside its own frame; the
+ * tree's last row carries no bottom spacing, so no rail dangles past the
+ * tree.
+ */
+@Composable
+private fun TreeRowFrame(
+    depth: Int,
+    hasVisibleBranch: Boolean,
+    isLast: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val railColor = MaterialTheme.colorScheme.outlineVariant
+    val bottomSpacing = if (isLast) 0.dp else 12.dp
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val step = TREE_RAIL_STEP_Dp.toPx()
+                // The row's content centers in the frame minus its bottom
+                // spacing (the spacing is below the content, inside the
+                // frame).
+                val contentCenterY = (size.height - bottomSpacing.toPx()) / 2f
+                // The vertical rails of the levels above this row: each
+                // spans the frame's full height, so the line is continuous
+                // through the row and into the next row's frame.
+                for (level in 0 until depth) {
+                    val x = level * step
+                    drawLine(railColor, Offset(x, 0f), Offset(x, size.height), TREE_RAIL_WIDTH_Dp.toPx())
+                }
+                // The row's own branch rail (a folder row's children's
+                // rail): from the row's vertical center to the frame's
+                // bottom - the first child's row continues it from its top.
+                if (hasVisibleBranch) {
+                    val x = depth * step
+                    drawLine(railColor, Offset(x, contentCenterY), Offset(x, size.height), TREE_RAIL_WIDTH_Dp.toPx())
+                }
+                // The horizontal stub from the innermost rail to the row
+                // itself.
+                if (depth > 0) {
+                    val x = (depth - 1) * step
+                    drawLine(railColor, Offset(x, contentCenterY), Offset(x + TREE_STUB_WIDTH_Dp.toPx(), contentCenterY), TREE_RAIL_WIDTH_Dp.toPx())
+                }
+            }
+            .padding(bottom = bottomSpacing)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (depth > 0) {
+                Spacer(Modifier.width(TREE_RAIL_STEP_Dp * depth))
+            }
+            content()
+        }
     }
 }
 
@@ -1837,10 +2065,10 @@ private fun MetadataField(label: String, value: String) {
  * folder is browsed as a unit), then the individual content - the songs
  * added one at a time. The folder-imported rows are NOT in the individual
  * list: they stay visible only inside their folder's page. Both sections
- * follow the sort control's title order (descending by default), and every
- * row carries a play button: a folder's plays all of its stored songs in
- * the order the rows were stored, a song's plays just that song. Tapping a
- * song row opens its profile page.
+ * follow the sort control's title order (descending by default). A folder
+ * row opens the folder's own page (its songs' play/pause buttons live
+ * there, not on the row); every individual row carries a play button that
+ * plays just that song. Tapping a song row opens its profile page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1853,7 +2081,6 @@ private fun ContentPane(
     onAddContent: () -> Unit,
     onAddFolder: () -> Unit,
     onFolderOpened: (FolderEntity) -> Unit,
-    onPlayFolder: (FolderEntity) -> Unit,
     onPlayEntry: (EntryEntity) -> Unit,
     onEntryOpened: (EntryEntity) -> Unit,
     onEntryDeleted: (EntryEntity) -> Unit,
@@ -1877,8 +2104,8 @@ private fun ContentPane(
             // The folders come first: their imported songs live on the
             // folder's own page, and the folder rows get the violet folder
             // chip (D-03). "Add folder" is the + button on the section's
-            // title row. A row's play button plays every song the folder
-            // holds, in the order the rows were stored.
+            // title row. A row opens the folder's own page - its songs' play
+            // buttons live on that page's tree, not on the row.
             SectionCard(
                 title = "Folders",
                 addLabel = "Add folder",
@@ -1900,18 +2127,11 @@ private fun ContentPane(
                             )
                         },
                         // The row body is the folder page's entry point (the
-                        // rescan and the removal live on the page now, not
-                        // on the row).
+                        // rescan, the removal, and the songs' play buttons
+                        // live on the page now, not on the row).
                         modifier = Modifier.clickable { onFolderOpened(folder) },
                         title = folder.label,
                         detail = "Tap to view its songs",
-                        trailing = {
-                            SoftIconButton(
-                                icon = Icons.Filled.PlayArrow,
-                                contentDescription = "Play ${folder.label}",
-                                onClick = { onPlayFolder(folder) },
-                            )
-                        },
                     )
                 }
             }

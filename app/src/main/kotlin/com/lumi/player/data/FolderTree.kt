@@ -148,3 +148,27 @@ fun FolderTreeLevel.sortedTree(direction: ContentSortDirection): FolderTreeLevel
         songs = songs.sortedByTitle({ it.label }, { it.id }, direction),
     )
 }
+
+/**
+ * The rows [level] renders when the subfolders in [collapsed] are
+ * collapsed: every visible subfolder contributes its own row plus the
+ * visible rows of its nested levels, and every song counts one. A
+ * collapsed folder contributes its own row only - its descendants' rows
+ * are hidden from the display (the folder's row itself stays, as the
+ * show/hide toggle). [path] is the chain of name segments from the picked
+ * root down to this level; each subfolder's collapse key is its [path]
+ * extended with its own display name (siblings carry distinct names, so
+ * the key identifies one node - the same key the page's show/hide state
+ * is keyed by).
+ */
+fun FolderTreeLevel.visibleRowCount(collapsed: Set<List<String>>, path: List<String> = emptyList()): Int {
+    var rows = songs.size
+    folders.forEach { folder ->
+        val folderPath = path + folder.displayName
+        rows += 1
+        if (folderPath !in collapsed) {
+            rows += folder.children.visibleRowCount(collapsed, folderPath)
+        }
+    }
+    return rows
+}
