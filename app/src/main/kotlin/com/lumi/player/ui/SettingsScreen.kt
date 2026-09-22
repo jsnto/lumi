@@ -1674,7 +1674,7 @@ private fun EntryDetailPane(
             SectionCard(title = "Assign to a tag") {
                 if (tags.isEmpty()) {
                     Text(
-                        "No registered NFC tags yet. Scan a tag in the NFC tags setting first.",
+                        "No tags registered yet. Scan a tag below to add this song to it.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {

@@ -125,6 +125,55 @@ class FolderTreeTest {
     }
 
     @Test
+    fun aVolumeRootPickPlacesChildrenThroughTheColonJoin() {
+        // A pick at the volume root: the root docId is the bare volume id
+        // ("primary"), and the provider joins the volume id and path with
+        // ':' rather than '/' - a child's docId looks like
+        // "primary:Music/song.mp3".
+        fun volumeEntry(id: Long, label: String, docId: String): EntryEntity =
+            EntryEntity(
+                id = id,
+                type = "AUDIO",
+                label = label,
+                payload = "content://docs/tree/primary/document/" + Uri.encode(docId, null),
+            )
+        val tree = folderTreeStructure(
+            Uri.parse("content://docs/tree/primary"),
+            listOf(
+                volumeEntry(1, "song.mp3", "primary:Music/song.mp3"),
+                volumeEntry(2, "root-song.mp3", "primary:root-song.mp3"),
+            ),
+        )
+        assertEquals(listOf(2L), tree.songs.map { it.id })
+        assertEquals(listOf("Music"), tree.folders.map { it.displayName })
+        assertEquals(listOf(1L), tree.folders.single().children.songs.map { it.id })
+        assertTrue("the volume root's own level holds no root songs elsewhere", tree.folders.single().children.folders.isEmpty())
+    }
+
+    @Test
+    fun aSubfolderPickWithAColonInTheFolderNameStillResolvesThroughTheSlashJoin() {
+        // The picked folder's docId contains ':' (the folder "Al:bum" under
+        // the volume root) but no '/': its children are joined with '/', so
+        // the file must resolve through the slash case against the FULL
+        // root docId - stripping only the volume part would place it under
+        // a spurious "Al:bum" folder row.
+        val colonTreeUri = "content://docs/tree/" + Uri.encode("primary:Al:bum", null)
+        val tree = folderTreeStructure(
+            Uri.parse(colonTreeUri),
+            listOf(
+                EntryEntity(
+                    id = 1,
+                    type = "AUDIO",
+                    label = "x.mp3",
+                    payload = colonTreeUri + "/document/" + Uri.encode("primary:Al:bum/x.mp3", null),
+                ),
+            ),
+        )
+        assertEquals(listOf(1L), tree.songs.map { it.id })
+        assertTrue("a direct file under the root sits at the top level, in no folder row", tree.folders.isEmpty())
+    }
+
+    @Test
     fun emptyEntriesBuildAnEmptyTree() {
         val tree = folderTreeStructure(Uri.parse(treeUri), emptyList())
         assertTrue(tree.songs.isEmpty())

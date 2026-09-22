@@ -217,7 +217,7 @@ class TagScanAssignUiTest {
         // With no registered tags the picker option is disabled with the
         // clear message, but the scan option stays available (scanning a
         // new tag registers it and then assigns).
-        compose.onNodeWithText("No registered NFC tags yet. Scan a tag in the NFC tags setting first.").assertExists()
+        compose.onNodeWithText("No tags registered yet. Scan a tag below to add this song to it.").assertExists()
         compose.onNodeWithText("Scan a tag to assign").assertExists()
 
         // Tapping it arms the unified scan for the song: the scan dialog

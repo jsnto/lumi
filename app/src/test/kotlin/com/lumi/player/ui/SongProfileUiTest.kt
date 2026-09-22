@@ -257,7 +257,7 @@ class SongProfileUiTest {
         openSongProfile()
 
         // The action is disabled with a clear message.
-        compose.onNodeWithText("No registered NFC tags yet. Scan a tag in the NFC tags setting first.").assertExists()
+        compose.onNodeWithText("No tags registered yet. Scan a tag below to add this song to it.").assertExists()
         compose.onNodeWithText("Choose a tag").assertDoesNotExist()
         // Only the section title carries the action's copy.
         idleUntil(

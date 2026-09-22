@@ -62,6 +62,17 @@ fun folderDocIdOf(folderUri: Uri): String {
  * the root folder sits at the top level, a song inside subfolder "a/b"
  * sits two levels down, and deeper subfolders indent further.
  *
+ * The provider joins a document id's volume id and path with ':' (the
+ * volume root's docId is the bare volume id, e.g. "primary") and path
+ * segments with '/'. So a docId below the root starts with "$rootDocId/"
+ * - the slash case, which wins whenever it can - or, when the root docId
+ * is a bare volume id (no '/'), with "$rootDocId:" - the colon case of a
+ * volume-root pick, whose children's docIds look like
+ * "primary:Music/song.mp3". Either way, cutting the prefix and splitting
+ * the remainder on '/' (dropping the file segment; the empty-segment
+ * filter swallows a USB path's leading '/') yields the song's subfolder
+ * path.
+ *
  * A song whose payload is not a tree-scoped uri under the root (a legacy
  * row, or a synthetic test uri) cannot be placed and degrades to the top
  * level - visible, not lost. The result is unsorted;
@@ -69,12 +80,15 @@ fun folderDocIdOf(folderUri: Uri): String {
  */
 fun folderTreeStructure(folderUri: Uri, entries: List<EntryEntity>): FolderTreeLevel {
     val rootDocId = folderDocIdOf(folderUri)
+    val volumeRootPick = rootDocId.isNotEmpty() && !rootDocId.contains('/')
     val root = TreeNode()
     entries.forEach { entry ->
         val docId = treeEntryDocId(Uri.parse(entry.payload))
         val folderPath =
             if (rootDocId.isNotEmpty() && docId.startsWith("$rootDocId/")) {
                 docId.removePrefix("$rootDocId/").split('/').filter { it.isNotEmpty() }.dropLast(1)
+            } else if (volumeRootPick && docId.startsWith("$rootDocId:")) {
+                docId.removePrefix("$rootDocId:").split('/').filter { it.isNotEmpty() }.dropLast(1)
             } else {
                 emptyList()
             }
