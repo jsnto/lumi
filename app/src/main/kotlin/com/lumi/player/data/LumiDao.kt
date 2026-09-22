@@ -129,6 +129,10 @@ interface LumiDao {
     @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId AND entryId = :entryId")
     suspend fun linkCount(tagId: Long, entryId: Long): Int
 
+    /** Removes the tag's single link to the entry (the tag detail page's per-song removal - the entry row and every other link are untouched). */
+    @Query("DELETE FROM tag_links WHERE tagId = :tagId AND entryId = :entryId")
+    suspend fun deleteLink(tagId: Long, entryId: Long): Int
+
     /** A tag's current link count (the sortOrder of a freshly appended link). */
     @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId")
     suspend fun linkCountForTag(tagId: Long): Int

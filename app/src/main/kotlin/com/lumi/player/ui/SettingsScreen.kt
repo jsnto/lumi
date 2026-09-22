@@ -162,6 +162,10 @@ fun SettingsScreen(
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
+    // The tag detail page's per-song removal confirmation: the tag + the
+    // song a row's remove action asked to drop (the tag's link to that one
+    // song goes; the song stays in the content list).
+    var removeSong by remember { mutableStateOf<Pair<TagEntity, EntryEntity>?>(null) }
     // The tag whose edit dialog is showing (set by the tag detail page's
     // edit action on the Tag details section).
     var editTag by remember { mutableStateOf<TagEntity?>(null) }
@@ -297,6 +301,7 @@ fun SettingsScreen(
                     },
                     onEdit = { editTag = it },
                     onDelete = { deleteTag = it },
+                    onRemoveSong = { entry -> removeSong = tag to entry },
                 )
             }
         }
@@ -434,6 +439,38 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deleteEntry = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // The tag detail page's per-song removal confirmation: the effect is
+    // stated before the destructive confirm - the tag's link to that one
+    // song goes; the song stays in the content list.
+    removeSong?.let { (tag, entry) ->
+        AlertDialog(
+            onDismissRequest = { removeSong = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = {
+                Text("Remove song from the tag?", style = MaterialTheme.typography.headlineSmall)
+            },
+            text = {
+                Text(
+                    "“${entry.label}” will be removed from ${tag.name.ifEmpty { tag.uid }}. " +
+                        "It stays in the content list.",
+                )
+            },
+            confirmButton = {
+                DestructivePillButton(
+                    label = "Remove",
+                    onClick = {
+                        viewModel.unlinkEntryFromTag(tag, entry)
+                        removeSong = null
+                    },
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { removeSong = null }) { Text("Cancel") }
             },
         )
     }
@@ -875,9 +912,11 @@ private fun TagsPane(
  * page shows the tag's details (name + UID) with an edit action that opens
  * the edit dialog (the name is the only editable detail; the UID is
  * hardware-derived and read-only), its current song list - in the order the
- * songs were added, reorderable by dragging a row's handle - with an
- * add-song action aimed at THIS tag, and ends in a danger zone whose delete
- * removes the tag - and only the tag and its links.
+ * songs were added, reorderable by dragging a row's handle, and each row
+ * individually removable (the row's remove action unlinks that ONE song
+ * from THIS tag - the song stays in the content list) - with an add-song
+ * action aimed at THIS tag, and ends in a danger zone whose delete removes
+ * the tag - and only the tag and its links.
  *
  * The song list reuses the shared selection plumbing: opening the page
  * selects the tag, so [linked] (the selected tag's entries) is this tag's
@@ -886,7 +925,11 @@ private fun TagsPane(
  * ([LumiViewModel.linkEntryToTag]) - no file picker, no duplicated song.
  * A completed drag reorders the list and persists it through
  * [LumiViewModel.reorderTagSongs] - the play order is the link order, so
- * the persisted order is the play order.
+ * the persisted order is the play order. A row's remove action confirms
+ * ([LumiViewModel.unlinkEntryFromTag], the inverse of the add-song link)
+ * and drops only that tag's link to that one song: the song stays in the
+ * content list, and if the list empties the page falls back to the
+ * "This tag plays nothing yet." state.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -898,6 +941,7 @@ private fun TagDetailPane(
     onAddSong: () -> Unit,
     onEdit: (TagEntity) -> Unit,
     onDelete: (TagEntity) -> Unit,
+    onRemoveSong: (EntryEntity) -> Unit,
 ) {
     // Pointing the shared selection at this tag makes the observed [linked]
     // list this tag's song list.
@@ -959,6 +1003,7 @@ private fun TagDetailPane(
                     ReorderableSongList(
                         songs = linked,
                         onReordered = { viewModel.reorderTagSongs(tag, it) },
+                        onRemoveSong = onRemoveSong,
                     )
                 }
             }
@@ -1018,7 +1063,10 @@ private fun TagDetailPane(
 
 /**
  * The tag detail page's song list, reorderable by dragging: each row ends in
- * a drag handle that is pressed and dragged vertically. While the drag is
+ * a remove action (the row-level delete, which confirms and unlinks that ONE
+ * song from THIS tag - the song stays in the content list) and a drag handle
+ * that is pressed and dragged vertically. The two are separate regions, so
+ * the remove never fights the drag gesture. While the drag is
  * held, the list previews the new order live - the held row follows the
  * pointer and swaps places as it crosses a row boundary - and a completed
  * drag persists the order (the tag links' sortOrder) through [onReordered].
@@ -1036,6 +1084,7 @@ private fun TagDetailPane(
 private fun ReorderableSongList(
     songs: List<EntryEntity>,
     onReordered: (List<EntryEntity>) -> Unit,
+    onRemoveSong: (EntryEntity) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     // The observed list, mirrored into state: the drag's pointer closure
@@ -1155,12 +1204,25 @@ private fun ReorderableSongList(
                         }
                     },
                 trailing = {
-                    SongDragHandle(
-                        entryId = entry.id,
-                        contentDescription = "Reorder ${entry.label}",
-                        onDrag = { id, delta -> handleDragged(id, delta) },
-                        onDragEnd = { handleDragEnded() },
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The per-song removal (the content pane's row-level
+                        // delete language): the tag's link to this one song
+                        // goes; the song stays in the content list. A
+                        // separate region from the drag handle, so the
+                        // remove never fights the drag gesture.
+                        SoftIconButton(
+                            icon = Icons.Default.Delete,
+                            contentDescription = "Remove ${entry.label} from the tag",
+                            onClick = { onRemoveSong(entry) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        SongDragHandle(
+                            entryId = entry.id,
+                            contentDescription = "Reorder ${entry.label}",
+                            onDrag = { id, delta -> handleDragged(id, delta) },
+                            onDragEnd = { handleDragEnded() },
+                        )
+                    }
                 },
             )
         }

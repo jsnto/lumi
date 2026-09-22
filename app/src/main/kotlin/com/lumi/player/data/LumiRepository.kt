@@ -206,6 +206,24 @@ class LumiRepository(private val db: LumiDatabase) {
     /** The tag's current song list in link order (the scan-first read). */
     suspend fun entriesForTag(tagId: Long): List<EntryEntity> = dao.entriesForTag(tagId)
 
+    /**
+     * Unlinks ONE entry from ONE tag - the inverse of [linkEntryToTag]:
+     * only the tag's link row to the entry is deleted. The entry itself
+     * stays in the content list (its folder membership untouched), its
+     * links to any other tags are untouched, and the remaining songs keep
+     * their persisted link order (the sortOrder of what stays is
+     * unchanged). Returns false when the tag or the entry no longer exists
+     * (deleted while the removal was in flight) or when the tag does not
+     * link the entry.
+     */
+    suspend fun unlinkEntryFromTag(tagId: Long, entryId: Long): Boolean {
+        return db.withTransaction {
+            if (dao.tagById(tagId) == null) return@withTransaction false
+            if (dao.entryById(entryId) == null) return@withTransaction false
+            dao.deleteLink(tagId, entryId) > 0
+        }
+    }
+
     /** Reads and replaces the tag's ordered content list in one Room transaction. */
     suspend fun updateTagEntries(tagId: Long, transform: (List<Long>) -> List<Long>): List<Long> {
         return db.withTransaction {
