@@ -268,9 +268,14 @@ class LumiViewModel(
      * remembered position saved against this exact linked list, it is passed
      * to the service so playback resumes where it stopped. A null [uid] is
      * manual playback (the content play buttons): no remembered position
-     * applies and no tag becomes active.
+     * applies and the policy's active tag is cleared, so a later tag read
+     * starts that tag's own list instead of resuming or being ignored
+     * against the manual queue.
      */
     private suspend fun startPlayer(specs: List<EntrySpec>, uid: String?) {
+        if (uid == null) {
+            policy.onPlaybackStopped()
+        }
         val intent = Intent(context, PlayerService::class.java).apply {
             action = PlayerService.ACTION_START
             putExtra(PlayerService.EXTRA_ENTRIES, ArrayList(specs))
