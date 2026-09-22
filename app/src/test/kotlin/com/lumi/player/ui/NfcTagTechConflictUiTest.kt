@@ -577,6 +577,60 @@ class NfcTagTechConflictUiTest {
         )
     }
 
+    /**
+     * A re-delivery of the tag whose poll is already running (a re-read or
+     * re-presentation of the same tag) must be a no-op: the running poll
+     * keeps its job and its session. Pre-fix, every (re-)delivery tore the
+     * running poll down and re-established it (verified on the base code:
+     * the poll job is replaced on every redelivery, racing the cancelled
+     * loop's teardown - whose finally closes the tag's single connection
+     * slot - with the fresh establish's connect; on the Samsung A52 the
+     * restarted fast path then died on the slot the stale loop was still
+     * releasing, the device's "Only one TagTechnology" kill).
+     */
+    @Test
+    fun proximityMode_redeliveryOfThePolledTag_isASkip_notARestart() {
+        setupDb(PlayMode.PROXIMITY)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_ON_DEVICE)
+        }
+        val controller = startMainActivity()
+        val activity = controller.get()
+        val session = FakeGenericSession()
+        val establishes = AtomicInteger(0)
+        withCountingGenericSession(activity, session, establishes)
+        sendTag(controller, UID_ON_DEVICE)
+        waitForEstablishes(establishes, 1)
+        val firstJob = presencePollJobOf(activity)
+        assertNotNull("the active tag's presence poll must be running", firstJob)
+        assertTrue("the poll must be active", firstJob!!.isActive)
+        assertEquals("the fast path must be established exactly once", 1, establishes.get())
+        // A fresh delivery of the SAME tag (a re-read / re-presentation)
+        // while its poll is running: the same-uid skip makes it a no-op.
+        sendTag(controller, UID_ON_DEVICE)
+        // Let a (nonexistent) restart's establish have time to land on the
+        // IO dispatcher: pre-fix it bumped the count and swapped the job.
+        Thread.sleep(400)
+        ShadowLooper.idleMainLooper()
+        assertEquals(
+            "a re-delivery of the tag whose poll is already running must " +
+                "NOT re-establish the fast path (pre-fix: every (re-)delivery " +
+                "tore the running poll down and re-established it)",
+            1, establishes.get(),
+        )
+        val sameJob = presencePollJobOf(activity)
+        assertTrue(
+            "the re-delivery must keep the ORIGINAL poll job running " +
+                "(pre-fix: it was replaced by a restart, racing the stale " +
+                "loop's slot release with the fresh connect)",
+            sameJob?.isActive == true && sameJob === firstJob,
+        )
+        assertNull(
+            "the skip must not have paused anything",
+            shadowOf(app() as Application).nextStartedService,
+        )
+    }
+
     companion object {
         // Tech codes as stored in the Tag tech list: 1 = NfcA, 3 = IsoDep,
         // 9 = Mifare Ultralight (bytecode-verified: NfcA.get checks
