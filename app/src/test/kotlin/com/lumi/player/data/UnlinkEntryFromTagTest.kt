@@ -17,7 +17,9 @@ import org.robolectric.annotation.Config
  * must delete EXACTLY that tag's link row to that entry - the inverse of
  * [LumiRepository.linkEntryToTag]. The entry itself stays in the content
  * list, its folder membership is untouched, its links to any other tags are
- * untouched, and the remaining songs keep their persisted link order.
+ * untouched, and the remaining songs keep their relative link order (the
+ * survivors are renumbered densely, so a later append still lands at the
+ * end).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = LumiApp::class)
@@ -207,6 +209,34 @@ class UnlinkEntryFromTagTest {
         assertEquals(
             "the re-added song lands at the end of the list",
             listOf("Second", "First"),
+            repo.entriesForTag(tag.id).map { it.label },
+        )
+    }
+
+    @Test
+    fun unlink_renumbersSurvivorsSoALaterAppendLandsAtTheEnd() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("UID-K", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "A", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "B", "content://b")
+        val c = repo.addEntry(EntryType.AUDIO, "C", "content://c")
+        val d = repo.addEntry(EntryType.AUDIO, "D", "content://d")
+        val e = repo.addEntry(EntryType.AUDIO, "E", "content://e")
+        repo.updateTagEntries(tag.id) { listOf(a.id, b.id, c.id, d.id) }
+
+        repo.unlinkEntryFromTag(tag.id, a.id)
+        repo.unlinkEntryFromTag(tag.id, b.id)
+        assertEquals(
+            "after two removals the survivors still read in their original order",
+            listOf("C", "D"),
+            repo.entriesForTag(tag.id).map { it.label },
+        )
+        val appended = repo.linkEntryToTag(tag.id, e.id)
+
+        assertTrue("the append must be accepted", appended)
+        assertEquals(
+            "the appended song lands at the END of the list, not mid-list",
+            listOf("C", "D", "E"),
             repo.entriesForTag(tag.id).map { it.label },
         )
     }

@@ -208,19 +208,30 @@ class LumiRepository(private val db: LumiDatabase) {
 
     /**
      * Unlinks ONE entry from ONE tag - the inverse of [linkEntryToTag]:
-     * only the tag's link row to the entry is deleted. The entry itself
-     * stays in the content list (its folder membership untouched), its
-     * links to any other tags are untouched, and the remaining songs keep
-     * their persisted link order (the sortOrder of what stays is
-     * unchanged). Returns false when the tag or the entry no longer exists
-     * (deleted while the removal was in flight) or when the tag does not
-     * link the entry.
+     * only the tag's link to the entry goes. The entry itself stays in the
+     * content list (its folder membership untouched), its links to any
+     * other tags are untouched, and the remaining songs keep their relative
+     * link order - their sortOrder values are renumbered densely to 0..n-1
+     * in the current read order, so a later append (sortOrder = the tag's
+     * link count) still lands at the end. Returns false when the tag or the
+     * entry no longer exists (deleted while the removal was in flight) or
+     * when the tag does not link the entry.
      */
     suspend fun unlinkEntryFromTag(tagId: Long, entryId: Long): Boolean {
         return db.withTransaction {
             if (dao.tagById(tagId) == null) return@withTransaction false
             if (dao.entryById(entryId) == null) return@withTransaction false
-            dao.deleteLink(tagId, entryId) > 0
+            val current = dao.entriesForTag(tagId).map { it.id }
+            if (current.isEmpty()) return@withTransaction false
+            val next = current.filterNot { it == entryId }
+            if (next == current) return@withTransaction false
+            dao.replaceLinksForTag(
+                tagId,
+                next.mapIndexed { index, id ->
+                    TagLinkEntity(tagId = tagId, entryId = id, sortOrder = index)
+                },
+            )
+            true
         }
     }
 
