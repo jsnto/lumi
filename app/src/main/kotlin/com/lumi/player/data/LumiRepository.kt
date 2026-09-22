@@ -206,7 +206,7 @@ class LumiRepository(private val db: LumiDatabase) {
 
     // ---- links ----
 
-    /** The tag's current song list in link order (the scan-first read). */
+    /** The tag's current song list in link order. */
     suspend fun entriesForTag(tagId: Long): List<EntryEntity> = dao.entriesForTag(tagId)
 
     /**
