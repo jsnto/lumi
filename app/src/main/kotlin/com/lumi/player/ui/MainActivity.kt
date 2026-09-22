@@ -9,6 +9,7 @@ import android.nfc.Tag
 import android.nfc.tech.IsoDep
 import android.nfc.tech.MifareUltralight
 import android.nfc.tech.NfcA
+import android.nfc.tech.TagTechnology
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -248,16 +249,18 @@ class MainActivity : ComponentActivity() {
     private var lastSeenUid: String? = null
     @Volatile private var lastSeenAt: Long = 0L
 
-    // Continuous-reading fast path (proximity mode, Mifare Ultralight tags
-    // only): the Tag handle from the most recent foreground-dispatch
-    // delivery, kept so the active tag can be read continuously instead of
-    // waiting for the NFC stack to re-report it.
+    // Continuous-reading fast path (proximity mode): the Tag handle from
+    // the most recent foreground-dispatch delivery, kept so the active tag
+    // can be read continuously (the Mifare page-0 reads, or the generic
+    // tag-tech probes) instead of waiting for the NFC stack to re-report
+    // it.
     @Volatile private var lastSeenTag: Tag? = null
     @Volatile private var lastSeenTagUid: String? = null
 
     // The active tag's continuous-reading poll (see startPresencePoll).
     private val nfcScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var presencePollJob: Job? = null
+    private var presencePollUid: String? = null
 
     /**
      * Test seam: establishes a connected low-level read session on a tag.
@@ -267,8 +270,39 @@ class MainActivity : ComponentActivity() {
      */
     private var establishPresenceSession: (Tag) -> PresenceReader? = this::defaultPresenceSession
 
+    /**
+     * Releases the tag-tech connection [tag] currently holds, if any.
+     *
+     * A [Tag] can hold at most ONE connected TagTechnology: the framework's
+     * connect() succeeds at the binder level and then refuses to take the
+     * tag's connection slot when it is already occupied (IOException "Only
+     * one TagTechnology can be connected at a time"). The slot can be
+     * occupied by the NFC stack's own dispatch/identification connection,
+     * by this app's own earlier session on the same [Tag] instance (a
+     * reconnect, an activity re-arm), or by another app's NFC connection -
+     * and a delivered tag that still holds it makes every connect() fail.
+     * On the Samsung A52 this killed both fast paths on every delivery,
+     * leaving the 15 s absence-timeout fallback in charge of every tag
+     * (device-proven).
+     *
+     * close() on ANY tech instance of the tag releases the slot: the
+     * framework's close() resets the tag-level connection state
+     * (setTechnologyDisconnected) and re-establishes the RF session
+     * (INfcTag.reconnect), so the caller's own connect() can then take the
+     * slot. It is a harmless no-op when the slot is empty.
+     */
+    private fun releaseExistingTagConnection(tag: Tag, holder: TagTechnology) {
+        runCatching { holder.close() }.onFailure {
+            // A failing close leaves whatever held the slot in place; the
+            // caller's connect() may then still hit the single-slot
+            // conflict (logged by the session-establishment failure).
+            Log.w(TAG, "releasing the tag-tech connection failed uid=${tag.id.toHex()}", it)
+        }
+    }
+
     private fun defaultPresenceSession(tag: Tag): PresenceReader? {
         val mifare = MifareUltralight.get(tag) ?: return null
+        releaseExistingTagConnection(tag, mifare)
         mifare.connect()
         return object : PresenceReader {
             override fun readPage0() {
@@ -294,6 +328,7 @@ class MainActivity : ComponentActivity() {
         // Ultralight that the fast path failed to connect still answers as
         // an NfcA tag.
         val tech = NfcA.get(tag) ?: IsoDep.get(tag) ?: MifareUltralight.get(tag) ?: return null
+        releaseExistingTagConnection(tag, tech)
         tech.connect()
         return object : GenericPresenceSession {
             override fun probe() {
@@ -388,10 +423,26 @@ class MainActivity : ComponentActivity() {
     private fun reconfigureNfc() {
         if (!nfcConfigured) return
         val nfc = nfc ?: return
+        // A presence poll for the tag that is about to be re-seeded below is
+        // already running (a resume while that tag plays): keep it. Tearing
+        // it down and re-establishing on the same Tag handle races the
+        // cancelled loop's teardown - whose finally closes the tag's single
+        // tag-technology connection slot - with the fresh establish's
+        // connect() (device-proven on the Samsung A52: the fresh connect
+        // then hit "Only one TagTechnology can be connected at a time" and
+        // the fast path died, leaving the 15 s fallback to pause a tag that
+        // was still held in range). The running loop's session is cold after
+        // the background stay, but that is exactly what its fresh-session
+        // reconnect is for; if the tag is out of range its probes strike
+        // and it pauses through the normal route.
+        val keepRunningPoll = currentMode == PlayMode.PROXIMITY &&
+            presencePollUid == viewModel.activeTagUid &&
+            presencePollJob?.isActive == true
         nfc.disableForegroundDispatch(this)
-        presenceHandler.removeCallbacks(presenceWatcher)
-        stopPresencePoll()
-        lastSeenUid = null
+        if (!keepRunningPoll) {
+            stopPresencePoll()
+            lastSeenUid = null
+        }
         if (!nfc.isEnabled) return
         // Always listening: foreground dispatch delivers any tag in range to
         // this activity while it is in the foreground, for both main-page
@@ -408,12 +459,19 @@ class MainActivity : ComponentActivity() {
                 lastSeenUid = uid
                 // A tag already playing before the switch may still be in
                 // range: if its handle is on hand, resume the
-                // continuous-reading fast path for it.
-                if (lastSeenTagUid == uid) {
+                // continuous-reading fast path for it - unless the running
+                // poll above already covers it.
+                if (!keepRunningPoll && lastSeenTagUid == uid) {
                     lastSeenTag?.let { startPresencePoll(it, uid) }
                 }
             }
+            // Re-arm the fallback watcher exactly once: it self-reschedules
+            // every tick, so remove the pending callback before posting a
+            // fresh one.
+            presenceHandler.removeCallbacks(presenceWatcher)
             presenceHandler.postDelayed(presenceWatcher, PRESENCE_CHECK_MS)
+        } else {
+            presenceHandler.removeCallbacks(presenceWatcher)
         }
     }
 
@@ -433,8 +491,10 @@ class MainActivity : ComponentActivity() {
             lastSeenAt = SystemClock.elapsedRealtime()
             lastSeenUid = uid
             if (currentMode == PlayMode.PROXIMITY) {
-                // A (re-)presentation of the active tag starts (or restarts,
-                // cancelling any stale loop) the continuous-reading poll.
+                // A (re-)presentation of the active tag starts the
+                // continuous-reading poll - or is a no-op when that tag's
+                // poll is still running (a re-delivery must not restart it,
+                // see startPresencePoll's same-uid skip).
                 startPresencePoll(tag, uid)
             }
         } else if (currentMode == PlayMode.PROXIMITY) {
@@ -452,9 +512,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Starts (or restarts) the presence poll for the active tag. Whichever
-     * fast path can run (Mifare page-0 reads, or a connected generic
-     * tag-tech session) refreshes the presence record so the
+     * Starts the presence poll for the active tag - a no-op when the poll
+     * for this exact tag is already running (the same-uid skip below), a
+     * restart when a different tag takes over. Whichever fast path can
+     * run (Mifare page-0 reads, or a connected generic tag-tech session)
+     * refreshes the presence record so the
      * absence-timeout fallback stays quiet while the tag stays present; a
      * confirmed removal pauses through the same [handleTagLost] route as
      * the fallback and clears the record so the fallback does not
@@ -469,8 +531,17 @@ class MainActivity : ComponentActivity() {
      * (and pause) within ~500 ms of the activating read, device-proven.
      */
     private fun startPresencePoll(tag: Tag, uid: String) {
+        // A poll for this exact tag is already running: its fast path is
+        // refreshing the presence record (or its session was refused and
+        // the absence-timeout fallback owns it). A re-delivery of the same
+        // tag (a re-read, a resume re-arm) must not tear the running poll
+        // down and restart it: the restart races the running loop's
+        // teardown, and the cancelled loop's finally closes the shared
+        // [Tag]'s connection slot out from under the fresh session.
+        if (uid == presencePollUid && presencePollJob?.isActive == true) return
         // A new tag presentation always cancels the previous tag's poll.
         stopPresencePoll()
+        presencePollUid = uid
         presencePollJob = nfcScope.launch {
             // Mifare fast path first: a connectable Mifare Ultralight
             // session reads page 0 continuously.
@@ -516,16 +587,28 @@ class MainActivity : ComponentActivity() {
                         val fresh = establishGenericPresenceSession(tag)
                         if (fresh == null) {
                             Log.w(TAG, "generic reconnect: no fresh session uid=$uid (strike stands)")
+                        } else {
+                            // Liveness: a fresh session was adopted or
+                            // established on a failed probe.
+                            Log.i(TAG, "generic reconnect: fresh session established uid=$uid")
                         }
                         fresh
                     },
                     closeOf = { it.close() },
                 )
+                // Probe liveness counter (per-loop, single-threaded).
+                var diagProbeOk = 0
                 try {
                     GenericPresencePoller.loop(
                         probe = {
                             try {
                                 poller.read()
+                                // Liveness heartbeat so a silent success (no
+                                // logs) is distinguishable from a dead loop.
+                                diagProbeOk++
+                                if (diagProbeOk == 1 || diagProbeOk % 20 == 0) {
+                                    Log.i(TAG, "generic probe OK uid=$uid count=$diagProbeOk")
+                                }
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: IOException) {
@@ -600,16 +683,28 @@ class MainActivity : ComponentActivity() {
                     val fresh = establishPresenceSession(tag)
                     if (fresh == null) {
                         Log.w(TAG, "Mifare reconnect: no fresh session uid=$uid (strike stands)")
+                    } else {
+                        // Liveness: a fresh session was adopted or
+                        // established on a failed read.
+                        Log.i(TAG, "Mifare reconnect: fresh session established uid=$uid")
                     }
                     fresh
                 },
                 closeOf = { it.close() },
             )
+            // Read liveness counter (per-loop, single-threaded).
+            var diagProbeOk = 0
             try {
                 MifarePresencePoller.loop(
                     readPage0 = {
                         try {
                             session.read()
+                            // Liveness heartbeat so a silent success (no
+                            // logs) is distinguishable from a dead loop.
+                            diagProbeOk++
+                            if (diagProbeOk == 1 || diagProbeOk % 20 == 0) {
+                                Log.i(TAG, "Mifare probe OK uid=$uid count=$diagProbeOk")
+                            }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: IOException) {
@@ -657,6 +752,7 @@ class MainActivity : ComponentActivity() {
     private fun stopPresencePoll() {
         presencePollJob?.cancel()
         presencePollJob = null
+        presencePollUid = null
     }
 
     override fun onResume() {
