@@ -87,10 +87,11 @@ import java.io.IOException
  *   setting - default 15 s, no user-facing settings UI - [presenceTimeoutMs]);
  *   it owns removal
  *   detection whenever no fast path can run (no Mifare Ultralight session
- *   AND no connectable generic tag-tech session). Known on-device risk:
- *   with foreground dispatch a held-still tag can go cold (the phone stops
- *   actively reading it), so a fast-path read or a session connection can
- *   drop and pause before a real removal - on-device validation item. Loss
+ *   AND no connectable generic tag-tech session). The held-still
+ *   cold-session case the fast paths used to false-pause on is
+ *   disambiguated by their [ReconnectingPresenceSession] reconnect
+ *   (device-verified: a 30 s still hold kept playing and a removal still
+ *   paused within ~1-2 s). Loss
  *   PAUSES playback (the session and the active tag are kept), so a
  *   re-read of the same tag resumes it.
  * - Tag registration: the same foreground dispatch, with the view model in
