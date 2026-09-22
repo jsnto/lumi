@@ -512,9 +512,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Starts (or restarts) the presence poll for the active tag. Whichever
-     * fast path can run (Mifare page-0 reads, or a connected generic
-     * tag-tech session) refreshes the presence record so the
+     * Starts the presence poll for the active tag - a no-op when the poll
+     * for this exact tag is already running (the same-uid skip below), a
+     * restart when a different tag takes over. Whichever fast path can
+     * run (Mifare page-0 reads, or a connected generic tag-tech session)
+     * refreshes the presence record so the
      * absence-timeout fallback stays quiet while the tag stays present; a
      * confirmed removal pauses through the same [handleTagLost] route as
      * the fallback and clears the record so the fallback does not
