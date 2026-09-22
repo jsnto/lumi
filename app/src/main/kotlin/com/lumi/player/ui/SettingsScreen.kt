@@ -33,6 +33,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -92,11 +93,14 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.FolderEntity
+import com.lumi.player.data.FolderTreeLevel
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongOption
 import com.lumi.player.data.formatDuration
+import com.lumi.player.data.folderTreeStructure
 import com.lumi.player.data.sortedByTitle
+import com.lumi.player.data.sortedTree
 import com.lumi.player.data.tagSongOptions
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
@@ -160,6 +164,9 @@ fun SettingsScreen(
     // The content list's title sort direction (the content pane's sort
     // control; descending by default).
     val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.DESCENDING)
+    // The song an assign-to-tag scan targets (the scan dialog's copy names
+    // it; null for the NFC tags pane's plain scan).
+    val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
     // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
@@ -342,6 +349,7 @@ fun SettingsScreen(
                     viewModel = viewModel,
                     folder = folder,
                     songs = folderSongs,
+                    sortDirection = contentSort,
                     onBack = { pane = SettingsPane.Content },
                     onRescan = { viewModel.rescanFolder(folder) },
                     onRemove = { viewModel.requestFolderRemoval(folder) },
@@ -394,7 +402,9 @@ fun SettingsScreen(
     }
 
     // The unified scan in progress: any NFC tag - a registered one opens
-    // its profile page, an unregistered one is registered.
+    // its profile page, an unregistered one is registered. A scan-to-assign
+    // (the song profile's own scan) instead links its target song to the
+    // scanned tag, and the copy names the song it will assign.
     if (scanActive) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagScan() },
@@ -404,7 +414,16 @@ fun SettingsScreen(
             title = {
                 Text("Scan a tag", style = MaterialTheme.typography.headlineSmall)
             },
-            text = { Text("Hold the back of the phone against any NFC tag…") },
+            text = {
+                val target = scanAssignEntry
+                Text(
+                    if (target != null) {
+                        "Hold the back of the phone against any NFC tag to add “${target.label}” to it."
+                    } else {
+                        "Hold the back of the phone against any NFC tag…"
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { viewModel.cancelTagScan() }) { Text("Cancel") }
             },
@@ -1361,6 +1380,7 @@ private fun FolderDetailPane(
     viewModel: LumiViewModel,
     folder: FolderEntity,
     songs: LumiViewModel.FolderSongsState?,
+    sortDirection: ContentSortDirection,
     onBack: () -> Unit,
     onRescan: () -> Unit,
     onRemove: (FolderEntity) -> Unit,
@@ -1370,6 +1390,15 @@ private fun FolderDetailPane(
     // the observed [songs] state (null while the walk is in flight).
     LaunchedEffect(folder.id) { viewModel.selectFolder(folder) }
     val scheme = MaterialTheme.colorScheme
+    // The page's tree: the stored rows arranged as the picked folder's own
+    // structure (a song's payload is the tree's content uri, whose document
+    // id encodes the full path below the picked root) - rebuilt only when
+    // the folder or its song list changes.
+    val tree = remember(folder.id, songs) {
+        songs?.entries?.let { folderTreeStructure(Uri.parse(folder.uri), it) }
+    }
+    // The sort control's per-level order, applied to the built tree.
+    val level = remember(tree, sortDirection) { tree?.sortedTree(sortDirection) }
     Scaffold(topBar = { PaneTopAppBar(folder.label, onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -1392,6 +1421,14 @@ private fun FolderDetailPane(
                     detail = folder.uri,
                 )
             }
+            // The sort control: the content pane's own title sort, applied
+            // per level of the tree (subfolders first, then songs, at each
+            // depth). The pick persists through the shared setting.
+            ContentSortRow(
+                direction = sortDirection,
+                onDirectionChange = { viewModel.setContentSortDirection(it) },
+                caption = "Applies to the folders and the songs at each level below.",
+            )
             // The rescan action sits on this section's title row (the
             // settled title-row action language): it re-walks the tree and
             // adds the songs the folder gained since the last scan.
@@ -1418,22 +1455,7 @@ private fun FolderDetailPane(
                         text = "No songs imported from that folder yet.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    else -> songs.entries.forEach { entry ->
-                        SettingRow(
-                            leading = {
-                                IconChip(
-                                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                                    background = scheme.primaryContainer,
-                                    content = scheme.onPrimaryContainer,
-                                )
-                            },
-                            // The row body opens the song's profile page
-                            // (the content pane's own language).
-                            modifier = Modifier.clickable { onEntryOpened(entry) },
-                            title = entry.label,
-                            detail = detailFor(entry.type, entry.payload),
-                        )
-                    }
+                    else -> level?.let { FolderTreeRows(it, 0, scheme, onEntryOpened) }
                 }
             }
             // The danger zone: a visually separated, clearly destructive
@@ -1491,16 +1513,75 @@ private fun FolderDetailPane(
 }
 
 /**
+ * One level of the folder page's song tree, mirroring the structure the
+ * import walked: the subfolders (each carrying its own nested levels) come
+ * first, then the songs sitting directly at this depth - a row per node,
+ * indented one step per subfolder down. Folder rows are display-only; a
+ * song row's body opens the song's profile page (the content pane's own
+ * language).
+ */
+@Composable
+private fun FolderTreeRows(
+    level: FolderTreeLevel,
+    depth: Int,
+    scheme: ColorScheme,
+    onEntryOpened: (EntryEntity) -> Unit,
+) {
+    val indent = 16.dp * depth
+    level.folders.forEach { node ->
+        SettingRow(
+            modifier = Modifier.padding(start = indent),
+            leading = {
+                IconChip(
+                    icon = Icons.Filled.Folder,
+                    background = scheme.tertiaryContainer,
+                    content = scheme.onTertiaryContainer,
+                )
+            },
+            title = node.displayName,
+        )
+        FolderTreeRows(node.children, depth + 1, scheme, onEntryOpened)
+    }
+    level.songs.forEach { entry ->
+        SettingRow(
+            // The row body opens the song's profile page (the content
+            // pane's own language).
+            modifier = Modifier
+                .padding(start = indent)
+                .clickable { onEntryOpened(entry) },
+            leading = {
+                IconChip(
+                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                    background = scheme.primaryContainer,
+                    content = scheme.onPrimaryContainer,
+                )
+            },
+            title = entry.label,
+            detail = detailFor(entry.type, entry.payload),
+        )
+    }
+}
+
+/**
  * One song, opened by tapping its row (an individual content row in the
  * content pane or a song row on a folder's page). The page shows the
  * song's details - its title and type, the source uri, and the file's own
- * metadata (artist, album, length) where the file carries it - plus an
- * assign-to-tag action: a pick among the app's registered NFC tags links
- * the stored entry to that tag's song list (the tag-creation flow's own
- * mechanism, [LumiViewModel.linkEntryToTag]). A tag that already plays the
- * song is flagged "Already on this tag" and a re-pick is a reported no-op
- * (no duplicate link); with no registered tags the action is disabled with
- * a clear message.
+ * metadata (artist, album, length) where the file carries it - the tags
+ * the song is currently assigned to (live: a fresh link - a pick or a
+ * scan - joins the list, a removal from a tag's page drops it), and an
+ * assign-to-tag action with two options: picking among the app's
+ * registered NFC tags (a pick links the stored entry to that tag's song
+ * list through the tag-creation flow's own mechanism,
+ * [LumiViewModel.linkEntryToTag]; a tag that already plays the song is
+ * flagged "Already on this tag" and a re-pick is a reported no-op - no
+ * duplicate link; with no registered tags the option is disabled with a
+ * clear message), or scanning a physical tag (the app's existing
+ * foreground-dispatch read path armed for this song,
+ * [LumiViewModel.startTagScanForEntry]: a read of a registered tag links
+ * the song to it, and a read of an unregistered one goes through the
+ * registration flow first and links the song once the tag is saved -
+ * available with no registered tags, since scanning a new tag registers
+ * it and then assigns).
  *
  * The page is a child of the content pane: its back (the in-pane arrow and
  * system back) unwinds one level to the content pane, and the content pane
@@ -1556,11 +1637,40 @@ private fun EntryDetailPane(
                 )
                 MetadataField("Source", entry.payload)
             }
+            // The tags this song is currently assigned to, live: a fresh
+            // link (a pick below or a scan) re-emits the observed list and
+            // joins the section; a removal from a tag's page drops the row.
+            SectionCard(title = "Assigned tags") {
+                if (linkedTags.isEmpty()) {
+                    Text(
+                        "This song is on no tags yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    linkedTags.forEach { tag ->
+                        SettingRow(
+                            leading = {
+                                IconChip(
+                                    icon = Icons.Filled.Label,
+                                    background = scheme.secondaryContainer,
+                                    content = scheme.onSecondaryContainer,
+                                )
+                            },
+                            title = tag.name.ifEmpty { "Tag" },
+                            detail = tag.uid,
+                        )
+                    }
+                }
+            }
             // Assign this song to one of the registered NFC tags: the
             // stored entry is linked to the tag's ordered song list (no new
             // content row, the existing grant is reused) and plays with
             // that tag's list. Disabled with a clear message when no tag is
-            // registered yet.
+            // registered yet. The second option scans a physical tag instead
+            // (the app's existing read path armed for this song): a
+            // registered tag is linked directly, an unknown one is
+            // registered first and the song is linked once saved - so the
+            // option stays available with no registered tags.
             SectionCard(title = "Assign to a tag") {
                 if (tags.isEmpty()) {
                     Text(
@@ -1590,6 +1700,28 @@ private fun EntryDetailPane(
                             style = MaterialTheme.typography.titleMedium,
                         )
                     }
+                }
+                FilledTonalButton(
+                    onClick = { viewModel.startTagScanForEntry(entry) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = scheme.secondaryContainer,
+                        contentColor = scheme.onSecondaryContainer,
+                    ),
+                ) {
+                    Icon(
+                        Icons.Filled.Nfc,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Scan a tag to assign",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                 }
             }
         }
@@ -1839,12 +1971,14 @@ private fun ContentPane(
  * The content list's sort control: orders the sections below by title in
  * the chosen direction. Descending (Z->A) is the list's default order; a
  * pick persists through the view model. The chips carry the list's own
- * A-Z / Z-A copy.
+ * A-Z / Z-A copy. The folder detail page reuses the control (its own
+ * [caption]) for the per-level order of its tree.
  */
 @Composable
 private fun ContentSortRow(
     direction: ContentSortDirection,
     onDirectionChange: (ContentSortDirection) -> Unit,
+    caption: String = "Applies to the folders and the songs below.",
 ) {
     val scheme = MaterialTheme.colorScheme
     Card(
@@ -1860,7 +1994,7 @@ private fun ContentSortRow(
             Column(Modifier.weight(1f)) {
                 Text("Sort by title", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Applies to the folders and the songs below.",
+                    caption,
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
                 )

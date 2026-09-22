@@ -237,8 +237,10 @@ class SongProfileUiTest {
         compose.onNodeWithText("Already on this tag").assertExists()
 
         // Picking the flagged tag is a no-op: no duplicate link, the pick
-        // is reported, and the list stays open.
-        clickOnceVisible("Porch")
+        // is reported, and the list stays open. The flag text is the
+        // dialog's own marker (the profile's assigned-tags section shows
+        // the tag's name only), so the pick goes through it.
+        clickOnceVisible("Already on this tag")
         idleUntil(cond = { events.any { it == "That song is already on the tag." } }, message = "the no-op report")
         assertEquals(
             "a re-pick must not duplicate the link",
