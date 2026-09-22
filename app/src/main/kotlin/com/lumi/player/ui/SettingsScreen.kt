@@ -1499,19 +1499,21 @@ private fun FolderDetailPane(
                         // tree's last one (the last row carries no bottom
                         // spacing, so no connector line dangles past it).
                         val remaining = intArrayOf(tree.visibleRowCount(collapsed))
-                        FolderTreeRows(
-                            level = tree,
-                            depth = 0,
-                            path = emptyList(),
-                            scheme = scheme,
-                            collapsed = collapsed,
-                            playState = playState,
-                            onToggleCollapsed = onToggleCollapsed,
-                            onPlayEntry = onPlayEntry,
-                            onTogglePlayPause = onTogglePlayPause,
-                            onEntryOpened = onEntryOpened,
-                            remaining = remaining,
-                        )
+                        Column {
+                            FolderTreeRows(
+                                level = tree,
+                                depth = 0,
+                                path = emptyList(),
+                                scheme = scheme,
+                                collapsed = collapsed,
+                                playState = playState,
+                                onToggleCollapsed = onToggleCollapsed,
+                                onPlayEntry = onPlayEntry,
+                                onTogglePlayPause = onTogglePlayPause,
+                                onEntryOpened = onEntryOpened,
+                                remaining = remaining,
+                            )
+                        }
                     }
                 }
             }
@@ -1575,6 +1577,12 @@ private fun FolderDetailPane(
  * first, then the songs sitting directly at this depth - a row per node,
  * each carrying the tree's left connector lines and indented one rail step
  * per subfolder down ([TreeRowFrame]).
+ *
+ * The caller groups the whole tree under a single non-spaced [Column]: the
+ * rows' own 12 dp bottom spacing is the only inter-row spacing, so the
+ * section's own 12 dp row spacing cannot sit between the rows and break
+ * the connector rails (each row draws its rails only inside its own
+ * frame).
  *
  * A subfolder's row is tappable: it toggles the display of that
  * subfolder's rows (its direct songs and any nested subfolders' content) -
@@ -1725,9 +1733,12 @@ private val TREE_STUB_WIDTH_Dp = 8.dp
  * replacing the bare padding.
  *
  * The row's bottom spacing (12 dp, the section's own row spacing) lives
- * inside the row's frame, so the rails run through the spacing and stay
- * continuous across rows; the tree's last row carries no bottom spacing,
- * so no rail dangles past the tree.
+ * inside the row's frame and is the row's only inter-row spacing - the
+ * caller groups the tree's rows under a single non-spaced [Column], so the
+ * section's own 12 dp row spacing cannot also sit between the rows and
+ * break the rails, which the row draws only inside its own frame; the
+ * tree's last row carries no bottom spacing, so no rail dangles past the
+ * tree.
  */
 @Composable
 private fun TreeRowFrame(
