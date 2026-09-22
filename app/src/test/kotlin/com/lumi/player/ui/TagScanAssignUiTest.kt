@@ -94,8 +94,8 @@ class TagScanAssignUiTest {
         return result as T
     }
 
-    /** Idles the main looper + compose until [cond] holds or fails. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the condition") {
+    /** Idles the main looper + compose until [cond] holds or fails. The budget is generous on purpose: the class JVM's first test pays the Robolectric/native-graphics cold start (~9 s even when green), and suite load has stretched a warm convergence to ~16 s - the loop exits on the first satisfied condition, so the margin costs nothing when green. */
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the condition") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -106,7 +106,7 @@ class TagScanAssignUiTest {
     }
 
     /** Waits until a node with [text] exists (pumping the looper across Room hops). */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+    private fun waitForText(text: String, timeoutMs: Long = 60_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         var last: AssertionError? = null
         while (System.currentTimeMillis() < deadline) {

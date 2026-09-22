@@ -86,7 +86,7 @@ class FolderDetailPageUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -96,7 +96,7 @@ class FolderDetailPageUiTest {
     }
 
     /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+    private fun waitForText(text: String, timeoutMs: Long = 60_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()

@@ -81,10 +81,20 @@ class SongProfileUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the profile to settle") {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the profile to settle") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
+            // Settle composition before re-checking the MERGED tree (the
+            // sibling classes' own pattern): the merged tree only updates
+            // once Compose has recomposed and produced a frame, and a poll
+            // that idles only the looper can read a stale tree. The budget
+            // is generous on purpose: the class JVM's first test pays the
+            // Robolectric/native-graphics cold start (~9 s even when green),
+            // and suite load has stretched a warm convergence to ~16 s - the
+            // loop exits on the first satisfied condition, so the margin
+            // costs nothing when green.
+            compose.waitForIdle()
             Thread.sleep(10)
         }
         check(cond()) { "timed out waiting for $message" }
