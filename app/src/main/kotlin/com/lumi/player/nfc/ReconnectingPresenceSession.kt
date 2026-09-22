@@ -45,19 +45,23 @@ class ReconnectingPresenceSession<R>(
     /**
      * Performs one low-level read. Throws [IOException] when the tag is out
      * of range - the read on the current session failed AND no fresh session
-     * could read it either. A [CancellationException] propagates.
+     * could read it either; the exception carries the original read failure
+     * as its cause so the caller's log can name it. A
+     * [CancellationException] propagates.
      */
     @Throws(IOException::class)
     fun read() {
-        try {
+        val readFailure: Exception? = try {
             readOf(current)
-            return
+            null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // The session is stale (the tag went cold) or the tag left:
             // disambiguate with a fresh session before counting the strike.
+            e
         }
+        if (readFailure == null) return
         val fresh: R? = try {
             reconnect()
         } catch (e: CancellationException) {
@@ -68,7 +72,9 @@ class ReconnectingPresenceSession<R>(
             null
         }
         if (fresh == null) {
-            throw IOException("read failed and no fresh session could be established")
+            throw IOException(
+                "read failed and no fresh session could be established", readFailure
+            )
         }
         try {
             readOf(fresh)

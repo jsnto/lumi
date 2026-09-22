@@ -23,6 +23,16 @@ fun interface PresenceReader {
     /** Reads page 0 of the tag; throws [IOException] when the tag is out of range. */
     @Throws(IOException::class)
     fun readPage0()
+
+    /**
+     * Closes the low-level session (a no-op when the tag is already gone).
+     *
+     * The default keeps this a single-abstract-method interface, so the
+     * lambda implementations in the tests compile unchanged; a real
+     * tag-tech session must close the connected tech so a superseded
+     * session is released instead of leaking.
+     */
+    fun close() {}
 }
 
 /**

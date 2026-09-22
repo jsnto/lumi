@@ -69,13 +69,18 @@ import java.io.IOException
  *   successful read refreshes the presence record, and a read that fails
  *   twice (a 100 ms retry between the strikes - a two-strike debounce
  *   against single-occurrence blips) confirms the removal well under a
- *   second. GENERIC FAST PATH: any other tag the Mifare path cannot read
- *   keeps a tag-tech session (NfcA, then IsoDep) alive
+ *   second. Every read goes through [ReconnectingPresenceSession]: a
+ *   failed read first tries a FRESH session (a tag held still in range
+ *   can go cold - its RF session drops while the tag stays in the
+ *   field), and only a read that also fails on the fresh session counts
+ *   as a removal strike. GENERIC FAST PATH: any other tag the Mifare
+ *   path cannot read keeps a tag-tech session (NfcA, then IsoDep) alive
  *   ([GenericPresencePoller]); every successful probe refreshes the
  *   presence record, so a non-Mifare tag HELD STATIONARY no longer false
  *   -pauses after the absence window; a probe that fails twice (a 100 ms
  *   retry between the strikes - the same two-strike debounce as the Mifare
- *   fast path) confirms the removal through the same route.
+ *   fast path, the same fresh-session attempt first) confirms the removal
+ *   through the same route.
  *   FALLBACK: "tag lost" is derived, conservatively, from a
  *   sustained absence of reports on the active tag, checked by a presence
  *   poll every second against the absence window (the `nfc_reread_seconds`
@@ -264,7 +269,14 @@ class MainActivity : ComponentActivity() {
     private fun defaultPresenceSession(tag: Tag): PresenceReader? {
         val mifare = MifareUltralight.get(tag) ?: return null
         mifare.connect()
-        return PresenceReader { mifare.readPages(0) }
+        return object : PresenceReader {
+            override fun readPage0() {
+                mifare.readPages(0)
+            }
+            override fun close() {
+                runCatching { mifare.close() }
+            }
+        }
     }
 
     /**
@@ -590,43 +602,53 @@ class MainActivity : ComponentActivity() {
                     }
                     fresh
                 },
+                closeOf = { it.close() },
             )
-            MifarePresencePoller.loop(
-                readPage0 = {
-                    try {
-                        session.read()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: IOException) {
-                        // [session] only throws IOException (a read that
-                        // ALSO failed on a fresh session) or
-                        // CancellationException.
-                        Log.w(TAG, "Mifare page-0 read FAILED (strike) uid=$uid: ${e.javaClass.simpleName}: ${e.message}")
-                        throw e
-                    }
-                },
-                onStillPresent = {
-                    presenceHandler.post {
-                        if (lastSeenUid == uid) {
-                            lastSeenAt = SystemClock.elapsedRealtime()
+            try {
+                MifarePresencePoller.loop(
+                    readPage0 = {
+                        try {
+                            session.read()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: IOException) {
+                            // [session] only throws IOException (a read that
+                            // ALSO failed on a fresh session) or
+                            // CancellationException.
+                            Log.w(TAG, "Mifare page-0 read FAILED (strike) uid=$uid: ${e.javaClass.simpleName}: ${e.message}")
+                            throw e
                         }
-                    }
-                },
-                onConfirmedRemoved = {
-                    Log.i(TAG, "Mifare fast path: removal CONFIRMED (two failed reads) uid=$uid")
-                    presenceHandler.post {
-                        if (lastSeenUid == uid) {
-                            handleTagLost(uid)
-                            // The fast path already reported the loss:
-                            // clear the record so the fallback poll does
-                            // not issue a second pause for the same removal
-                            // (a re-read re-seeds the record via the normal
-                            // activation path).
-                            lastSeenUid = null
+                    },
+                    onStillPresent = {
+                        presenceHandler.post {
+                            if (lastSeenUid == uid) {
+                                lastSeenAt = SystemClock.elapsedRealtime()
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                    onConfirmedRemoved = {
+                        Log.i(TAG, "Mifare fast path: removal CONFIRMED (two failed reads) uid=$uid")
+                        presenceHandler.post {
+                            if (lastSeenUid == uid) {
+                                handleTagLost(uid)
+                                // The fast path already reported the loss:
+                                // clear the record so the fallback poll does
+                                // not issue a second pause for the same removal
+                                // (a re-read re-seeds the record via the normal
+                                // activation path).
+                                lastSeenUid = null
+                            }
+                        }
+                    },
+                )
+            } finally {
+                // Cancellation (tag switch, mode change, playback stop) or
+                // a confirmed removal exits through this finally: close
+                // whichever session the wrapper currently holds; sessions
+                // superseded or rejected along the way were already closed
+                // by the wrapper.
+                session.close()
+            }
         }
     }
 

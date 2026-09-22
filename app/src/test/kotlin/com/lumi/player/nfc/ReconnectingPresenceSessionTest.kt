@@ -93,7 +93,11 @@ class ReconnectingPresenceSessionTest {
             readOf = { it.read() },
             reconnect = { reconnects++; null },
         )
-        assertThrows(IOException::class.java) { session.read() }
+        val strike = assertThrows(IOException::class.java) { session.read() }
+        assertEquals(
+            "the strike must carry the original read failure so the caller's log can name it",
+            "tag out of range", strike.cause?.message,
+        )
         assertEquals(1, reconnects)
     }
 
@@ -143,13 +147,14 @@ class ReconnectingPresenceSessionTest {
     fun reconnectItselfThrows_treatedAsNoFreshSession_throwsStrike() {
         // A reconnection that throws (stale tag handle, NFC service
         // hiccup) degrades to "no fresh session": the strike stands, no
-        // crash.
+        // crash, and still names the original read failure.
         val session = ReconnectingPresenceSession(
             initial = FakeSession(neverAnswers),
             readOf = { it.read() },
             reconnect = { throw RuntimeException("connect failed") },
         )
-        assertThrows(IOException::class.java) { session.read() }
+        val strike = assertThrows(IOException::class.java) { session.read() }
+        assertEquals("tag out of range", strike.cause?.message)
     }
 
     @Test
