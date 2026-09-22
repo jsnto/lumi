@@ -387,10 +387,10 @@ class LumiViewModel(
     }
 
     /**
-     * Plays every song of a folder in list order (the folder row's play
-     * button): the folder's stored content rows in the content list's order
-     * become the queue - no tree walk needed, the stored rows are the
-     * folder's songs.
+     * Plays every song of a folder in the order the rows were stored (the
+     * folder row's play button): the folder's stored content rows become
+     * the queue - no tree walk needed, the stored rows are the folder's
+     * songs.
      */
     fun playFolder(folder: FolderEntity) {
         viewModelScope.launch {

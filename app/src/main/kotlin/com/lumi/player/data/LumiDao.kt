@@ -43,7 +43,7 @@ interface LumiDao {
     @Query("SELECT * FROM entries WHERE id = :id")
     suspend fun entryById(id: Long): EntryEntity?
 
-    /** A folder's stored content rows in the content list's order (the folder row's play button's queue). */
+    /** A folder's stored content rows in the order the rows were stored (the folder row's play button's queue). */
     @Query("SELECT * FROM entries WHERE folder_id = :folderId ORDER BY createdAt ASC, id ASC")
     suspend fun entriesForFolder(folderId: Long): List<EntryEntity>
 

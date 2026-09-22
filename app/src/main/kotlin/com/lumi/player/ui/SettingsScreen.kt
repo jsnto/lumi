@@ -1707,8 +1707,8 @@ private fun MetadataField(label: String, value: String) {
  * list: they stay visible only inside their folder's page. Both sections
  * follow the sort control's title order (descending by default), and every
  * row carries a play button: a folder's plays all of its stored songs in
- * the list's order, a song's plays just that song. Tapping a song row
- * opens its profile page.
+ * the order the rows were stored, a song's plays just that song. Tapping a
+ * song row opens its profile page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1746,7 +1746,7 @@ private fun ContentPane(
             // folder's own page, and the folder rows get the violet folder
             // chip (D-03). "Add folder" is the + button on the section's
             // title row. A row's play button plays every song the folder
-            // holds, in the list's order.
+            // holds, in the order the rows were stored.
             SectionCard(
                 title = "Folders",
                 addLabel = "Add folder",

@@ -22,7 +22,7 @@ class LumiRepository(private val db: LumiDatabase) {
     /** The individual content list: the stored rows with no folder marker. */
     fun observeIndividualEntries(): Flow<List<EntryEntity>> = dao.observeIndividualEntries()
 
-    /** A folder's stored content rows in the content list's order - the folder row's play button's queue. */
+    /** A folder's stored content rows in the order the rows were stored - the folder row's play button's queue. */
     suspend fun entriesForFolder(folderId: Long): List<EntryEntity> = dao.entriesForFolder(folderId)
 
     /** The tags that link the entry (the song profile's assign-to-tag flags), live. */

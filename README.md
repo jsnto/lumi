@@ -12,8 +12,12 @@ server or account — everything is stored locally on the device.
    you name it and pick its preferred play mode, and a writable tag can
    optionally store that on the tag itself so re-registering it later
    pre-fills the form), register content (pick an audio file from the
-   device, or a whole folder to add every song in it and its subfolders),
-   and link a tag to the songs it should play. Scanning a tag that is
+   device, or a whole folder to add every song in it and its subfolders —
+   the list is sorted by title, Z-A by default, and every song and folder
+   row has a play button that plays it directly with no tag attached;
+   tapping a song opens its profile, which shows the file's artist, album
+   and length and lets you assign the song to a registered tag), and link a
+   tag to the songs it should play. Scanning a tag that is
    already registered opens its page instead. The NFC tags section lists
    the registered tags, and tapping a tag opens its own page — the tag's
    details (its name, which can be edited, and its read-only ID), its song
