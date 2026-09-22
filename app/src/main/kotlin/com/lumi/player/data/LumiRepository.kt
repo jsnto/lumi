@@ -22,6 +22,12 @@ class LumiRepository(private val db: LumiDatabase) {
     /** The individual content list: the stored rows with no folder marker. */
     fun observeIndividualEntries(): Flow<List<EntryEntity>> = dao.observeIndividualEntries()
 
+    /** A folder's stored content rows in the content list's order - the folder row's play button's queue. */
+    suspend fun entriesForFolder(folderId: Long): List<EntryEntity> = dao.entriesForFolder(folderId)
+
+    /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
+    fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>> = dao.observeTagsForEntry(entryId)
+
     fun observePlayMode(): Flow<PlayMode> =
         dao.observeSettings().map { rows ->
             rows.firstOrNull { it.key == SettingsEntity.PLAY_MODE }
@@ -294,6 +300,25 @@ class LumiRepository(private val db: LumiDatabase) {
     suspend fun setNfcRereadSeconds(seconds: Long) {
         dao.upsertSetting(
             SettingsEntity(SettingsEntity.NFC_REREAD_SECONDS, seconds.coerceIn(NFC_REREAD_SECONDS_RANGE).toString()),
+        )
+    }
+
+    // ---- settings: content sort direction ----
+
+    /**
+     * The content list's title sort direction. Unset or invalid stored
+     * values fall back to descending - the content list's default order.
+     */
+    fun observeContentSortDirection(): Flow<ContentSortDirection> =
+        dao.observeSettings().map { rows ->
+            contentSortDirectionFromStored(
+                rows.firstOrNull { it.key == SettingsEntity.CONTENT_SORT_DIRECTION }?.value,
+            )
+        }
+
+    suspend fun setContentSortDirection(direction: ContentSortDirection) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.CONTENT_SORT_DIRECTION, direction.storedValue()),
         )
     }
 

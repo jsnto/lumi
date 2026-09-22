@@ -43,6 +43,10 @@ interface LumiDao {
     @Query("SELECT * FROM entries WHERE id = :id")
     suspend fun entryById(id: Long): EntryEntity?
 
+    /** A folder's stored content rows in the content list's order (the folder row's play button's queue). */
+    @Query("SELECT * FROM entries WHERE folder_id = :folderId ORDER BY createdAt ASC, id ASC")
+    suspend fun entriesForFolder(folderId: Long): List<EntryEntity>
+
     @Query("SELECT * FROM entries WHERE payload = :payload LIMIT 1")
     suspend fun entryByPayload(payload: String): EntryEntity?
 
@@ -128,6 +132,15 @@ interface LumiDao {
     /** Whether the tag already links the entry (the in-app add-song list's "already on the tag" guard). */
     @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId AND entryId = :entryId")
     suspend fun linkCount(tagId: Long, entryId: Long): Int
+
+    /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
+    @Query(
+        "SELECT t.* FROM tags t " +
+            "JOIN tag_links l ON t.id = l.tagId " +
+            "WHERE l.entryId = :entryId " +
+            "ORDER BY t.createdAt ASC, t.id ASC",
+    )
+    fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>>
 
     /** A tag's current link count (the sortOrder of a freshly appended link). */
     @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId")
