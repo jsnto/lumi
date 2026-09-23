@@ -53,12 +53,18 @@ fun NfcAnchor() {
     }
 }
 
-/** A tonal peach pill button: the settled shape for a dialog's primary action. */
+/**
+ * A tonal peach pill button: the settled shape for a dialog's primary
+ * action. [enabled] dims it (and makes it inert) while the action has
+ * nothing to act on - e.g. the add-song dialog's Save with nothing
+ * checked.
+ */
 @Composable
-fun TonalPillButton(label: String, onClick: () -> Unit) {
+fun TonalPillButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
     val scheme = MaterialTheme.colorScheme
     FilledTonalButton(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(500.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = scheme.primaryContainer,

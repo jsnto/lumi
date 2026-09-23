@@ -64,9 +64,11 @@ import kotlin.math.roundToInt
  *
  * The song list reuses the shared selection plumbing: opening the page
  * selects the tag, so [linked] (the selected tag's entries) is this tag's
- * list. The add-song action opens the in-app content list, where a pick
- * links an already-stored content entry to the tag
- * ([LumiViewModel.linkEntryToTag]) - no file picker, no duplicated song.
+ * list. The add-song action opens the in-app content list, where the user
+ * checks the songs to add and saves the selection at once - each checked
+ * song links an already-stored content entry to the tag
+ * ([LumiViewModel.linkEntryToTag], one link per checked song) - no file
+ * picker, no duplicated song.
  * A completed drag reorders the list and persists it through
  * [LumiViewModel.reorderTagSongs] - the play order is the link order, so
  * the persisted order is the play order. A row's remove action confirms
@@ -127,12 +129,13 @@ internal fun TagDetailPane(
                 )
             }
             // The + button on this section's title row opens the in-app
-            // content list: the pick links one of the app's existing content
-            // entries (individual or folder-imported) to THIS tag - no file
-            // picker, so nothing is stored twice. The rows keep the settled
-            // row presentation (icon chip, label, detail) and end in a drag
-            // handle that reorders the list (the persisted link order - the
-            // play order - follows the drag).
+            // content list: the user checks the songs to add and saves the
+            // selection at once - each checked song links one of the app's
+            // existing content entries (individual or folder-imported) to
+            // THIS tag, no file picker, so nothing is stored twice. The
+            // rows keep the settled row presentation (icon chip, label,
+            // detail) and end in a drag handle that reorders the list (the
+            // persisted link order - the play order - follows the drag).
             SectionCard(
                 title = "Songs",
                 addLabel = "Add song",

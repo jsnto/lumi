@@ -65,9 +65,11 @@ import com.lumi.player.data.formatDuration
  * available with no registered tags, since scanning a new tag registers
  * it and then assigns).
  *
- * The page is a child of the content pane: its back (the in-pane arrow and
- * system back) unwinds one level to the content pane, and the content pane
- * still goes straight to the menu from there.
+ * The page is a child of the pane its row was tapped in: its back (the
+ * in-pane arrow and system back) unwinds one level to that opener - the
+ * folder's own page when the song was opened from a folder's tree, the
+ * content pane when opened from the content pane - and that opener still
+ * goes straight to the menu from there.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

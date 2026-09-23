@@ -1,9 +1,10 @@
 package com.lumi.player.data
 
 /**
- * The direction the content list is sorted by title. [DESCENDING] (Z->A) is
+ * The direction the content list is sorted by title. [ASCENDING] (A->Z) is
  * the list's default order; the content pane's sort control offers both
- * directions and persists the pick.
+ * directions and persists the pick (a fresh or unchosen install starts
+ * A->Z, and an explicitly picked direction stays authoritative).
  */
 enum class ContentSortDirection {
     ASCENDING,
@@ -12,12 +13,14 @@ enum class ContentSortDirection {
 
 /**
  * Reads a stored sort direction. Unset or invalid values fall back to
- * [ContentSortDirection.DESCENDING] - the content list's default.
+ * [ContentSortDirection.ASCENDING] - the content list's default.
  */
 fun contentSortDirectionFromStored(value: String?): ContentSortDirection =
     when (value?.trim()?.lowercase()) {
-        "asc", "ascending" -> ContentSortDirection.ASCENDING
-        else -> ContentSortDirection.DESCENDING
+        // Only an explicit descending pick reads back descending; unset or
+        // invalid values fall back to the ascending default.
+        "desc", "descending" -> ContentSortDirection.DESCENDING
+        else -> ContentSortDirection.ASCENDING
     }
 
 /** The settings-table value [this] direction stores under. */
@@ -30,8 +33,8 @@ fun ContentSortDirection.storedValue(): String =
 /**
  * Orders [items] by their title (case-insensitive), with [id] breaking ties
  * so the order is deterministic. [ContentSortDirection.DESCENDING] is the
- * exact reverse of the ascending order. The stored order is untouched - a
- * new list is returned.
+ * exact reverse of the ascending order (the default). The stored order is
+ * untouched - a new list is returned.
  */
 fun <T> List<T>.sortedByTitle(
     title: (T) -> String,
