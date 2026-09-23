@@ -197,7 +197,11 @@ fun SettingsScreen(
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
-            SettingsPane.EntryDetail -> entryDetailOpener ?: SettingsPane.Content
+            SettingsPane.EntryDetail -> {
+                val opener = entryDetailOpener
+                entryDetailOpener = null
+                opener ?: SettingsPane.Content
+            }
             else -> SettingsPane.Menu
         }
     }
