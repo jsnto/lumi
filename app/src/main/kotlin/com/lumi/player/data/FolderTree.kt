@@ -172,3 +172,17 @@ fun FolderTreeLevel.visibleRowCount(collapsed: Set<List<String>>, path: List<Str
     }
     return rows
 }
+
+/**
+ * Every song row of [level] in the tree's render order - the order the
+ * rows appear when nothing is collapsed: at each level the folders come
+ * first (a folder's nested rows right after its own row), the songs
+ * sitting directly at that level after. Collapse state never changes this
+ * order (collapsing is display-only): the tag add-song picker commits its
+ * checked selection in this order - the flat list's own "the dialog's row
+ * order" rule, carried over to the tree.
+ */
+fun FolderTreeLevel.rowsInTreeOrder(): List<EntryEntity> = buildList {
+    folders.forEach { addAll(it.children.rowsInTreeOrder()) }
+    addAll(songs)
+}

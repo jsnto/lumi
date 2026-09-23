@@ -27,7 +27,8 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
-import com.lumi.player.data.tagSongOptions
+import com.lumi.player.data.sortedTree
+import com.lumi.player.data.tagSongPickerTree
 import com.lumi.player.player.PlayerStateHolder
 
 /** Which settings sub-screen the settings screen shows. */
@@ -92,6 +93,10 @@ fun SettingsScreen(
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
     val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
+    // The tag whose data a card-write scan will save to a card (the tag
+    // details page's "Save to NFC card"; the scan dialog's copy asks for a
+    // card to hold).
+    val cardWriteTarget by viewModel.cardWriteTarget.collectAsState(null)
     // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
@@ -356,22 +361,29 @@ fun SettingsScreen(
     // ---------- dialogs (overlay any pane) ----------
 
     // The tag detail page's in-app add-song list (see [addSongPickerTagId]):
-    // the user checks the songs to add and saves the selection at once -
-    // every checked song links through the existing single-song link path
-    // (one link per checked song, each committed before the next, so the
-    // tag's list gains them in the selection's order), and the dialog
-    // closes. Cancelling or dismissing saves nothing.
+    // the app's existing content laid out as the content folder pages' tree
+    // (the individual songs at the top level, each added folder a
+    // top-level folder row carrying its own imported structure - the
+    // tree's left-side connector lines and the folder rows' show/hide),
+    // the content sort's per-level order applied, a duplicate label
+    // offered once (its first stored copy). The user checks the songs to
+    // add and saves the selection at once - every checked song links
+    // through the existing single-song link path (one link per checked
+    // song, in the tree's render order, each committed before the next),
+    // and the dialog closes. Cancelling or dismissing saves nothing.
     addSongPickerTagId?.let { id ->
         val tag = tags.firstOrNull { t -> t.id == id }
         if (tag != null) {
+            val tree = tagSongPickerTree(entries, folders).sortedTree(contentSort)
             AddSongPickerDialog(
-                options = tagSongOptions(entries, linked),
+                tree = tree,
+                alreadyOnTagLabels = linked.map { it.label }.toSet(),
                 onSave = { selected ->
                     // The Save commits the whole checked selection at once:
                     // each song links through the existing single-song link
-                    // path, in the selection's order (each write before the
-                    // next), and the dialog closes.
-                    viewModel.linkEntriesToTag(tag, selected.map { it.entry })
+                    // path, in the tree's render order (each write before
+                    // the next), and the dialog closes.
+                    viewModel.linkEntriesToTag(tag, selected)
                     addSongPickerTagId = null
                 },
                 onDismiss = { addSongPickerTagId = null },
@@ -382,7 +394,9 @@ fun SettingsScreen(
     // The unified scan in progress: any NFC tag - a registered one opens
     // its profile page, an unregistered one is registered. A scan-to-assign
     // (the song profile's own scan) instead links its target song to the
-    // scanned tag, and the copy names the song it will assign.
+    // scanned tag, and the copy names the song it will assign. A card-write
+    // scan (the tag details page's "Save to NFC card") writes the tag's
+    // data to WHATEVER card is presented, and the copy asks for a card.
     if (scanActive) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagScan() },
@@ -390,15 +404,18 @@ fun SettingsScreen(
             shape = RoundedCornerShape(28.dp),
             icon = { NfcAnchor() },
             title = {
-                Text("Scan a tag", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    if (cardWriteTarget != null) "Scan a card" else "Scan a tag",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
             },
             text = {
                 val target = scanAssignEntry
                 Text(
-                    if (target != null) {
-                        "Hold the back of the phone against any NFC tag to add “${target.label}” to it."
-                    } else {
-                        "Hold the back of the phone against any NFC tag…"
+                    when {
+                        target != null -> "Hold the back of the phone against any NFC tag to add “${target.label}” to it."
+                        cardWriteTarget != null -> "Hold any NFC card - even one the app has never seen - against the back of the phone to save this tag's data to it."
+                        else -> "Hold the back of the phone against any NFC tag…"
                     },
                 )
             },
