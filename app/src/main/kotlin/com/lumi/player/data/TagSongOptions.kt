@@ -1,31 +1,38 @@
 package com.lumi.player.data
 
-/**
- * One selectable row of a tag's in-app add-song list: a song from the
- * app's existing content (individual or folder-imported alike) plus
- * whether the tag already plays it.
- */
-data class TagSongOption(
-    val entry: EntryEntity,
-    val alreadyOnTag: Boolean,
-)
+import android.net.Uri
 
 /**
- * Collapses [content] (ALL stored content - the individual list and the
- * folder-imported rows alike, in the content list's order) into ONE row per
- * distinct label: duplicate content (the same label stored more than once)
- * displays once, and saving the collapsed row checked links the FIRST
- * stored copy.
+ * The content tree the tag add-song picker shows: the app's content laid
+ * out the way the content folder pages lay it out - the individual songs
+ * (the non-folder rows) at the top level, and each added folder as a
+ * top-level folder row carrying the folder's own imported structure (its
+ * subfolders and the songs nested under them). A content entry is offered
+ * only once - the first stored copy of its label (the SAME collapse the
+ * flat picker does, in the content-list order) - so a label stored twice
+ * (e.g. picked individually and inside a folder) appears exactly once,
+ * under the first copy's home.
  *
- * Each option is marked [TagSongOption.alreadyOnTag] when [tagEntries]
- * carries an entry with the same label - the tag's list may already hold
- * the song (directly, or via a duplicate label) - so the row stays
- * non-addable and the selection can never link it a second time.
+ * The result is unsorted ([sortedTree] applies the picker's per-level
+ * order, the content list's own sort). An added folder whose songs are
+ * all duplicates of earlier-offered rows carries no offered rows and
+ * shows no row of its own.
+ *
+ * @param entries the app's whole content (the content-list order)
+ * @param folders the added folders, in their listed order
  */
-fun tagSongOptions(content: List<EntryEntity>, tagEntries: List<EntryEntity>): List<TagSongOption> {
-    val labelsOnTag = tagEntries.mapTo(HashSet()) { it.label }
+fun tagSongPickerTree(entries: List<EntryEntity>, folders: List<FolderEntity>): FolderTreeLevel {
     val seen = HashSet<String>()
-    return content
-        .filter { seen.add(it.label) }
-        .map { TagSongOption(entry = it, alreadyOnTag = it.label in labelsOnTag) }
+    val firstCopies = entries.filter { seen.add(it.label) }
+    val individual = firstCopies.filter { it.folderId == null }
+    val folderRows = folders.mapNotNull { folder ->
+        val folderEntries = firstCopies.filter { it.folderId == folder.id }
+        if (folderEntries.isEmpty()) null
+        else FolderTreeFolder(
+            displayName = folder.label,
+            children = folderTreeStructure(Uri.parse(folder.uri), folderEntries),
+            folderId = folder.id,
+        )
+    }
+    return FolderTreeLevel(folders = folderRows, songs = individual)
 }

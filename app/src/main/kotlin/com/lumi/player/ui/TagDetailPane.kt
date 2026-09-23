@@ -9,15 +9,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -27,8 +32,10 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.ModeEdit
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -45,10 +52,12 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.nfc.ndefTypeName
 import kotlin.math.roundToInt
 
 /**
@@ -93,6 +102,10 @@ internal fun TagDetailPane(
     // list this tag's song list.
     LaunchedEffect(tag.id) { viewModel.selectTag(tag.id) }
     val scheme = MaterialTheme.colorScheme
+    // The additional card details of the tag's last presented handle (see
+    // the details section below): observed through the flow, so the page
+    // re-composes when a read publishes the tag's details.
+    val tagDetailsState by viewModel.tagCardDetails.collectAsState()
     Scaffold(topBar = { PaneTopAppBar(tag.name.ifEmpty { "Tag" }, onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -127,6 +140,25 @@ internal fun TagDetailPane(
                     title = tag.name.ifEmpty { "Tag" },
                     detail = tag.uid,
                 )
+                // The additional card information the tag's last presented
+                // handle carried (observed on a read - a scan, a
+                // registration, or a playback read; discovery-time data
+                // only - no connect, no RF): each field shows only when
+                // the presented handle actually carried the value, never
+                // guessed. Keyed by the tag's uid, so a read of ANOTHER
+                // tag never surfaces stale details on this page. The
+                // local val keeps the smart cast (the delegate property
+                // itself never smart-casts).
+                val cardDetails = tagDetailsState
+                if (cardDetails != null && cardDetails.first == tag.uid) {
+                    val details = cardDetails.second
+                    if (details.techNames.isNotEmpty()) {
+                        CardDetailField("Tech", details.techNames.joinToString(", "))
+                    }
+                    details.ndefType?.let { CardDetailField("NDEF type", ndefTypeName(it)) }
+                    details.maxNdefSizeBytes?.let { CardDetailField("NDEF capacity", "$it bytes") }
+                    details.ndefWritable?.let { CardDetailField("Writable", if (it) "Yes" else "No") }
+                }
             }
             // The + button on this section's title row opens the in-app
             // content list: the user checks the songs to add and saves the
@@ -151,6 +183,41 @@ internal fun TagDetailPane(
                         songs = linked,
                         onReordered = { viewModel.reorderTagSongs(tag, it) },
                         onRemoveSong = onRemoveSong,
+                    )
+                }
+            }
+            // Save this tag's data to a physical NFC card: the button
+            // arms the app's own scan (the foreground-dispatch read path)
+            // for a card write - the next card read, ANY card (even one
+            // the app has never seen), is written the tag's data (its name
+            // and the play mode, the card's own payload shape) when it is
+            // writable and can hold it; a card that isn't is reported and
+            // nothing is written.
+            SectionCard(title = "Save to NFC card") {
+                Text(
+                    "Writes this tag's data (its name and the play mode) to an NFC card. Any card works - even one the app has never seen.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                FilledTonalButton(
+                    onClick = { viewModel.startCardWrite(tag) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = scheme.secondaryContainer,
+                        contentColor = scheme.onSecondaryContainer,
+                    ),
+                ) {
+                    Icon(
+                        Icons.Filled.Nfc,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Scan a card",
+                        style = MaterialTheme.typography.titleMedium,
                     )
                 }
             }
@@ -373,6 +440,36 @@ private fun ReorderableSongList(
                 },
             )
         }
+    }
+}
+
+/**
+ * One additional card-detail field of the tag page: a label column and a
+ * single-line value (shown only when the presented tag's discovery data
+ * carried the value - the section shows no field it does not have).
+ */
+@Composable
+private fun CardDetailField(label: String, value: String) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.width(96.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

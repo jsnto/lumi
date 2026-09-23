@@ -29,9 +29,13 @@ import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
 import com.lumi.player.data.folderDocIdOf
 import com.lumi.player.data.rescanNewSongs
+import com.lumi.player.nfc.CardWriteGate
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.nfc.TagCardDetails
 import com.lumi.player.nfc.TagInspect
+import com.lumi.player.nfc.cardDetails
+import com.lumi.player.nfc.cardWriteGate
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
@@ -117,6 +121,20 @@ class LumiViewModel(
      */
     private val _scanAssignEntry = MutableStateFlow<EntryEntity?>(null)
     val scanAssignEntry: StateFlow<EntryEntity?> = _scanAssignEntry.asStateFlow()
+
+    // The tag whose data a card-write scan will write (the tag details
+    // page's "Save to NFC card" action; null for a plain scan). Any card
+    // the armed scan reads is written the tag's data - even one the app
+    // has never seen.
+    private val _cardWriteTarget = MutableStateFlow<TagEntity?>(null)
+    val cardWriteTarget: StateFlow<TagEntity?> = _cardWriteTarget.asStateFlow()
+
+    // The card details observed from the last presented tag handle
+    // (the tag's uid and the details its discovery data carried): the
+    // tag details section shows the fields the presented handle actually
+    // carried - never guessed.
+    private val _tagCardDetails = MutableStateFlow<Pair<String, TagCardDetails>?>(null)
+    val tagCardDetails: StateFlow<Pair<String, TagCardDetails>?> = _tagCardDetails.asStateFlow()
 
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
@@ -205,6 +223,16 @@ class LumiViewModel(
      * later write) and its lumi payload read for form prefill.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
+        if (tag != null) inspectTagDetails(uid, tag)
+        // A card-write scan (the tag details page's "Save to NFC card")
+        // is armed for a specific card write: the read's card is written
+        // the target tag's data, whatever tag it is (even one the app has
+        // never seen) - it never goes to registration or playback.
+        val cardWrite = _cardWriteTarget.value
+        if (_scanActive.value && cardWrite != null) {
+            settleCardWrite(cardWrite, tag)
+            return
+        }
         if (_scanActive.value) {
             settleTagScan(uid, tag)
             return
@@ -272,6 +300,68 @@ class LumiViewModel(
             } else {
                 capture(uid, tag)
             }
+        }
+    }
+
+    /**
+     * Observes a presented tag's additional card details (its tech list,
+     * and, when the handle carries the NDEF tech, its NDEF type, capacity
+     * and writability - all of it discovery-time data: no connection, no
+     * RF activity) and publishes them keyed by the tag's uid, for the tag
+     * details section. A page shows the details only for the tag it is
+     * open on (its own uid), so a read of another tag can never surface
+     * stale details.
+     */
+    private fun inspectTagDetails(uid: String, tag: Tag) {
+        viewModelScope.launch {
+            // Pure discovery-data reads (no IO, no binder): the launch
+            // body runs before any suspension, so the publish is ordered
+            // with the read that produced it.
+            _tagCardDetails.value = uid to tag.cardDetails()
+        }
+    }
+
+    /**
+     * Settles a tag read while a card-write scan is armed (the tag
+     * details page's "Save to NFC card"): the read's card is written the
+     * target tag's data - the tag's name and the app's play mode, the
+     * card's own payload shape - through the existing write path. The
+     * card's verdict is discovery-time data (no connect, no RF): a card
+     * that isn't NDEF, is read-only, or is too small to hold the payload
+     * is reported and nothing is written to it; only a card that passes
+     * reaches the physical write (which itself reports a failure - an
+     * unknown-capacity card can turn out too small there, or the card
+     * left range mid-write). The scan settles either way (the target
+     * is cleared and the flag disarmed): further reads are normal reads,
+     * never re-routed to this write - the user re-arms the action to try
+     * again.
+     */
+    private fun settleCardWrite(target: TagEntity, tag: Tag?) {
+        _scanActive.value = false
+        _cardWriteTarget.value = null
+        if (tag == null) {
+            event("Couldn't read that card - try again.")
+            return
+        }
+        val payload = LumiTagData(name = target.name, mode = playMode.value)
+        viewModelScope.launch {
+            val gate = withContext(Dispatchers.IO) { cardWriteGate(tag, payload) }
+            event(
+                when (gate) {
+                    is CardWriteGate.Ok ->
+                        if (withContext(Dispatchers.IO) { tagWriter(tag, payload) }) {
+                            "Saved to the card."
+                        } else {
+                            "Couldn't write to that card - keep it on the phone and try again."
+                        }
+                    is CardWriteGate.NotNdef ->
+                        "That card isn't an NDEF card - nothing was written."
+                    is CardWriteGate.ReadOnly ->
+                        "That card is read-only - nothing was written."
+                    is CardWriteGate.TooSmall ->
+                        "That card is too small for the tag's data - it holds ${gate.capacityBytes} bytes, the data needs ${gate.neededBytes}. Nothing was written."
+                },
+            )
         }
     }
 
@@ -551,9 +641,24 @@ class LumiViewModel(
         _scanActive.value = true
     }
 
+    /**
+     * Arms the card-write scan (the tag details page's "Save to NFC card"
+     * action): the next tag read - ANY card, through the app's own
+     * foreground-dispatch read path ([onTagDetected]) - writes [tag]'s
+     * data to it (see [settleCardWrite]). The scan dialog's copy asks the
+     * user to hold a card against the back of the phone.
+     */
+    fun startCardWrite(tag: TagEntity) {
+        _capturedUid.value = null
+        _scanAssignEntry.value = null
+        _cardWriteTarget.value = tag
+        _scanActive.value = true
+    }
+
     fun cancelTagScan() {
         _scanActive.value = false
         _scanAssignEntry.value = null
+        _cardWriteTarget.value = null
     }
 
     /** Consumes the resolved scan target (the settings screen has opened the tag's profile page). */

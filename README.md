@@ -24,14 +24,21 @@ server or account — everything is stored locally on the device.
    tag to the songs it should play. Scanning a tag that is
    already registered opens its page instead. The NFC tags section lists
    the registered tags, and tapping a tag opens its own page — the tag's
-   details (its name, which can be edited, and its read-only ID), its song
-   list (songs are added straight onto the tag — the add-song list offers
-   the app's existing content as checkable rows, and saving the checked
-   selection adds the checked songs at once — a song can be removed from
-   the tag (it stays in the content list), and the list can be reordered
-   by dragging a song's handle to set the play order; no data is written
-   to the tag), and a danger zone to delete the tag (its
-   songs stay in the content list).
+   details (its name, which can be edited, and its read-only ID; when the
+   tag's last read carried card information, its tech list and — for an
+   NDEF card — its type, capacity and writability are shown as well), its
+   song list (songs are added straight onto the tag — the add-song list
+   offers the app's existing content in the same folder-tree layout as
+   the content folder pages (the individual songs at the top level and
+   the added folders as show/hide rows carrying their imported songs),
+   and saving the checked selection adds the checked songs at once — a
+   song can be removed from the tag (it stays in the content list), and
+   the list can be reordered by dragging a song's handle to set the play
+   order; managing the list never writes to the tag), a "Save to NFC
+   card" section that writes the tag's data (its name and play mode) to
+   any NFC card the user scans (a card that can't take it — not NDEF,
+   read-only, or too small — is reported and nothing is written), and a
+   danger zone to delete the tag (its songs stay in the content list).
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual
