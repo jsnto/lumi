@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderTreeLevel
+import com.lumi.player.data.collapseKey
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.rowsInTreeOrder
 import com.lumi.player.data.visibleRowCount
@@ -82,8 +83,11 @@ internal fun AddSongPickerDialog(
     // read-only Set held in observed state: every toggle reassigns a fresh
     // set (the copy-on-write below), so the state write is what re-composes.
     var checkedIds: Set<Long> by remember { mutableStateOf(emptySet()) }
-    // The collapsed folder rows' paths (from the tree's root): display
-    // state only - collapsing hides rows, it never changes the save order.
+    // The collapsed folder rows' keys (the tree's show/hide state): the
+    // rows' name paths (from the tree's root), except the top-level rows,
+    // which carry the added folder's id (their labels can collide, so the
+    // label alone would not name one node). Display state only -
+    // collapsing hides rows, it never changes the save order.
     var collapsed: Set<List<String>> by remember { mutableStateOf(emptySet()) }
     // Every song row of the tree in its render order (folders first,
     // nested rows right after their folder's row, the level's songs after):
@@ -193,15 +197,18 @@ private fun PickerTreeRows(
 ) {
     val scheme = MaterialTheme.colorScheme
     level.folders.forEach { node ->
-        val nodePath = path + node.displayName
-        val isCollapsed = nodePath in collapsed
+        // The row's show/hide key: the name path, except the top-level
+        // rows, which key by the added folder's id (their labels can
+        // collide - the recursion keeps the name path).
+        val nodeKey = node.collapseKey(path)
+        val isCollapsed = nodeKey in collapsed
         val hasVisibleBranch = !isCollapsed &&
             (node.children.folders.isNotEmpty() || node.children.songs.isNotEmpty())
         val isLast = remaining[0] == 1
         remaining[0]--
         TreeRowFrame(depth = depth, hasVisibleBranch = hasVisibleBranch, isLast = isLast) {
             SettingRow(
-                modifier = Modifier.clickable { onToggleCollapsed(nodePath) },
+                modifier = Modifier.clickable { onToggleCollapsed(nodeKey) },
                 leading = {
                     IconChip(
                         icon = Icons.Filled.Folder,
@@ -232,7 +239,7 @@ private fun PickerTreeRows(
             PickerTreeRows(
                 level = node.children,
                 depth = depth + 1,
-                path = nodePath,
+                path = path + node.displayName,
                 checkedIds = checkedIds,
                 collapsed = collapsed,
                 onToggleChecked = onToggleChecked,

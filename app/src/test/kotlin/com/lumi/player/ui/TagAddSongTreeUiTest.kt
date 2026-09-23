@@ -270,6 +270,72 @@ class TagAddSongTreeUiTest {
     }
 
     @Test
+    fun equalLabelTopLevelFoldersCollapseIndependently() {
+        // Two added folders with the SAME label (a "Music" on the
+        // internal volume and one on a USB drive): the top-level rows
+        // are the folders' labels, so they must collapse independently -
+        // each row's show/hide is keyed by the added folder's id, not
+        // the shared label.
+        val usbTree = "content://com.android.providers.documents/tree/usb%3AMusic"
+        dbAndGet {
+            val repository = app().repository
+            val internal = repository.rememberFolder(TREE_URI, "Music")
+            repository.addEntry(
+                EntryType.AUDIO, "Internal song",
+                payload("primary:Music/internal.mp3"),
+                folderId = internal.id,
+            )
+            val external = repository.rememberFolder(usbTree, "Music")
+            repository.addEntry(
+                EntryType.AUDIO, "External song",
+                "content://com.android.providers.documents/tree/usb%3AMusic/document/"
+                    + Uri.encode("usb:Music/external.mp3", null),
+                folderId = external.id,
+            )
+        }
+        openTagPage()
+        openPicker()
+        waitForText("Internal song")
+        waitForText("External song")
+        assertEquals(
+            "the two equal-label folders show two rows",
+            2,
+            compose.onAllNodesWithText("Music").fetchSemanticsNodes().size,
+        )
+
+        // Collapsing one row hides EXACTLY that folder's rows: the other
+        // equal-label folder's rows stay.
+        compose.onAllNodesWithText("Music")[0].performClick()
+        compose.waitForIdle()
+        assertEquals(
+            "the first collapse hides only the first folder's song",
+            1,
+            visibleSongs().size,
+        )
+
+        // Collapsing the other row hides its song too.
+        compose.onAllNodesWithText("Music")[1].performClick()
+        compose.waitForIdle()
+        assertEquals("the second collapse hides the last song", 0, visibleSongs().size)
+
+        // Expanding the first brings back its song alone: the keys still
+        // name one folder each.
+        compose.onAllNodesWithText("Music")[0].performClick()
+        compose.waitForIdle()
+        assertEquals(
+            "the first folder's song returns, the second's stays hidden",
+            1,
+            visibleSongs().size,
+        )
+    }
+
+    /** The songs this test's two equal-label folders carry, displayed now. */
+    private fun visibleSongs(): List<String> =
+        listOf("Internal song", "External song").filter { label ->
+            compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty()
+        }
+
+    @Test
     fun checkingSongsAndSavingLinksThemInTheTreesRenderOrder() {
         val ids = storeTreeContent()
         openTagPage()

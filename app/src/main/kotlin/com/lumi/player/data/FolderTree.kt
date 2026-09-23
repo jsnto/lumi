@@ -6,11 +6,19 @@ import android.net.Uri
  * A direct subfolder of one level of a picked folder's tree (as shown on
  * the folder detail page): its display name - the folder's own name on the
  * file system (the last path segment of its document id) - and the level
- * nested inside it.
+ * nested inside it. [folderId] carries the added folder's stable identity
+ * for the tag add-song picker's top-level rows, where the rows are the
+ * user-added folders' LABELS (which can collide - two "Music" folders on
+ * different volumes) instead of file-system names: the show/hide state
+ * keys those rows by the id (see [collapseKey]) so equal labels collapse
+ * independently. Null everywhere the node is a file-system subfolder
+ * (the folder detail page's tree, the picker's subfolders), where the
+ * name path identifies the node.
  */
 data class FolderTreeFolder(
     val displayName: String,
     val children: FolderTreeLevel,
+    val folderId: Long? = null,
 )
 
 /**
@@ -150,24 +158,39 @@ fun FolderTreeLevel.sortedTree(direction: ContentSortDirection): FolderTreeLevel
 }
 
 /**
+ * A folder row's show/hide key (the same key the show/hide state is keyed
+ * by, at every render site and in [visibleRowCount]): the row's [path]
+ * (the chain of name segments from the tree's root down to its level)
+ * extended with its own display name - siblings carry distinct names, so
+ * the key names one node. The one exception is the tag add-song picker's
+ * TOP-LEVEL rows (an empty [path]), where the rows are the user-added
+ * folders' labels and can carry EQUAL labels (two "Music" folders on
+ * different volumes): a row that carries an added-folder [folderId] is
+ * keyed by that id, so the equal-label rows collapse independently
+ * (without the id the label alone would not name one node).
+ */
+fun FolderTreeFolder.collapseKey(path: List<String>): List<String> =
+    if (path.isEmpty() && folderId != null) listOf(folderId.toString())
+    else path + displayName
+
+/**
  * The rows [level] renders when the subfolders in [collapsed] are
  * collapsed: every visible subfolder contributes its own row plus the
  * visible rows of its nested levels, and every song counts one. A
  * collapsed folder contributes its own row only - its descendants' rows
  * are hidden from the display (the folder's row itself stays, as the
  * show/hide toggle). [path] is the chain of name segments from the picked
- * root down to this level; each subfolder's collapse key is its [path]
- * extended with its own display name (siblings carry distinct names, so
- * the key identifies one node - the same key the page's show/hide state
- * is keyed by).
+ * root down to this level; a subfolder's collapse key is its [collapseKey]
+ * - the name path extended with its own display name (siblings carry
+ * distinct names), except the picker's top-level rows, which key by their
+ * added-folder id (equal labels must not share one key).
  */
 fun FolderTreeLevel.visibleRowCount(collapsed: Set<List<String>>, path: List<String> = emptyList()): Int {
     var rows = songs.size
     folders.forEach { folder ->
-        val folderPath = path + folder.displayName
         rows += 1
-        if (folderPath !in collapsed) {
-            rows += folder.children.visibleRowCount(collapsed, folderPath)
+        if (folder.collapseKey(path) !in collapsed) {
+            rows += folder.children.visibleRowCount(collapsed, path + folder.displayName)
         }
     }
     return rows

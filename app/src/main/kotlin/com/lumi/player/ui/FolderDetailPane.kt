@@ -41,6 +41,7 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.FolderTreeLevel
+import com.lumi.player.data.collapseKey
 import com.lumi.player.data.folderTreeStructure
 import com.lumi.player.data.sortedTree
 import com.lumi.player.data.visibleRowCount
@@ -265,8 +266,8 @@ private fun FolderTreeRows(
     remaining: IntArray,
 ) {
     level.folders.forEach { node ->
-        val nodePath = path + node.displayName
-        val isCollapsed = nodePath in collapsed
+        val nodeKey = node.collapseKey(path)
+        val isCollapsed = nodeKey in collapsed
         // The folder's own branch rail (from its vertical center down, so
         // its first child's row continues it) is drawn only while the
         // children are actually displayed - a collapsed folder carries no
@@ -280,7 +281,7 @@ private fun FolderTreeRows(
             SettingRow(
                 // The row body is the show/hide toggle: tapping it hides
                 // (or restores) the rows nested under this subfolder.
-                modifier = Modifier.clickable { onToggleCollapsed(nodePath) },
+                modifier = Modifier.clickable { onToggleCollapsed(nodeKey) },
                 leading = {
                     IconChip(
                         icon = Icons.Filled.Folder,
@@ -315,7 +316,7 @@ private fun FolderTreeRows(
             FolderTreeRows(
                 level = node.children,
                 depth = depth + 1,
-                path = nodePath,
+                path = path + node.displayName,
                 scheme = scheme,
                 collapsed = collapsed,
                 playState = playState,

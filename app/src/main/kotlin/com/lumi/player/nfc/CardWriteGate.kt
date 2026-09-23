@@ -26,15 +26,25 @@ sealed interface CardWriteGate {
     /** The card is NDEF formatted but read-only. */
     object ReadOnly : CardWriteGate
 
-    /** The card's NDEF area cannot hold the payload. */
+    /**
+     * The card's KNOWN NDEF area cannot hold the payload (the discovery
+     * data reported a capacity, and it is below what the data needs).
+     */
     data class TooSmall(val capacityBytes: Int, val neededBytes: Int) : CardWriteGate
 }
 
 /**
  * Gates a card-write of [data] on [tag] (see [CardWriteGate]): the card
- * must be NDEF formatted, writable, and large enough for the message
- * (the write replaces the card's whole NDEF message, so the full area is
- * available - the same arithmetic the write itself uses). Pure
+ * must be NDEF formatted, writable, and - when the discovery data reports
+ * a capacity - large enough for the message (the write replaces the
+ * card's whole NDEF message, so the full area is available - the same
+ * arithmetic the write itself uses). A capacity the discovery data does
+ * not report ([Ndef.getMaxSize] answering 0 - no NDEF length in the
+ * card's extras, the same case the details reader treats as unavailable)
+ * is NOT a verdict: the card passes the gate, and the physical write -
+ * whose own capacity check runs on the connected handle, where the
+ * real size is known - is the one that decides (a card that turns out
+ * to be too small fails there and reports the write's failure). Pure
  * discovery-data reads; no connect, no RF.
  */
 fun cardWriteGate(tag: Tag, data: LumiTagData): CardWriteGate {
@@ -46,6 +56,6 @@ fun cardWriteGate(tag: Tag, data: LumiTagData): CardWriteGate {
     if (!ndef.isWritable) return CardWriteGate.ReadOnly
     val needed = LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(data))
     val capacity = ndef.maxSize
-    return if (capacity < needed) CardWriteGate.TooSmall(capacity, needed)
+    return if (capacity > 0 && capacity < needed) CardWriteGate.TooSmall(capacity, needed)
     else CardWriteGate.Ok
 }

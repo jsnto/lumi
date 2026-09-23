@@ -31,6 +31,7 @@ fun tagSongPickerTree(entries: List<EntryEntity>, folders: List<FolderEntity>): 
         else FolderTreeFolder(
             displayName = folder.label,
             children = folderTreeStructure(Uri.parse(folder.uri), folderEntries),
+            folderId = folder.id,
         )
     }
     return FolderTreeLevel(folders = folderRows, songs = individual)

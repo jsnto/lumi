@@ -174,6 +174,34 @@ class TagSongPickerTreeTest {
     }
 
     @Test
+    fun equalLabelTopLevelFoldersKeyByTheirId_soTheyCollapseIndependently() {
+        val usbTree = "content://com.android.providers.documents/tree/usb%3AMusic"
+        val entries = listOf(
+            entry(1, "Internal song", "content://int", folderId = 42),
+            entry(2, "External song", "content://ext", folderId = 43),
+        )
+        val tree = tagSongPickerTree(
+            entries,
+            listOf(
+                FolderEntity(id = 42, uri = treeUri, label = "Music"),
+                FolderEntity(id = 43, uri = usbTree, label = "Music"),
+            ),
+        )
+
+        assertEquals(listOf("Music", "Music"), tree.folders.map { it.displayName })
+        // The two equal-label rows carry their OWN keys (the added
+        // folder's id, not the shared label): collapsing one names one
+        // folder.
+        assertEquals(listOf(listOf("42"), listOf("43")), tree.folders.map { it.collapseKey(emptyList()) })
+        // Collapsing one hides exactly its own rows; the other's stay.
+        assertEquals(4, tree.visibleRowCount(emptySet()))
+        assertEquals(3, tree.visibleRowCount(setOf(listOf("42"))))
+        assertEquals(3, tree.visibleRowCount(setOf(listOf("43"))))
+        // The shared label alone keys neither row.
+        assertEquals(4, tree.visibleRowCount(setOf(listOf("Music"))))
+    }
+
+    @Test
     fun emptyContentYieldsAnEmptyTree() {
         val tree = tagSongPickerTree(emptyList(), emptyList())
         assertTrue(tree.folders.isEmpty())

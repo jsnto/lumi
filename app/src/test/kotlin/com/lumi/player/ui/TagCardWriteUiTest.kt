@@ -367,6 +367,40 @@ class TagCardWriteUiTest {
     }
 
     @Test
+    fun aCardWhoseDiscoveryReportsNoCapacityPassesTheGate_andTheWriteIsAttempted() {
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+
+        // The physical write seam: the gate must pass the card through
+        // to it - the unknown capacity is not a verdict, and the write's
+        // own capacity check (on the connected handle, where the real
+        // size is known) is the one that decides.
+        var writes = 0
+        viewModel.tagWriter = { _, _ ->
+            writes++
+            true
+        }
+
+        // A writable card whose discovery data reports NO NDEF capacity
+        // (the NDEF length missing from the presentation extras - the
+        // framework answers 0): the gate must not report "too small
+        // (0 bytes)" and refuse the write.
+        sendTag(controller, forgeTag(CARD_UID, maxNdefLength = 0))
+
+        idleUntil(
+            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            message = "the save confirmation",
+        )
+        assertEquals("the physical write was attempted on the card", 1, writes)
+        assertTrue(!viewModel.scanActive.value)
+        assertNull(viewModel.cardWriteTarget.value)
+    }
+
+    @Test
     fun aNonNdefCardIsReported_andNothingIsWritten() {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
