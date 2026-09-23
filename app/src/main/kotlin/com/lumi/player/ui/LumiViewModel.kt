@@ -329,8 +329,9 @@ class LumiViewModel(
      * card's verdict is discovery-time data (no connect, no RF): a card
      * that isn't NDEF, is read-only, or is too small to hold the payload
      * is reported and nothing is written to it; only a card that passes
-     * reaches the physical write (which itself reports a failure - the
-     * card left range mid-write). The scan settles either way (the target
+     * reaches the physical write (which itself reports a failure - an
+     * unknown-capacity card can turn out too small there, or the card
+     * left range mid-write). The scan settles either way (the target
      * is cleared and the flag disarmed): further reads are normal reads,
      * never re-routed to this write - the user re-arms the action to try
      * again.
