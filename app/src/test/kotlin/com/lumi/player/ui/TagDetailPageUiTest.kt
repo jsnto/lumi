@@ -281,14 +281,18 @@ class TagDetailPageUiTest {
         waitForText("Second song")
         compose.waitForIdle()
 
-        // Check two of the rows: one through its row body, the other
-        // through its own checkbox node - both toggle the check.
-        compose.onNodeWithText("First song").performClick()
-        compose.waitForIdle()
+        // Check two of the rows: one through its own checkbox node, the
+        // other through its row body - both toggle the check. The check
+        // order is the REVERSE of the rows' displayed order on purpose:
+        // it distinguishes a row-order commit from a check-order commit,
+        // so a save that linked the songs in the order they were checked
+        // would come out reversed and the assertion below would fail.
         compose.onNode(checkboxIn("Second song", ToggleableState.Off)).performClick()
         compose.waitForIdle()
-        checkboxState("First song", ToggleableState.On)
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
         checkboxState("Second song", ToggleableState.On)
+        checkboxState("First song", ToggleableState.On)
 
         // The save commits the checked songs in the DIALOG'S row order
         // (the order the user saw and checked them) - not the order they
