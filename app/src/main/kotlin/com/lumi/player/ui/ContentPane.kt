@@ -38,7 +38,7 @@ import com.lumi.player.data.sortedByTitle
  * folder is browsed as a unit), then the individual content - the songs
  * added one at a time. The folder-imported rows are NOT in the individual
  * list: they stay visible only inside their folder's page. Both sections
- * follow the sort control's title order (descending by default). A folder
+ * follow the sort control's title order (ascending by default). A folder
  * row opens the folder's own page (its songs' play/pause buttons live
  * there, not on the row); every individual row carries a play button that
  * plays just that song. Tapping a song row opens its profile page.
@@ -68,7 +68,7 @@ internal fun ContentPane(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // The sort control: both sections below follow this title
-            // order. Descending (Z->A) is the list's default; a pick
+            // order. Ascending (A->Z) is the list's default; a pick
             // persists through the view model.
             ContentSortRow(
                 direction = sortDirection,
@@ -162,7 +162,7 @@ internal fun ContentPane(
 
 /**
  * The content list's sort control: orders the sections below by title in
- * the chosen direction. Descending (Z->A) is the list's default order; a
+ * the chosen direction. Ascending (A->Z) is the list's default order; a
  * pick persists through the view model. The chips carry the list's own
  * A-Z / Z-A copy. The folder detail page reuses the control (its own
  * [caption]) for the per-level order of its tree.

@@ -48,12 +48,14 @@ private enum class SettingsPane {
  * configuration screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
- * child of the NFC tags pane, and the folder detail page is a child of the
+ * child of the NFC tags pane and the folder detail page is a child of the
  * content pane, so each one's system back and back arrow take it back to
  * the list it lives under (and its removed-while-open fallback lands there
- * too); every other sub-screen's system back and back arrow go back to the
- * menu, and from the menu the host's back handling (the NavHost in [LumiRoot])
- * returns to the player screen. The
+ * too); the song's profile unwinds to the pane its row was tapped in (the
+ * folder's own page when opened from a folder's tree, the content pane
+ * when opened from content); every other sub-screen's system back and back
+ * arrow go back to the menu, and from the menu the host's back handling (the
+ * NavHost in [LumiRoot]) returns to the player screen. The
  * [SettingsPane] state and the menu's scroll position live here at the top
  * level, so returning from a sub-screen lands in the menu at the exact scroll
  * position it was left at, with every dialog and selection intact.
@@ -85,8 +87,8 @@ fun SettingsScreen(
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
     val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
     // The content list's title sort direction (the content pane's sort
-    // control; descending by default).
-    val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.DESCENDING)
+    // control; ascending by default).
+    val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.ASCENDING)
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
     val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
@@ -133,10 +135,19 @@ fun SettingsScreen(
     // entry is removed or the page leaves it).
     var entryDetailId by remember { mutableStateOf<Long?>(null) }
 
+    // The pane the song's profile was opened from: the back gesture
+    // (system AND the in-pane arrow) unwinds the profile to ITS opener -
+    // the folder's own page when the song was opened from that folder's
+    // tree, the content pane when opened from the content pane's own rows -
+    // instead of always the content pane. (A tag detail page that opens
+    // the profile would record itself the same way.)
+    var entryDetailOpener by remember { mutableStateOf<SettingsPane?>(null) }
+
     // The tag detail page's in-app add-song list: the tag the list is for,
-    // while it is open. A pick links one of the app's existing content
-    // entries (individual or folder-imported) to that tag - the list
-    // never launches the file picker.
+    // while it is open. Saving the checked selection links each of the
+    // app's existing content entries the user checked (individual or
+    // folder-imported) to that tag - the list never launches the file
+    // picker.
     var addSongPickerTagId by remember { mutableStateOf<Long?>(null) }
 
     // A settled scan hands its resolved (registered) tag to the detail
@@ -178,14 +189,15 @@ fun SettingsScreen(
     // System back must unwind the settings screen itself (one level at a
     // time) before the host can pop settings away entirely: the tag detail
     // page unwinds to the NFC tags list it lives under, the folder detail
-    // page to the content pane it lives under, and every other sub-screen
-    // to the menu; only when the menu is showing is the default back
-    // handler allowed through.
+    // page to the content pane it lives under, the song's profile to the
+    // pane it was opened from (the opener recorded when the row was
+    // tapped), and every other sub-screen to the menu; only when the menu
+    // is showing is the default back handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
-            SettingsPane.EntryDetail -> SettingsPane.Content
+            SettingsPane.EntryDetail -> entryDetailOpener ?: SettingsPane.Content
             else -> SettingsPane.Menu
         }
     }
@@ -234,6 +246,7 @@ fun SettingsScreen(
             onPlayEntry = { viewModel.playEntry(it) },
             onEntryOpened = { entry ->
                 entryDetailId = entry.id
+                entryDetailOpener = SettingsPane.Content
                 pane = SettingsPane.EntryDetail
             },
             onEntryDeleted = { deleteEntry = it },
@@ -299,6 +312,7 @@ fun SettingsScreen(
                     },
                     onEntryOpened = { entry ->
                         entryDetailId = entry.id
+                        entryDetailOpener = SettingsPane.FolderDetail
                         pane = SettingsPane.EntryDetail
                     },
                     onPlayEntry = { viewModel.playEntry(it) },
@@ -309,19 +323,27 @@ fun SettingsScreen(
         SettingsPane.EntryDetail -> {
             // The entry may have been removed while the page is open (the
             // content pane's row-level delete does this); when it is gone,
-            // fall back to the content pane the song's row lived in rather
-            // than hold a page for a song that no longer exists.
+            // fall back to the pane the song was opened from rather than
+            // hold a page for a song that no longer exists.
             val entry = entries.firstOrNull { it.id == entryDetailId }
             if (entry == null) {
                 LaunchedEffect(Unit) {
                     entryDetailId = null
-                    pane = SettingsPane.Content
+                    val opener = entryDetailOpener
+                    entryDetailOpener = null
+                    pane = opener ?: SettingsPane.Content
                 }
             } else {
                 EntryDetailPane(
                     viewModel = viewModel,
                     entry = entry,
-                    onBack = { pane = SettingsPane.Content },
+                    onBack = {
+                        // The in-pane arrow unwinds the same way the system
+                        // back does: to the pane the song was opened from.
+                        val opener = entryDetailOpener
+                        entryDetailOpener = null
+                        pane = opener ?: SettingsPane.Content
+                    },
                 )
             }
         }
@@ -329,18 +351,24 @@ fun SettingsScreen(
 
     // ---------- dialogs (overlay any pane) ----------
 
-    // The tag detail page's in-app add-song list (see [addSongPickerTagId]).
+    // The tag detail page's in-app add-song list (see [addSongPickerTagId]):
+    // the user checks the songs to add and saves the selection at once -
+    // every checked song links through the existing single-song link path
+    // (one link per checked song, each committed before the next, so the
+    // tag's list gains them in the selection's order), and the dialog
+    // closes. Cancelling or dismissing saves nothing.
     addSongPickerTagId?.let { id ->
         val tag = tags.firstOrNull { t -> t.id == id }
         if (tag != null) {
             AddSongPickerDialog(
                 options = tagSongOptions(entries, linked),
-                onPick = { option ->
-                    viewModel.linkEntryToTag(tag, option.entry)
-                    // A fresh link closes the list; a song the tag already
-                    // plays keeps it open (the view model reports the pick
-                    // with a toast instead of a duplicate link).
-                    if (!option.alreadyOnTag) addSongPickerTagId = null
+                onSave = { selected ->
+                    // The Save commits the whole checked selection at once:
+                    // each song links through the existing single-song link
+                    // path, in the selection's order (each write before the
+                    // next), and the dialog closes.
+                    viewModel.linkEntriesToTag(tag, selected.map { it.entry })
+                    addSongPickerTagId = null
                 },
                 onDismiss = { addSongPickerTagId = null },
             )

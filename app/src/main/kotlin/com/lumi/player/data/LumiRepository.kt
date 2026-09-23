@@ -304,7 +304,7 @@ class LumiRepository(private val db: LumiDatabase) {
 
     /**
      * The content list's title sort direction. Unset or invalid stored
-     * values fall back to descending - the content list's default order.
+     * values fall back to ascending - the content list's default order.
      */
     fun observeContentSortDirection(): Flow<ContentSortDirection> =
         dao.observeSettings().map { rows ->

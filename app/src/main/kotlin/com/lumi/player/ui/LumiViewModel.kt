@@ -389,16 +389,16 @@ class LumiViewModel(
 
     /**
      * The content list's title sort direction (both the Folders section and
-     * the individual content follow it). Descending is the default - the
-     * list shows Z->A until the user picks otherwise; the pick persists in
-     * the database.
+     * the individual content follow it). Ascending is the default - the
+     * list shows A->Z until the user picks otherwise; the pick persists in
+     * the database (an explicit pick stays authoritative over the default).
      */
     val contentSortDirection: StateFlow<ContentSortDirection> =
         repository.observeContentSortDirection()
             .stateIn(
                 viewModelScope,
                 SharingStarted.Eagerly,
-                ContentSortDirection.DESCENDING,
+                ContentSortDirection.ASCENDING,
             )
 
     fun setContentSortDirection(direction: ContentSortDirection) {
@@ -1139,22 +1139,44 @@ class LumiViewModel(
 
     /**
      * Links an already-stored content entry to the end of the tag's song
-     * list - the in-app add-song flow: a tag's list is an assignment over
-     * the app's existing content (individual or folder-imported alike), so
-     * the pick links the stored row instead of storing a new one. When the
-     * tag already plays the song (its list carries an entry with the same
-     * label) the pick is reported instead of silently duplicating the
-     * link.
+     * list - the in-app add-song flow's single-song path: a tag's list is
+     * an assignment over the app's existing content (individual or
+     * folder-imported alike), so the pick links the song's stored row
+     * instead of storing a new one (no second grant, no duplicate content
+     * row). When the tag already plays the song (its list carries an entry
+     * with the same label) the link is reported instead of silently
+     * duplicating. [linkEntriesToTag] runs this same one-song core in
+     * order, so a bulk save links each checked song through the very same
+     * path.
      */
     fun linkEntryToTag(tag: TagEntity, entry: EntryEntity) {
+        viewModelScope.launch { linkOneEntryToTag(tag, entry) }
+    }
+
+    /**
+     * Links several already-stored content entries to a tag in order - the
+     * add-song dialog's Save committing its checked selection: every song
+     * links through the existing single-song link path (one link per
+     * song, each appended after the previous), but each write completes
+     * before the next starts, so the appends land in the selection's
+     * order - fire-and-forget siblings would race on the link-list count
+     * and the songs could land out of the order they were checked in.
+     */
+    fun linkEntriesToTag(tag: TagEntity, entries: List<EntryEntity>) {
+        if (entries.isEmpty()) return
         viewModelScope.launch {
-            if (repository.entriesForTag(tag.id).any { it.label == entry.label }) {
-                event("That song is already on the tag.")
-                return@launch
-            }
-            val linked = repository.linkEntryToTag(tag.id, entry.id)
-            event(if (linked) "Song added to the tag" else "Could not add the song to that tag.")
+            entries.forEach { linkOneEntryToTag(tag, it) }
         }
+    }
+
+    /** The one-song link (blocking: its write commits before returning). */
+    private suspend fun linkOneEntryToTag(tag: TagEntity, entry: EntryEntity) {
+        if (repository.entriesForTag(tag.id).any { it.label == entry.label }) {
+            event("That song is already on the tag.")
+            return
+        }
+        val linked = repository.linkEntryToTag(tag.id, entry.id)
+        event(if (linked) "Song added to the tag" else "Could not add the song to that tag.")
     }
 
     /**

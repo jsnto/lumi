@@ -32,12 +32,14 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * The content pane's sort control and play buttons. The list sorts by
- * title (descending is the default order; a pick reorders the list and
- * persists in the settings table). The individual rows carry a play
- * button that starts playback through the app's existing playback path
- * (the service's ACTION_START, unattached to any tag), playing just that
- * song; the folder rows carry NO play button - a folder's row opens the
- * folder's own page, where its songs carry the play buttons instead.
+ * title (ascending is the default order - a fresh or unchosen install
+ * starts A->Z; a pick reorders the list and persists in the settings
+ * table, and an explicit pick stays authoritative over the default). The
+ * individual rows carry a play button that starts playback through the
+ * app's existing playback path (the service's ACTION_START, unattached to
+ * any tag), playing just that song; the folder rows carry NO play button -
+ * a folder's row opens the folder's own page, where its songs carry the
+ * play buttons instead.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -111,10 +113,10 @@ class ContentSortPlayUiTest {
     }
 
     @Test
-    fun theContentListSortsByTitleDescendingByDefault() {
+    fun theContentListSortsByTitleAscendingByDefault() {
         openContentPane()
         // The stored rows arrive in insertion order; the list must show
-        // Z->A by title until the user picks otherwise.
+        // A->Z by title until the user picks otherwise (the default).
         storeSongs("alpha", "charlie", "bravo")
         idleUntil(
             cond = {
@@ -130,18 +132,18 @@ class ContentSortPlayUiTest {
         compose.onNodeWithText("A-Z").assertExists()
         compose.onNodeWithText("Z-A").assertExists()
 
-        // The individual section reads Z->A: charlie above bravo, bravo
-        // above alpha.
+        // The individual section reads A->Z: alpha above bravo, bravo
+        // above charlie.
         val charlie = compose.onNodeWithText("charlie").fetchSemanticsNode()
         val bravo = compose.onNodeWithText("bravo").fetchSemanticsNode()
         val alpha = compose.onNodeWithText("alpha").fetchSemanticsNode()
         assertTrue(
-            "charlie must sort above bravo in the default descending order",
-            charlie.boundsInWindow.bottom < bravo.boundsInWindow.top,
+            "alpha must sort above bravo in the default ascending order",
+            alpha.boundsInWindow.bottom < bravo.boundsInWindow.top,
         )
         assertTrue(
-            "bravo must sort above alpha in the default descending order",
-            bravo.boundsInWindow.bottom < alpha.boundsInWindow.top,
+            "bravo must sort above charlie in the default ascending order",
+            bravo.boundsInWindow.bottom < charlie.boundsInWindow.top,
         )
     }
 
@@ -149,30 +151,16 @@ class ContentSortPlayUiTest {
     fun togglingTheSortControlReordersTheListAndPersistsThePick() {
         val (_, viewModel) = openContentPane()
         storeSongs("alpha", "charlie", "bravo")
-        idleUntil(cond = { compose.onNodeWithText("alpha").isDisplayed() })
+        idleUntil(cond = { compose.onNodeWithText("charlie").isDisplayed() })
 
-        // Descending is the default order.
+        // Ascending is the default order.
         assertTrue(
-            compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.bottom <
-                compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.top,
+            compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.bottom <
+                compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.top,
         )
 
-        // Pick ascending: the order flips and the pick persists (the
+        // Pick descending: the order flips and the pick persists (the
         // observed direction is re-read from the settings table).
-        compose.onNodeWithText("A-Z").performClick()
-        idleUntil(
-            cond = {
-                compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.bottom <
-                    compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.top
-            },
-            message = "the ascending reorder",
-        )
-        idleUntil(
-            cond = { viewModel.contentSortDirection.value == ContentSortDirection.ASCENDING },
-            message = "the persisted sort direction",
-        )
-
-        // Back to descending: the order flips again.
         compose.onNodeWithText("Z-A").performClick()
         idleUntil(
             cond = {
@@ -183,6 +171,20 @@ class ContentSortPlayUiTest {
         )
         idleUntil(
             cond = { viewModel.contentSortDirection.value == ContentSortDirection.DESCENDING },
+            message = "the persisted sort direction",
+        )
+
+        // Back to ascending: the order flips again.
+        compose.onNodeWithText("A-Z").performClick()
+        idleUntil(
+            cond = {
+                compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.bottom <
+                    compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.top
+            },
+            message = "the ascending reorder",
+        )
+        idleUntil(
+            cond = { viewModel.contentSortDirection.value == ContentSortDirection.ASCENDING },
             message = "the persisted sort direction",
         )
     }

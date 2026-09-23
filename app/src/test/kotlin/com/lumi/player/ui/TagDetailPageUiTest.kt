@@ -2,6 +2,9 @@ package com.lumi.player.ui
 
 import androidx.activity.result.ActivityResultRegistry
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -47,9 +51,16 @@ import org.robolectric.shadows.ShadowLooper
  * rejected and keeps the current order, firing no save event) - an
  * add-song action aimed at THIS tag, and a danger zone that deletes the
  * tag. The add-song action opens the in-app content
- * list (the app's existing content, individual or folder-imported): a
- * pick links the stored entry to the tag ([LumiViewModel.linkEntryToTag]) -
- * it never launches the file picker, so nothing is stored twice.
+ * list (the app's existing content, individual or folder-imported): the
+ * user CHECKS the songs to add (tapping a row or its checkbox toggles the
+ * check) and saves the selection at once with the Save button at the
+ * bottom of the dialog - every checked song links its stored entry to the
+ * tag ([LumiViewModel.linkEntryToTag], one link per checked song) and the
+ * dialog closes; a song the tag already plays stays non-addable (its
+ * check never engages, so it can never be linked twice); the Save button
+ * is dimmed while nothing is checked, and cancelling or dismissing saves
+ * nothing. It never launches the file picker, so nothing is stored
+ * twice.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -175,10 +186,25 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("Danger zone").assertExists()
     }
 
-    // ---------- add a song from the page: the in-app content list links the stored row ----------
+    // ---------- add songs from the page: the in-app content list links the stored rows ----------
+
+    /** The [label] row's checkbox node in the given check state. */
+    private fun checkboxIn(label: String, state: ToggleableState): SemanticsMatcher =
+        SemanticsMatcher.expectValue(SemanticsProperties.TestTag, "add-song-check-$label")
+            .and(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, state))
+
+    /** Asserts the [label] row's checkbox is in [state] (or fails). */
+    private fun checkboxState(label: String, state: ToggleableState) {
+        compose.onNode(checkboxIn(label, state)).assertExists()
+    }
+
+    /** Whether the dialog's Save button carries the disabled semantic. */
+    private fun saveButtonDisabled(): Boolean =
+        compose.onNodeWithText("Save").fetchSemanticsNode()
+            .config.contains(SemanticsProperties.Disabled)
 
     @Test
-    fun addSongFromThePageLinksAnExistingContentEntryToTheTag() {
+    fun checkingASongAndSavingLinksAnExistingContentEntryToTheTag() {
         val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
         val contentId = dbAndGet {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
@@ -199,7 +225,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The in-app list offers the app's existing content, and the file
-        // picker is never launched (the pick links, it does not store).
+        // picker is never launched (the save links, it does not store).
         compose.onNodeWithText("Add a song").assertExists()
         waitForText("First song")
         assertEquals(
@@ -208,27 +234,166 @@ class TagDetailPageUiTest {
             launchedPickerKeys(activity),
         )
 
-        // Picking the song links the STORED row: the tag's list gains it
-        // and the content list grows by nothing.
+        // Checking the song (tapping its row) marks it, and the Save
+        // button at the bottom commits: the tag's list gains the STORED
+        // row and the content list grows by nothing.
         compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        checkboxState("First song", ToggleableState.On)
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(
-            "the picked row must link the stored entry",
+            "the checked row must link the stored entry",
             listOf(contentId),
             tagLinks(tagId).map { it.id },
         )
+        // The dialog closed (its title is gone) and the page shows the
+        // new song row.
+        compose.onNodeWithText("Add a song").assertDoesNotExist()
         waitForText("First song")
         compose.onNodeWithText("This tag plays nothing yet.").assertDoesNotExist()
         assertEquals(
-            "picking links the stored row - no new content row is stored",
+            "saving links the stored row - no new content row is stored",
             1,
             dbAndGet { app().repository.observeEntries().first().size },
         )
     }
 
     @Test
-    fun addingASongTheTagAlreadyPlaysIsReportedWithoutDuplicatingTheLink() {
+    fun checkingMultipleSongsAndSavingLinksThemAllAtOnce() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val firstId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
+        val secondId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id
+        }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+        waitForText("Second song")
+        compose.waitForIdle()
+
+        // Check two of the rows: one through its row body, the other
+        // through its own checkbox node - both toggle the check.
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        compose.onNode(checkboxIn("Second song", ToggleableState.Off)).performClick()
+        compose.waitForIdle()
+        checkboxState("First song", ToggleableState.On)
+        checkboxState("Second song", ToggleableState.On)
+
+        // The save commits the checked songs in the DIALOG'S row order
+        // (the order the user saw and checked them) - not the order they
+        // were checked - so the links must follow the rows' displayed
+        // order; capture it while the dialog is still open.
+        val displayedOrder = listOf("First song", "Second song").sortedBy {
+            compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top
+        }
+
+        // Saving commits the whole selection at once: BOTH checked songs
+        // link and the dialog closes.
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ tagLinks(tagId).size == 2 })
+        assertEquals(
+            "saving links exactly the checked songs, in the dialog's row order",
+            displayedOrder.map { if (it == "First song") firstId else secondId },
+            tagLinks(tagId).map { it.id },
+        )
+        compose.onNodeWithText("Add a song").assertDoesNotExist()
+        // The content list grew by nothing, and the page shows the two
+        // new rows.
+        assertEquals(2, dbAndGet { app().repository.observeEntries().first().size })
+        compose.onNodeWithText("First song").assertExists()
+        compose.onNodeWithText("Second song").assertExists()
+    }
+
+    @Test
+    fun theSaveButtonIsDisabledWhileNothingIsChecked() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        val contentId = dbAndGet {
+            app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
+        }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+        waitForText("First song")
+        compose.waitForIdle()
+
+        // With nothing checked the Save button is dimmed (disabled):
+        // there is nothing to save.
+        assertTrue(
+            "the Save button must carry the disabled semantic while nothing is checked",
+            saveButtonDisabled(),
+        )
+        // Tapping the inert button saves nothing and keeps the list open.
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        assertEquals("the disabled save links nothing", emptyList<Long>(), tagLinks(tagId))
+        compose.onNodeWithText("Add a song").assertExists()
+
+        // Checking one song enables it, and the save commits.
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        assertFalse("checking a song must enable the Save button", saveButtonDisabled())
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ tagLinks(tagId).size == 1 })
+        assertEquals(listOf(contentId), tagLinks(tagId).map { it.id })
+    }
+
+    @Test
+    fun cancellingSavesNothing() {
+        val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
+        dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
+
+        val activity = openTagPage("Porch")
+        val viewModel = mainViewModel(activity)
+        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+        waitForText("First song")
+        compose.waitForIdle()
+
+        // Check a song, then cancel: the dialog closes and NOTHING links.
+        compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        checkboxState("First song", ToggleableState.On)
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Add a song").assertDoesNotExist()
+        assertEquals("cancelling saves nothing", emptyList<Long>(), tagLinks(tagId))
+
+        // Re-opening the list starts with an empty selection again.
+        compose.onNodeWithContentDescription("Add song").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Add song").performClick()
+        compose.waitForIdle()
+        waitForText("First song")
+        compose.waitForIdle()
+        checkboxState("First song", ToggleableState.Off)
+        assertTrue("the re-opened list's Save is dimmed again", saveButtonDisabled())
+    }
+
+    @Test
+    fun aSongTheTagAlreadyPlaysStaysNonAddableAndCannotBeLinkedTwice() {
         val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
         val firstId = dbAndGet {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
@@ -252,19 +417,28 @@ class TagDetailPageUiTest {
         // song's own row sits on the page below as well).
         assertTrue(compose.onAllNodesWithText("First song").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("Already on this tag").assertExists()
+        // The flagged row carries no checkbox at all: it stays
+        // non-addable.
+        compose.onNode(checkboxIn("First song", ToggleableState.On)).assertDoesNotExist()
+        compose.onNode(checkboxIn("First song", ToggleableState.Off)).assertDoesNotExist()
 
-        // Picking the flagged song is REPORTED - the tag's list keeps the
-        // song exactly once and the list stays open for another pick.
+        // Tapping the flagged row does nothing (the check never engages),
+        // while the other song checks normally - and saving the selection
+        // links only the new one: the flagged song keeps its single link.
         compose.onNodeWithText("Already on this tag").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 1 })
+        compose.onNodeWithText("Second song").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ tagLinks(tagId).size == 2 })
         assertEquals(
-            "a second pick of the same song must not duplicate the link",
-            listOf(firstId),
+            "the flagged song keeps its single link; only the checked one is added",
+            listOf(firstId, secondId),
             tagLinks(tagId).map { it.id },
         )
-        compose.onNodeWithText("Add a song").assertExists()
-        compose.onNodeWithText("Second song").assertExists()
+        // The dialog closed on the save.
+        compose.onNodeWithText("Add a song").assertDoesNotExist()
     }
 
     @Test
@@ -295,11 +469,15 @@ class TagDetailPageUiTest {
             compose.onAllNodesWithText("First song").fetchSemanticsNodes().size,
         )
 
+        // Checking the collapsed row and saving links the FIRST stored
+        // copy.
         compose.onNodeWithText("First song").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(
-            "picking the collapsed row links the FIRST stored copy",
+            "saving the collapsed row links the FIRST stored copy",
             listOf(firstCopy),
             tagLinks(tagId).map { it.id },
         )

@@ -7,7 +7,8 @@ import org.junit.Test
  * The content list's sort control (pure): the title ordering (case-
  * insensitive, the id breaking ties so the order is deterministic),
  * descending being the exact reverse of ascending, and the stored
- * direction's read-back (descending when unset or invalid).
+ * direction's read-back (ascending when unset or invalid - the default -
+ * and an explicit descending pick staying authoritative).
  */
 class ContentSortTest {
 
@@ -42,13 +43,16 @@ class ContentSortTest {
     }
 
     @Test
-    fun `the default direction is descending and the stored values round-trip`() {
-        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored(null))
-        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored(""))
-        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored("sideways"))
-        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored("desc"))
+    fun `the default direction is ascending and an explicit descending pick stays authoritative`() {
+        assertEquals(ContentSortDirection.ASCENDING, contentSortDirectionFromStored(null))
+        assertEquals(ContentSortDirection.ASCENDING, contentSortDirectionFromStored(""))
+        assertEquals(ContentSortDirection.ASCENDING, contentSortDirectionFromStored("sideways"))
         assertEquals(ContentSortDirection.ASCENDING, contentSortDirectionFromStored("asc"))
         assertEquals(ContentSortDirection.ASCENDING, contentSortDirectionFromStored("ASC "))
+        // A user who explicitly picked Z-A keeps it: the stored "desc" is
+        // authoritative over the ascending default.
+        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored("desc"))
+        assertEquals(ContentSortDirection.DESCENDING, contentSortDirectionFromStored("DESC"))
         assertEquals("asc", ContentSortDirection.ASCENDING.storedValue())
         assertEquals("desc", ContentSortDirection.DESCENDING.storedValue())
     }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -31,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lumi.player.data.PlayMode
@@ -42,18 +44,28 @@ import com.lumi.player.nfc.LumiTagNdef
  * The tag detail page's in-app add-song list: the app's existing content
  * (individual or folder-imported alike), collapsed to one row per song
  * label (a song's duplicate copies are offered once, as the first stored
- * copy). A pick links the stored entry to the page's tag - it never
- * launches the file picker, so nothing is stored twice - and a song the
- * tag already plays is offered but flagged (the pick is reported, never
- * silently duplicated).
+ * copy). The user CHECKS the songs to add - tapping a row (or its
+ * checkbox) toggles the check - and saves the whole selection at once
+ * with the Save button at the bottom of the dialog: every checked song
+ * links the stored entry to the page's tag through the single-song link
+ * path (one link per checked song), and the dialog closes. Cancelling or
+ * dismissing saves nothing. A song the tag already plays is offered but
+ * flagged and stays non-addable - its check never engages and the Save
+ * button (dimmed while nothing is checkable-and-checked) can never link
+ * it a second time. The dialog never launches the file picker, so
+ * nothing is stored twice.
  */
 @Composable
 internal fun AddSongPickerDialog(
     options: List<TagSongOption>,
-    onPick: (TagSongOption) -> Unit,
+    onSave: (List<TagSongOption>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    // The checked song rows (the first stored copy's entry id per row):
+    // the selection the Save button at the bottom commits at once.
+    var checkedIds by remember { mutableStateOf(HashSet<Long>()) }
+    val checkedOptions = options.filter { !it.alreadyOnTag && it.entry.id in checkedIds }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = scheme.surface,
@@ -75,7 +87,20 @@ internal fun AddSongPickerDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 56.dp)
-                            .clickable { onPick(option) }
+                            // Addable rows toggle their check; the flagged
+                            // rows (the tag already plays the song) are
+                            // non-addable and carry no click at all.
+                            .then(
+                                if (option.alreadyOnTag) {
+                                    Modifier
+                                } else {
+                                    Modifier.clickable {
+                                        val ids = HashSet<Long>(checkedIds)
+                                        if (!ids.remove(option.entry.id)) ids.add(option.entry.id)
+                                        checkedIds = ids
+                                    }
+                                },
+                            )
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -100,6 +125,9 @@ internal fun AddSongPickerDialog(
                             )
                         }
                         if (option.alreadyOnTag) {
+                            // The settled already-on-this-tag marking: the
+                            // song the tag already plays is offered, not
+                            // addable.
                             Spacer(Modifier.width(8.dp))
                             Icon(
                                 Icons.Filled.Check,
@@ -107,12 +135,35 @@ internal fun AddSongPickerDialog(
                                 modifier = Modifier.size(20.dp),
                                 tint = scheme.onSurfaceVariant,
                             )
+                        } else {
+                            Spacer(Modifier.width(8.dp))
+                            Checkbox(
+                                checked = option.entry.id in checkedIds,
+                                onCheckedChange = {
+                                    val ids = HashSet<Long>(checkedIds)
+                                    if (!ids.remove(option.entry.id)) ids.add(option.entry.id)
+                                    checkedIds = ids
+                                },
+                                modifier = Modifier.testTag("add-song-check-${option.entry.label}"),
+                            )
                         }
                     }
                 }
             }
         },
+        // The selection's commit at the bottom of the dialog: every
+        // checked song links to the tag at once. Dimmed (and inert) while
+        // nothing is checked - there is nothing to save.
         confirmButton = {
+            TonalPillButton(
+                label = "Save",
+                onClick = { onSave(checkedOptions) },
+                enabled = checkedOptions.isNotEmpty(),
+            )
+        },
+        // Cancelling saves nothing: the selection is dropped with the
+        // dialog.
+        dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )

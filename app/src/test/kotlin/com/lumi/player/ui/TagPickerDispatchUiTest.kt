@@ -207,7 +207,7 @@ class TagPickerDispatchUiTest {
         compose.waitForIdle()
 
         // The + button opens the in-app content list - the file picker is
-        // NOT launched (a pick links, it does not store).
+        // NOT launched (the save links, it does not store).
         compose.onNodeWithText("Add a song").assertExists()
         assertEquals(
             "the in-app add-song list must not launch the file picker",
@@ -215,14 +215,17 @@ class TagPickerDispatchUiTest {
             launchedPickerKeys(activity),
         )
 
-        // Picking the app's existing content links the stored entry AFTER
-        // the tag's existing song - nothing is stored twice.
+        // Checking the app's existing content marks it; the Save button
+        // commits the selection, linking the stored entry AFTER the tag's
+        // existing song - nothing is stored twice.
         compose.onNodeWithText("Second song").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 2 })
         val labels: List<String> = tagLinks(tagId).map { it.label }
         assertEquals(
-            "the picked song must be appended after the tag's existing song",
+            "the checked song must be appended after the tag's existing song",
             listOf("First song", "Second song"),
             labels,
         )

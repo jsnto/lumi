@@ -307,9 +307,16 @@ class SongProfileUiTest {
         idleUntil(cond = { compose.onNodeWithText("Song details").isDisplayed() }, message = "the profile page")
         compose.onNodeWithText(SONG_PAYLOAD).assertExists()
 
-        // Back unwinds one level to the content pane.
+        // Back unwinds one level to the pane the song was opened FROM -
+        // the folder's own page, not the content pane - and the song's
+        // own details are gone.
         compose.onNodeWithContentDescription("Back").performClick()
-        idleUntil(cond = { compose.onNodeWithText("Sort by title").isDisplayed() })
+        idleUntil(cond = { compose.onNodeWithText("Folder details").isDisplayed() }, message = "the folder page")
+        compose.onNodeWithText("Song details").assertDoesNotExist()
+
+        // The second back then unwinds to the content pane.
+        compose.onNodeWithContentDescription("Back").performClick()
+        idleUntil(cond = { compose.onNodeWithText("Individual content").isDisplayed() }, message = "the content pane")
     }
 
     @Test

@@ -10,6 +10,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
+import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
@@ -25,12 +27,15 @@ import org.robolectric.shadows.ShadowLooper
  * Behavioral coverage for the settings navigation back gesture: system back
  * (driven through the real [androidx.activity.OnBackPressedDispatcher]) and
  * the in-pane back arrow unwind one level at a time - the tag detail page is
- * a child of the NFC tags pane and the folder detail page a child of the
- * content pane, so each one's back lands on the list it lives under and
- * only the next back reaches the menu - and the menu is left at the exact
- * scroll position it was left at. The screen is configured short (300dp) so
- * the settings menu list genuinely overflows and the scroll position is a
- * meaningful state to check, instead of fitting on one screen.
+ * a child of the NFC tags pane, the folder detail page a child of the
+ * content pane, and the song profile a child of the pane the song was
+ * opened FROM (the folder's own page when opened from that folder's tree,
+ * the content pane when opened from there), so each one's back lands on
+ * the list it lives under and only the next back reaches the menu - and the
+ * menu is left at the exact scroll position it was left at. The screen is
+ * configured short (300dp) so the settings menu list genuinely overflows
+ * and the scroll position is a meaningful state to check, instead of
+ * fitting on one screen.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -65,6 +70,13 @@ class SettingsBackNavUiTest {
     }
 
     private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
+
+    /** The activity's main view model (the settings screen's owner). */
+    private fun mainViewModel(activity: MainActivity): LumiViewModel {
+        val field = MainActivity::class.java.getDeclaredField("viewModel")
+        field.isAccessible = true
+        return field.get(activity) as LumiViewModel
+    }
 
     /** Runs a suspend block on the app's database and returns its result. */
     private fun <T> dbAndGet(block: suspend () -> T): T {
@@ -275,6 +287,105 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Tap to view its songs").assertExists()
         // The menu is not showing either.
         compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    // ---------- the song profile unwinds to the pane the song was opened from ----------
+
+    /**
+     * Opens the [label] folder's page (through the faked walk seam, since
+     * the SAF provider can't run under Robolectric) and the [song] song's
+     * profile from the folder page's song row. The folder-imported song
+     * keeps out of the content pane's individual list, so the folder's
+     * page is the only place its row lives.
+     */
+    private fun openSongProfileFromFolderPage(folderLabel: String, songLabel: String, songPayload: String): MainActivity {
+        dbAndGet {
+            val song = checkNotNull(app().repository.addEntryUnique(EntryType.AUDIO, songLabel, songPayload))
+            val folder = app().repository.rememberFolder(FOLDER_URI, folderLabel)
+            app().repository.markEntriesFromFolder(folder.id, setOf(song.payload))
+        }
+        val activity = openSettings()
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+        // The page's walk goes through the faked seam (it lists the stored
+        // row's payload, so the song's row shows on the page).
+        mainViewModel(activity).folderChildren = {
+            listOf(FolderChild("$songLabel.mp3", isDirectory = false, childUri = songPayload))
+        }
+        waitForText(folderLabel)
+        compose.onNodeWithText(folderLabel).performScrollTo()
+        compose.onNodeWithText(folderLabel).performClick()
+        compose.waitForIdle()
+        waitForText(songLabel)
+        compose.onNodeWithText(songLabel).performScrollTo()
+        compose.onNodeWithText(songLabel).performClick()
+        compose.waitForIdle()
+        waitForText("Song details")
+        return activity
+    }
+
+    @Test
+    fun systemBackFromASongOpenedOnTheFolderPageUnwindsToTheFolderPageAndOnlyThenTheContentPane() {
+        val activity = openSongProfileFromFolderPage("Music", "Folder song", "content://docs/one")
+
+        // The first system back unwinds the profile one level, to the pane
+        // the song was opened FROM - the folder's own page - not the
+        // content pane, and not out of settings (the page's details and the
+        // song's row are back).
+        systemBack(activity)
+        compose.onNodeWithText("Song details").assertDoesNotExist()
+        compose.onNodeWithText("Folder details").assertExists()
+        compose.onNodeWithText("Folder song").assertExists()
+
+        // The second back leaves the folder page for the content pane...
+        systemBack(activity)
+        compose.onNodeWithText("Folder details").assertDoesNotExist()
+        compose.onNodeWithText("Tap to view its songs").assertExists()
+
+        // ...and the third leaves the content pane for the menu.
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+    }
+
+    @Test
+    fun theInPaneBackArrowFromASongOpenedOnTheFolderPageLandsOnTheFolderPage() {
+        val activity = openSongProfileFromFolderPage("Music", "Folder song", "content://docs/one")
+
+        // The pane's own back arrow (the top bar) lands on the folder's
+        // own page - the pane the song was opened from - not the content
+        // pane.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Song details").assertDoesNotExist()
+        compose.onNodeWithText("Folder details").assertExists()
+        // The content pane is not showing either.
+        compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
+        // The menu is not showing either.
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    @Test
+    fun systemBackFromASongOpenedInTheContentPaneUnwindsToTheContentPane() {
+        dbAndGet { app().repository.addEntryUnique(EntryType.AUDIO, "Individual song", "content://docs/solo") }
+
+        val activity = openSettings()
+        compose.onNodeWithText("Content").performClick()
+        compose.waitForIdle()
+        waitForText("Individual song")
+        compose.onNodeWithText("Individual song").performScrollTo()
+        compose.onNodeWithText("Individual song").performClick()
+        compose.waitForIdle()
+        waitForText("Song details")
+
+        // The song was opened from the content pane's own row, so its back
+        // lands on the content pane - the profile's default opener - and
+        // only the next back reaches the menu.
+        systemBack(activity)
+        compose.onNodeWithText("Song details").assertDoesNotExist()
+        compose.onNodeWithText("Individual content").assertExists()
+        compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
     }
 
     companion object {

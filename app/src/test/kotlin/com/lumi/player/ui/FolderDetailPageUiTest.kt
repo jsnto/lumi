@@ -490,21 +490,21 @@ class FolderDetailPageUiTest {
         // The content pane's own sort control, with its per-level caption.
         compose.onNodeWithText("Sort by title").assertExists()
         compose.onNodeWithText("Applies to the folders and the songs at each level below.").assertExists()
-        // The list's default order (descending): the subfolder leads the
-        // level, then the songs Z->A - mango above alpha.
+        // The list's default order (ascending): the subfolder leads the
+        // level, then the songs A->Z - alpha above mango.
         assertTrue(
             "the subfolder row comes before the songs at its level",
             topOf("Albums") < topOf("mango.mp3"),
         )
         assertTrue(
-            "descending puts mango above alpha (got ${topOf("mango.mp3")} vs ${topOf("alpha.mp3")})",
-            topOf("mango.mp3") < topOf("alpha.mp3"),
+            "ascending puts alpha above mango (got ${topOf("alpha.mp3")} vs ${topOf("mango.mp3")})",
+            topOf("alpha.mp3") < topOf("mango.mp3"),
         )
-        // The A-Z pick flips the level to the content list's ascending order
-        // (alpha above mango), and the subfolder still leads.
-        compose.onNodeWithText("A-Z").performClick()
-        idleUntil({ topOf("alpha.mp3") < topOf("mango.mp3") })
-        assertTrue("the subfolder row still comes before the songs", topOf("Albums") < topOf("alpha.mp3"))
+        // The Z-A pick flips the level to the content list's descending
+        // order (mango above alpha), and the subfolder still leads.
+        compose.onNodeWithText("Z-A").performClick()
+        idleUntil({ topOf("mango.mp3") < topOf("alpha.mp3") })
+        assertTrue("the subfolder row still comes before the songs", topOf("Albums") < topOf("mango.mp3"))
     }
 
     @Test

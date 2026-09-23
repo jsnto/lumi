@@ -14,12 +14,13 @@ data class TagSongOption(
  * Collapses [content] (ALL stored content - the individual list and the
  * folder-imported rows alike, in the content list's order) into ONE row per
  * distinct label: duplicate content (the same label stored more than once)
- * displays once, and picking the collapsed row links the FIRST stored copy.
+ * displays once, and saving the collapsed row checked links the FIRST
+ * stored copy.
  *
  * Each option is marked [TagSongOption.alreadyOnTag] when [tagEntries]
  * carries an entry with the same label - the tag's list may already hold
- * the song (directly, or via a duplicate label), and picking it again must
- * be reported, not silently linked a second time.
+ * the song (directly, or via a duplicate label) - so the row stays
+ * non-addable and the selection can never link it a second time.
  */
 fun tagSongOptions(content: List<EntryEntity>, tagEntries: List<EntryEntity>): List<TagSongOption> {
     val labelsOnTag = tagEntries.mapTo(HashSet()) { it.label }
