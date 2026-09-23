@@ -63,8 +63,10 @@ internal fun AddSongPickerDialog(
 ) {
     val scheme = MaterialTheme.colorScheme
     // The checked song rows (the first stored copy's entry id per row):
-    // the selection the Save button at the bottom commits at once.
-    var checkedIds by remember { mutableStateOf(HashSet<Long>()) }
+    // the selection the Save button at the bottom commits at once. A
+    // read-only Set held in observed state: every toggle reassigns a fresh
+    // set (the copy-on-write below), so the state write is what re-composes.
+    var checkedIds: Set<Long> by remember { mutableStateOf(emptySet()) }
     val checkedOptions = options.filter { !it.alreadyOnTag && it.entry.id in checkedIds }
     AlertDialog(
         onDismissRequest = onDismiss,

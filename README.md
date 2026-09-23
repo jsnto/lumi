@@ -13,7 +13,7 @@ server or account — everything is stored locally on the device.
    optionally store that on the tag itself so re-registering it later
    pre-fills the form), register content (pick an audio file from the
    device, or a whole folder to add every song in it and its subfolders —
-   the list is sorted by title, Z-A by default, and every song row has a
+   the list is sorted by title, A-Z by default, and every song row has a
    play button that plays that song directly with no tag attached (a folder
    row opens the folder's own page, where its songs carry the buttons);
    tapping a song opens its profile, which shows the file's artist, album
@@ -25,10 +25,12 @@ server or account — everything is stored locally on the device.
    already registered opens its page instead. The NFC tags section lists
    the registered tags, and tapping a tag opens its own page — the tag's
    details (its name, which can be edited, and its read-only ID), its song
-   list (songs are added straight onto the tag with one pick, a song can
-   be removed from the tag (it stays in the content list), and the list
-   can be reordered by dragging a song's handle to set the play order; no
-   data is written to the tag), and a danger zone to delete the tag (its
+   list (songs are added straight onto the tag — the add-song list offers
+   the app's existing content as checkable rows, and saving the checked
+   selection adds the checked songs at once — a song can be removed from
+   the tag (it stays in the content list), and the list can be reordered
+   by dragging a song's handle to set the play order; no data is written
+   to the tag), and a danger zone to delete the tag (its
    songs stay in the content list).
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
