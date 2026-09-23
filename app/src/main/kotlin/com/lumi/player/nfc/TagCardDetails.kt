@@ -12,10 +12,13 @@ import android.nfc.tech.Ndef
  * and the NDEF tech's extras, both filled in by the framework when the
  * tag is presented - so no connection is made and no RF activity occurs:
  * this is a plain in-memory read of the delivered [Tag], safe to run on
- * any delivered tag, on the foreground-dispatch read path, at any time.
- * For a tag that does not carry the NDEF tech, the NDEF fields are null -
- * a null field is "not available" (the tag details section shows a field
- * only when its value is actually available, never guessing).
+ * any delivered tag, on the foreground-dispatch read path, at any time -
+ * the [Ndef.get] is guarded (the same way the sibling read paths guard
+ * it), so a tag that lists the NDEF tech with a missing extras bundle
+ * degrades to the omitted fields instead of throwing. For a tag that
+ * does not carry the NDEF tech, the NDEF fields are null - a null field
+ * is "not available" (the tag details section shows a field only when
+ * its value is actually available, never guessing).
  */
 data class TagCardDetails(
     val techs: List<String>,
@@ -33,7 +36,11 @@ data class TagCardDetails(
  * carries the NDEF tech. No connect, no RF.
  */
 fun Tag.cardDetails(): TagCardDetails {
-    val ndef = Ndef.get(this)
+    val ndef = try {
+        Ndef.get(this)
+    } catch (e: Exception) {
+        null
+    }
     return TagCardDetails(
         techs = techList.toList(),
         ndefType = ndef?.type,
