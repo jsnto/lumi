@@ -316,7 +316,7 @@ private fun FolderTreeRows(
             FolderTreeRows(
                 level = node.children,
                 depth = depth + 1,
-                path = path + node.displayName,
+                path = nodeKey,
                 scheme = scheme,
                 collapsed = collapsed,
                 playState = playState,

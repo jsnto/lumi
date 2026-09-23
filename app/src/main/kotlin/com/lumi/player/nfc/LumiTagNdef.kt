@@ -24,8 +24,9 @@ data class TagInspect(val data: LumiTagData?, val writable: Boolean)
  *
  * Reading is lenient (a tag with no lumi record, a malformed payload, or an
  * unknown mode all degrade to "no record" / defaults); writing is strict
- * (never write to a read-only tag or one whose NDEF area cannot hold the
- * new message).
+ * (never write to a read-only tag or one whose NDEF area is known to be
+ * too small for the new message - an area whose capacity the discovery
+ * did not report is written anyway, and a too-small one fails the write).
  *
  * API note: this compiles against the project's stub SDK (see AGENTS.md),
  * whose NFC surface is the classic one - [Ndef.get] instead of a
@@ -106,8 +107,19 @@ object LumiTagNdef {
         }
     }
 
-    private fun Ndef.fits(data: LumiTagData): Boolean =
-        isWritable && maxSize >= messageByteLength(toNdefMessage(data))
+    /**
+     * Whether this NDEF handle can take [data]: writable, and its area
+     * large enough WHEN THE CAPACITY IS KNOWN - a capacity the discovery
+     * did not report ([getMaxSize] answering 0) does not fail the check,
+     * the write attempt is the one that decides (an area that turns out
+     * too small fails in [writeNdefMessage] and the write reports the
+     * failure).
+     */
+    private fun Ndef.fits(data: LumiTagData): Boolean {
+        if (!isWritable) return false
+        val capacity = maxSize
+        return capacity == 0 || capacity >= messageByteLength(toNdefMessage(data))
+    }
 
     /** The app's payload currently on the tag, if the tag is NDEF readable. */
     fun readFromTag(tag: Tag?): LumiTagData? =
@@ -116,7 +128,9 @@ object LumiTagNdef {
     /**
      * Whether [tag] is NDEF formatted, writable, and whose NDEF area can
      * hold the message for [data] (a write replaces the tag's whole NDEF
-     * message, so the full area is available).
+     * message, so the full area is available). An area whose capacity
+     * the discovery did not report (getMaxSize answers 0) is reported
+     * as able to hold - the write attempt is the one that decides.
      */
     fun canWritePayload(tag: Tag?, data: LumiTagData): Boolean =
         connectedNdef(tag) { ndef -> ndef.fits(data) } ?: false
@@ -134,8 +148,10 @@ object LumiTagNdef {
 
     /**
      * Writes [data] to [tag], replacing whatever was there. Returns false
-     * (instead of throwing) when the tag is gone, not NDEF writable, or has
-     * no room.
+     * (instead of throwing) when the tag is gone, not NDEF writable, its
+     * NDEF area is known to be too small for the message, or the write
+     * itself fails - including on an unknown-capacity area that turns out
+     * to be too small.
      */
     fun write(tag: Tag?, data: LumiTagData): Boolean {
         val message = toNdefMessage(data)

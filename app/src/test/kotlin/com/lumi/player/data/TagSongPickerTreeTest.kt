@@ -202,6 +202,44 @@ class TagSongPickerTreeTest {
     }
 
     @Test
+    fun sameNamedSubfoldersUnderEqualLabelFoldersCollapseIndependently() {
+        val usbTree = "content://com.android.providers.documents/tree/usb%3AMusic"
+        val entries = listOf(
+            entry(1, "Internal album song", payload("primary:Music/Albums/ia.mp3"), folderId = 42),
+            entry(2, "External album song", payload("usb:Music/Albums/ea.mp3"), folderId = 43),
+        )
+        val tree = tagSongPickerTree(
+            entries,
+            listOf(
+                FolderEntity(id = 42, uri = treeUri, label = "Music"),
+                FolderEntity(id = 43, uri = usbTree, label = "Music"),
+            ),
+        )
+
+        val first = tree.folders[0]
+        val second = tree.folders[1]
+        // Each "Music" row carries its own same-named subfolder: the
+        // subfolder's key leads with the ADDED FOLDER'S ID (not the
+        // shared label), so the two "Albums" rows name distinct nodes.
+        assertEquals(
+            listOf("42", "Albums"),
+            first.children.folders.single().collapseKey(first.collapseKey(emptyList())),
+        )
+        assertEquals(
+            listOf("43", "Albums"),
+            second.children.folders.single().collapseKey(second.collapseKey(emptyList())),
+        )
+        // Collapsing one subfolder hides exactly its own song; the
+        // other equal-named subfolder's song stays.
+        assertEquals(6, tree.visibleRowCount(emptySet()))
+        assertEquals(5, tree.visibleRowCount(setOf(listOf("42", "Albums"))))
+        assertEquals(5, tree.visibleRowCount(setOf(listOf("43", "Albums"))))
+        assertEquals(4, tree.visibleRowCount(setOf(listOf("42", "Albums"), listOf("43", "Albums"))))
+        // The label-led key names nothing any more.
+        assertEquals(6, tree.visibleRowCount(setOf(listOf("Music", "Albums"))))
+    }
+
+    @Test
     fun emptyContentYieldsAnEmptyTree() {
         val tree = tagSongPickerTree(emptyList(), emptyList())
         assertTrue(tree.folders.isEmpty())

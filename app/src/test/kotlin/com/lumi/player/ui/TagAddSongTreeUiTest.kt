@@ -336,6 +336,96 @@ class TagAddSongTreeUiTest {
         }
 
     @Test
+    fun sameNamedSubfoldersUnderEqualLabelFoldersCollapseIndependently() {
+        // Two added folders with the SAME label (a "Music" on the
+        // internal volume and on a USB drive), each carrying a same-named
+        // subfolder ("Albums") with a song nested under it: the
+        // subfolder rows must collapse independently too - their keys
+        // lead with the added folder's id, not the shared label.
+        val usbTree = "content://com.android.providers.documents/tree/usb%3AMusic"
+        dbAndGet {
+            val repository = app().repository
+            val internal = repository.rememberFolder(TREE_URI, "Music")
+            repository.addEntry(
+                EntryType.AUDIO, "Internal album song",
+                payload("primary:Music/Albums/internal.mp3"),
+                folderId = internal.id,
+            )
+            val external = repository.rememberFolder(usbTree, "Music")
+            repository.addEntry(
+                EntryType.AUDIO, "External album song",
+                "content://com.android.providers.documents/tree/usb%3AMusic/document/"
+                    + Uri.encode("usb:Music/Albums/external.mp3", null),
+                folderId = external.id,
+            )
+        }
+        openTagPage()
+        openPicker()
+        waitForText("Internal album song")
+        waitForText("External album song")
+        assertEquals(
+            "the two equal-label folders show two rows",
+            2,
+            compose.onAllNodesWithText("Music").fetchSemanticsNodes().size,
+        )
+        assertEquals(
+            "the two equal-named subfolders show two rows",
+            2,
+            compose.onAllNodesWithText("Albums").fetchSemanticsNodes().size,
+        )
+
+        // Collapsing the FIRST "Albums" row hides exactly that
+        // subfolder's song: the other equal-named subfolder's song
+        // stays.
+        clickAllRow("Albums", 0)
+        assertEquals(
+            "the first subfolder collapse hides only its own song",
+            1,
+            albumSongs().size,
+        )
+        // Collapsing the OTHER equal-named subfolder hides its song too.
+        clickAllRow("Albums", 1)
+        assertEquals("the second subfolder collapse hides the last song", 0, albumSongs().size)
+        // Expanding the first brings back its song alone: the keys still
+        // name one subfolder each.
+        clickAllRow("Albums", 0)
+        assertEquals(
+            "the first subfolder's song returns, the second's stays hidden",
+            1,
+            albumSongs().size,
+        )
+    }
+
+    /** The songs this test's two same-named subfolders carry, displayed now. */
+    private fun albumSongs(): List<String> =
+        listOf("Internal album song", "External album song").filter { label ->
+            compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty()
+        }
+
+    /**
+     * Clicks the [index]th row carrying [label] (several rows can share
+     * a label): the row must be scrolled into the dialog's visible
+     * region first, the same way [clickRow] does it for a single row.
+     */
+    private fun clickAllRow(label: String, index: Int) {
+        compose.onAllNodesWithText(label)[index].performScrollTo()
+        compose.waitForIdle()
+        idleUntil(
+            {
+                try {
+                    compose.onAllNodesWithText(label)[index]
+                        .fetchSemanticsNode().boundsInRoot.height > 0f
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the '$label' row $index to be in view",
+        )
+        compose.onAllNodesWithText(label)[index].performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
     fun checkingSongsAndSavingLinksThemInTheTreesRenderOrder() {
         val ids = storeTreeContent()
         openTagPage()

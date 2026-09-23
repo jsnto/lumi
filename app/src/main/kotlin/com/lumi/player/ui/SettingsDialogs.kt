@@ -84,10 +84,10 @@ internal fun AddSongPickerDialog(
     // set (the copy-on-write below), so the state write is what re-composes.
     var checkedIds: Set<Long> by remember { mutableStateOf(emptySet()) }
     // The collapsed folder rows' keys (the tree's show/hide state): the
-    // rows' name paths (from the tree's root), except the top-level rows,
-    // which carry the added folder's id (their labels can collide, so the
-    // label alone would not name one node). Display state only -
-    // collapsing hides rows, it never changes the save order.
+    // rows' identifying paths from the tree's root - the added folder's
+    // id where its label can collide, the display name otherwise (the
+    // id leads the paths of the rows nested under it too). Display state
+    // only - collapsing hides rows, it never changes the save order.
     var collapsed: Set<List<String>> by remember { mutableStateOf(emptySet()) }
     // Every song row of the tree in its render order (folders first,
     // nested rows right after their folder's row, the level's songs after):
@@ -197,9 +197,10 @@ private fun PickerTreeRows(
 ) {
     val scheme = MaterialTheme.colorScheme
     level.folders.forEach { node ->
-        // The row's show/hide key: the name path, except the top-level
-        // rows, which key by the added folder's id (their labels can
-        // collide - the recursion keeps the name path).
+        // The row's show/hide key - its identifying path from the
+        // tree's root (the added folder's id at the top level, where
+        // labels can collide): the recursion passes it down as the
+        // children's path.
         val nodeKey = node.collapseKey(path)
         val isCollapsed = nodeKey in collapsed
         val hasVisibleBranch = !isCollapsed &&
@@ -239,7 +240,7 @@ private fun PickerTreeRows(
             PickerTreeRows(
                 level = node.children,
                 depth = depth + 1,
-                path = path + node.displayName,
+                path = nodeKey,
                 checkedIds = checkedIds,
                 collapsed = collapsed,
                 onToggleChecked = onToggleChecked,

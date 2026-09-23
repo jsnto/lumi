@@ -376,9 +376,9 @@ class TagCardWriteUiTest {
         compose.waitForIdle()
 
         // The physical write seam: the gate must pass the card through
-        // to it - the unknown capacity is not a verdict, and the write's
-        // own capacity check (on the connected handle, where the real
-        // size is known) is the one that decides.
+        // to the write attempt - an unknown capacity is not a refusal
+        // verdict (only a known-small capacity is); the seam stands in
+        // for that attempt here.
         var writes = 0
         viewModel.tagWriter = { _, _ ->
             writes++

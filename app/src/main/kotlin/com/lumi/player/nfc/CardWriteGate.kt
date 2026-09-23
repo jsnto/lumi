@@ -41,11 +41,11 @@ sealed interface CardWriteGate {
  * arithmetic the write itself uses). A capacity the discovery data does
  * not report ([Ndef.getMaxSize] answering 0 - no NDEF length in the
  * card's extras, the same case the details reader treats as unavailable)
- * is NOT a verdict: the card passes the gate, and the physical write -
- * whose own capacity check runs on the connected handle, where the
- * real size is known - is the one that decides (a card that turns out
- * to be too small fails there and reports the write's failure). Pure
- * discovery-data reads; no connect, no RF.
+ * is NOT a verdict: the card passes the gate and is written like any
+ * other that passes (the write refuses up front only for a KNOWN-small
+ * area), so a card that turns out to be too small fails in the write
+ * itself and reports the write's failure. Pure discovery-data reads;
+ * no connect, no RF.
  */
 fun cardWriteGate(tag: Tag, data: LumiTagData): CardWriteGate {
     val ndef = try {
