@@ -4,6 +4,7 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -533,13 +534,26 @@ class TagCardWriteUiTest {
 
     @Test
     fun aTagListOverTheAppCapIsReported_asTooLarge_neverAsACardFailure() {
-        // The payload carries the tag's full song list: a long list
-        // exceeds the app's own write cap (LumiTagNdef.MAX_PAYLOAD_BYTES).
-        // That refusal is the cap's, not any card's - it must be reported
-        // as a permanent size fact, never as a card failure the user
-        // could retry.
+        // The backstop: the button's live size check greys out an
+        // already-over-cap list, but the settle-side pre-check still
+        // guards a list that grows over the cap AFTER the scan is armed
+        // (the payload is sized against the app's own write cap
+        // (LumiTagNdef.MAX_PAYLOAD_BYTES) at settle time, from the tag's
+        // live song list). That refusal is the cap's, not any card's - it
+        // must be reported as a permanent size fact, never as a card
+        // failure the user could retry, and no physical write is
+        // attempted.
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
+
+        // Arm the card-write scan while the tag's list is small (the
+        // button is enabled - no songs yet)...
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written.").assertExists()
+
+        // ...then grow the list over the cap while the scan is armed.
         val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
         val names = (0 until 12).map { "Song %02d ".format(it + 1) + "x".repeat(42) }
         dbAndGet {
@@ -550,15 +564,10 @@ class TagCardWriteUiTest {
                 )
             }
         }
-
         val needed = LumiTagNdef.messageByteLength(
             LumiTagNdef.toNdefMessage(LumiTagData("Porch", viewModel.playMode.value, names)),
         )
         check(needed > LumiTagNdef.MAX_PAYLOAD_BYTES) { "the test list must exceed the app's write cap" }
-
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
-        compose.waitForIdle()
 
         var writes = 0
         viewModel.tagWriter = { _, _ ->
@@ -567,8 +576,8 @@ class TagCardWriteUiTest {
         }
 
         // The tag's own card with plenty of capacity (a card the gate
-        // would pass): the cap refusal still wins, and no physical write
-        // is attempted at all.
+        // would pass): the settle-time cap refusal still wins, and no
+        // physical write is attempted at all.
         sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 4096))
 
         idleUntil(
@@ -585,6 +594,90 @@ class TagCardWriteUiTest {
         assertTrue("the scan is disarmed after settling", !viewModel.scanActive.value)
         assertNull("the card-write target is cleared after settling", viewModel.cardWriteTarget.value)
         assertNull("the presented card was not captured for registration", viewModel.capturedUid.value)
+    }
+
+    @Test
+    fun anOverCapTagShowsTheSizeNote_andDisablesTheSaveButton() {
+        // The same long list the over-cap refusal pins: the payload
+        // exceeds the app's write cap, so the save-to-card button is
+        // greyed out and the note near it says the data is too large -
+        // a write that cannot succeed cannot even be attempted.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+        val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
+        val names = (0 until 12).map { "Song %02d ".format(it + 1) + "x".repeat(42) }
+        dbAndGet {
+            names.forEach {
+                app().repository.linkEntryToTag(
+                    tagId,
+                    app().repository.addEntry(com.lumi.player.data.EntryType.AUDIO, it, "content://$it").id,
+                )
+            }
+        }
+
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.waitForIdle()
+
+        // The note shows near the button (the mirror's text matcher is
+        // exact, so the probe is the note's full text)...
+        idleUntil(
+            {
+                try {
+                    compose.onNodeWithText("This tag's data is too large for the card payload - nothing can be written.").assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the over-cap note",
+        )
+        // ...and the button carries the disabled semantic...
+        assertTrue(
+            "the save button is disabled while the payload is over the cap",
+            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        // ...and a tap arms nothing: no scan, no card-write target.
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
+        assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
+    }
+
+    @Test
+    fun anUnderCapTagKeepsTheSaveButtonEnabled() {
+        // A short song list keeps the payload under the app's write cap:
+        // no size note, the button stays enabled exactly as before, and
+        // tapping it arms the card-write scan.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+        val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
+        dbAndGet {
+            app().repository.linkEntryToTag(
+                tagId,
+                app().repository.addEntry(com.lumi.player.data.EntryType.AUDIO, "Short song", "content://short").id,
+            )
+        }
+
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.waitForIdle()
+
+        // No size note, and the button carries no disabled semantic.
+        compose.onNodeWithText("This tag's data is too large for the card payload - nothing can be written.").assertDoesNotExist()
+        assertFalse(
+            "the save button stays enabled while the payload is under the cap",
+            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+
+        // Tapping it arms the scan (the card-write dialog appears) -
+        // then Cancel disarms it again.
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written.").assertExists()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+        assertFalse("the scan is disarmed after the cancel", viewModel.scanActive.value)
     }
 
     @Test

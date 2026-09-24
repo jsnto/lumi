@@ -59,6 +59,8 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagSongRow
+import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.ndefTypeName
 import kotlin.math.roundToInt
 
@@ -203,13 +205,38 @@ internal fun TagDetailPane(
             // card (its NFC ID matches the tag's) and is writable and can
             // hold it; a card with a different NFC ID, or one that isn't,
             // is reported and nothing is written.
+            //
+            // The button mirrors the write's own size check LIVE: the
+            // payload it arms (the tag's name, the app's current play
+            // mode, and the tag's ordered song list - the same payload
+            // [LumiViewModel.settleCardWrite] sizes against the app's
+            // write cap) is measured on every recomposition, and while
+            // it is over the cap NO card can take it - so the button is
+            // greyed out and the note says so: a write that cannot
+            // succeed cannot even be attempted. The settle-side pre-check
+            // stays as the backstop (the list can change after the button
+            // is rendered).
             SectionCard(title = "Save to NFC card") {
                 Text(
                     "Writes this tag's data (its name, the play mode, and its song list) to the NFC card. Only this tag's own card is written - a card with a different NFC ID is not.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                val playMode by viewModel.playMode.collectAsState()
+                val payloadBytes = LumiTagNdef.messageByteLength(
+                    LumiTagNdef.toNdefMessage(
+                        LumiTagData(tag.name, playMode, linked.map { it.name }),
+                    ),
+                )
+                val overCap = payloadBytes > LumiTagNdef.MAX_PAYLOAD_BYTES
+                if (overCap) {
+                    Text(
+                        "This tag's data is too large for the card payload - nothing can be written.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 FilledTonalButton(
                     onClick = { viewModel.startCardWrite(tag) },
+                    enabled = !overCap,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
