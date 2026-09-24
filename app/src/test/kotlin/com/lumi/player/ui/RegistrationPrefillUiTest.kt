@@ -17,6 +17,7 @@ import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
@@ -387,6 +388,49 @@ class RegistrationPrefillUiTest {
             listOf("First song", "Gone song"),
             songNamesForTagUid(UID),
         )
+    }
+
+    @Test
+    fun rescanningADeletedTagWhoseCardCarriesAClampedLongSongName_restoresItToTheLiveEntry() {
+        // A song whose content label exceeds the payload's 50-char name
+        // cap: the card write carries its clamped form, and the re-scan's
+        // save must resolve the clamped name back to the live entry (the
+        // song plays again and the add-song picker flags the real row by
+        // its full label) instead of stranding it as a "song not found"
+        // row.
+        val fullLabel = "a".repeat(45) + "-very-long-song-title.mp3"
+        val viewModel = openSettings()
+        seedFirstLifeAndDelete(viewModel, listOf(fullLabel))
+
+        // The card was written in the new format: its payload carries the
+        // song list in the codec's clamped form (the 50-char name cap).
+        val written = checkNotNull(
+            LumiTagNdef.fromJson(
+                LumiTagNdef.toJson(
+                    LumiTagData("Porch", PlayMode.PROXIMITY, listOf(fullLabel)),
+                ),
+            ),
+        )
+        viewModel.captureForTest(UID, written)
+        compose.waitForIdle()
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        idleUntil({ songNamesForTagUid(UID).size == 1 }, message = "the restored link")
+
+        // The clamped carried name resolved back to the content entry: the
+        // restored link carries the entry's FULL label (the live name
+        // resolution matches it) with the entry as its provenance.
+        val rows = dbAndGet { app().repository.entriesForTag(app().repository.tagByUid(UID)!!.id) }
+        assertEquals(1, rows.size)
+        assertEquals(
+            "the link stores the entry's full label, not the clamped one",
+            fullLabel,
+            rows.single().name,
+        )
+        assertEquals(dbAndGet { app().repository.entryByLabel(fullLabel)?.id }, rows.single().entryId)
+        assertNotNull("the restored song resolves to the live entry and plays", rows.single().entry)
     }
 
     // ---- stale capture read must not overwrite a newer session ----

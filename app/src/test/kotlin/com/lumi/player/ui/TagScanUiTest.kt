@@ -39,8 +39,8 @@ import org.robolectric.shadows.ShadowToast
  * system's foreground dispatch delivers). When a tag is scanned, its UID
  * is looked up among the registered tags: a registered one opens that
  * tag's profile page (the tag detail page), and an unregistered one goes
- * into the registration flow (capture, naming dialog, optional
- * write-to-tag). The scan result is driven the same way the NFC tests
+ * into the registration flow (capture, naming dialog - registration never
+ * writes the card). The scan result is driven the same way the NFC tests
  * drive tag reads: [ActivityController.newIntent] ->
  * [MainActivity.onNewIntent].
  */

@@ -77,8 +77,20 @@ class LumiRepository(private val db: LumiDatabase) {
 
     suspend fun tagByUid(uid: String): TagEntity? = dao.tagByUid(uid.trim())
 
-    /** The first stored content entry with the display name [label] (a tag song's live name resolution, first stored copy wins). */
-    suspend fun entryByLabel(label: String): EntryEntity? = dao.entryByLabel(label)
+    /**
+     * The first stored content entry with the display name [label] - a tag
+     * song's name resolution, first stored copy wins. An exact stored name
+     * wins outright; a name no entry carries exactly (the card payload's
+     * song names are clamped to the payload's 50-char name cap at write
+     * time, so a longer stored label is carried as its own prefix) resolves
+     * to the first stored entry whose label carries it as a prefix; a name
+     * the content carries in no form resolves to nothing.
+     */
+    suspend fun entryByLabel(label: String): EntryEntity? {
+        if (label.isBlank()) return null
+        dao.entryByLabel(label)?.let { return it }
+        return dao.entries().firstOrNull { it.label.startsWith(label) }
+    }
 
     /** Renames a registered tag; a no-op when the UID is unknown. */
     suspend fun renameTag(uid: String, name: String) {

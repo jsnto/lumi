@@ -61,9 +61,11 @@ interface LumiDao {
     suspend fun entriesByPayloads(payloads: Set<String>): List<EntryEntity>
 
     /**
-     * Deletes the stored content rows whose payload is in [payloads]; tag
-     * links to the deleted rows cascade off with them, the same way a
-     * single-entry deletion does.
+     * Deletes the stored content rows whose payload is in [payloads]; a
+     * tag's link to a deleted row survives the deletion (tag_links carries
+     * no foreign key to entries - the song's name snapshot is what the tag
+     * keeps), so the song holds its place on the tag's list as a "song not
+     * found" row.
      */
     @Query("DELETE FROM entries WHERE payload IN (:payloads)")
     suspend fun deleteEntriesByPayloads(payloads: Set<String>): Int

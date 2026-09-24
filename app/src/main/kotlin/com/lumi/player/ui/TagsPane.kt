@@ -32,8 +32,8 @@ import com.lumi.player.data.TagEntity
  * list): arming it, the next tag read either opens a registered tag's
  * profile page (the per-tag page where the tag can be renamed, given
  * songs, or deleted from its danger zone) or takes an unregistered tag
- * into the registration flow (capture, naming dialog, optional
- * write-to-tag). Tapping a tag row's body opens the tapped tag's detail
+ * into the registration flow (capture, naming dialog - registration never
+ * writes the card). Tapping a tag row's body opens the tapped tag's detail
  * page.
  */
 @OptIn(ExperimentalMaterial3Api::class)

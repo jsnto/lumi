@@ -151,8 +151,8 @@ class FolderRemoveUiTest {
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 2 songs from the folder.")
 
-        // Link one of the imported songs to a tag, so the cascade off the
-        // deleted entry is observable.
+        // Link one of the imported songs to a tag, so the link's survival
+        // past the deleted entry (as a "song not found" row) is observable.
         val tag = checkNotNull(dbAndGet { app().repository.addTag("uid-1", "Test tag") })
         val entryA = dbAndGet { app().repository.observeEntries().first() }.first { it.label == "song-a.mp3" }
         dbAndGet { app().repository.linkEntryToTag(tag.id, entryA.id) }

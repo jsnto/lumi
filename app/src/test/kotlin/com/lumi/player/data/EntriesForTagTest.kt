@@ -269,4 +269,25 @@ class EntriesForTagTest {
             assertNull(rows[1].entryId)
             assertEquals(listOf(0, 1), rows.map { it.sortOrder })
         }
+
+    @Test
+    fun entryByLabelResolvesTheExactName_elseTheFirstStoredLabelCarryingItAsAPrefix() =
+        runBlocking {
+            val repo = repository()
+            // An exact stored name wins outright, even when a longer
+            // stored label also carries it as a prefix.
+            repo.addEntry(EntryType.AUDIO, "Exact song (the full title).mp3", "content://longer")
+            val exact = repo.addEntry(EntryType.AUDIO, "Exact song", "content://exact")
+            assertEquals(exact.id, repo.entryByLabel("Exact song")?.id)
+            // A name no entry carries exactly resolves to the FIRST stored
+            // entry whose label carries it as a prefix - the shape of a
+            // song name the card payload's 50-char name cap wrote as a
+            // prefix of its longer stored label.
+            val carried = "y".repeat(49)
+            val first = repo.addEntry(EntryType.AUDIO, "$carried one.mp3", "content://first")
+            repo.addEntry(EntryType.AUDIO, "$carried two.mp3", "content://second")
+            assertEquals(first.id, repo.entryByLabel(carried)?.id)
+            // A name the content carries in no form resolves to nothing.
+            assertNull(repo.entryByLabel("Gone song"))
+        }
 }

@@ -58,7 +58,15 @@ object LumiTagNdef {
      */
     const val MAX_PAYLOAD_BYTES = 512
 
-    /** The song display names' cap in the payload: each name is clamped to the tag-name length, so a card cannot carry a name the tag cannot display. */
+    /**
+     * The song display names' cap in the payload: each name is clamped to
+     * the tag-name length, so a card cannot carry a name the tag cannot
+     * display. A stored label longer than the cap is carried as its first
+     * [MAX_SONG_NAME_LENGTH] characters, and the restore path resolves that
+     * prefix back to the longer stored label (the first content entry
+     * whose label carries it), so a card round trip never strands a song
+     * as "song not found".
+     */
     private const val MAX_SONG_NAME_LENGTH = MAX_NAME_LENGTH
 
     private val TYPE_BYTES: ByteArray = MIME_TYPE.toByteArray(StandardCharsets.UTF_8)

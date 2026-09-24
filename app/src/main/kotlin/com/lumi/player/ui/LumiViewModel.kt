@@ -101,8 +101,8 @@ class LumiViewModel(
     /**
      * Whether a tag scan is in progress: the next tag read settles it - a
      * registered tag resolves to its profile page, an unregistered one
-     * enters the registration flow (capture + naming dialog, with the
-     * optional write-to-tag).
+     * enters the registration flow (capture + naming dialog - registration
+     * never writes the card).
      */
     private val _scanActive = MutableStateFlow(false)
     val scanActive: StateFlow<Boolean> = _scanActive.asStateFlow()
@@ -228,8 +228,9 @@ class LumiViewModel(
      * progress, the read settles the scan: a registered tag resolves to
      * its profile page, an unregistered one is captured for the
      * registration flow.
-     * [tag] is the raw NFC tag; during registration it is kept (for a
-     * later write) and its lumi payload read for form prefill.
+     * [tag] is the raw NFC tag: its lumi payload is read for the
+     * registration's form prefill and its discovery data recorded as the
+     * card's per-uid details.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (tag != null) inspectTagDetails(uid, tag)
@@ -289,8 +290,8 @@ class LumiViewModel(
      * registered tag resolves to its profile page (the settings screen
      * consumes [pendingTagProfile] and opens the tag detail page) - or, for
      * a scan-to-assign, links its target song to it; an unknown one goes
-     * into the registration flow (capture + naming dialog, with the
-     * optional write-to-tag), and a scan-to-assign's song waits for the
+     * into the registration flow (capture + naming dialog - registration
+     * never writes the card), and a scan-to-assign's song waits for the
      * tag's save. Either way the scan is over, so further reads are normal
      * playback reads.
      */
@@ -666,9 +667,9 @@ class LumiViewModel(
      * Arms a tag scan (the NFC tags pane's "Scan NFC" action): the next
      * tag read settles it - a registered tag opens its profile page, an
      * unregistered one goes into the registration flow (capture, naming
-     * dialog, optional write-to-tag). Reuses the app's only read path -
-     * the foreground-dispatch read into [onTagDetected] - so only the
-     * flag checked there differs.
+     * dialog - registration never writes the card). Reuses the app's only
+     * read path - the foreground-dispatch read into [onTagDetected] - so
+     * only the flag checked there differs.
      */
     fun startTagScan() {
         _capturedUid.value = null
@@ -796,8 +797,10 @@ class LumiViewModel(
      * or a fresh registration of a card whose payload carries songs), the
      * capture's restore song list (the payload's songs, else the remembered
      * ones) is linked onto the tag name-for-name, with each name resolving
-     * to the live content entry that plays it - or staying a "song not
-     * found" row when no content carries the name.
+     * to the live content entry that plays it - a name the card payload's
+     * 50-char name cap wrote as a prefix of a longer stored label resolves
+     * to that label, and the link stores it in full - or staying a "song
+     * not found" row when no content carries the name.
      */
     fun confirmTagName(name: String, mode: PlayMode) {
         val uid = _capturedUid.value ?: return
@@ -814,11 +817,16 @@ class LumiViewModel(
             val tag = saved ?: repository.tagByUid(uid)
             // The card's songs restored onto a tag that came back empty -
             // the card payload's list when it carried one, else the
-            // remembered per-uid list. Names land in their carried order,
-            // each with the live entry its name resolves to (or none).
+            // remembered per-uid list. Names land in their carried order;
+            // each resolves to the live content entry its name points at
+            // (a name the payload's 50-char name cap wrote as a prefix
+            // resolves to the longer stored label), and the link stores
+            // that entry's full label - or the carried name, when nothing
+            // resolves (the tag's "song not found" row).
             if (tag != null && restoreSongs.isNotEmpty() && repository.entriesForTag(tag.id).isEmpty()) {
                 restoreSongs.distinct().forEach { songName ->
-                    repository.insertLinkByName(tag.id, songName, repository.entryByLabel(songName)?.id)
+                    val entry = repository.entryByLabel(songName)
+                    repository.insertLinkByName(tag.id, entry?.label ?: songName, entry?.id)
                 }
             }
             // The card's last saved name + song list remembered per uid -
