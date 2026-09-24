@@ -223,8 +223,19 @@ internal fun TagDetailPane(
             // published by MainActivity (re-checked on resume AND on the
             // radio's state-changed broadcast), so re-enabling the radio
             // while the app is open re-enables the button live - no
-            // restart or re-entry. The two conditions compose: the
-            // button is never tappable while either holds.
+            // restart or re-entry.
+            //
+            // AND while the tag's OWN card is known non-writable from the
+            // last presented handle's discovery data (the same uid-keyed
+            // details the details section shows): a card that carries no
+            // NDEF tech, or whose NDEF area is read-only, is refused by
+            // the settle-time gate the same way - so a write that cannot
+            // succeed cannot even be attempted, and the note mirrors the
+            // gate's own verdict copy. A tag whose details were never
+            // observed is NOT refused here (unknown is not non-writable):
+            // the gate decides for the card actually presented at settle
+            // time. The three conditions compose: the button is never
+            // tappable while any of them holds.
             SectionCard(title = "Save to NFC card") {
                 Text(
                     "Writes this tag's data (its name and its song list) to the NFC card. Only this tag's own card is written - a card with a different NFC ID is not.",
@@ -259,9 +270,30 @@ internal fun TagDetailPane(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
+                // The tag's own card, as its last presented handle
+                // reported it (the same uid-keyed record the details
+                // section shows): no NDEF tech, or a read-only NDEF area,
+                // is refused by the settle-time gate the same way, so the
+                // control is unusable while that is what the last read
+                // saw. A tag whose details were never observed is not
+                // refused here: the gate decides for the card actually
+                // presented at settle time.
+                val cardDetails = tagDetails[tag.uid]
+                val cardUnwritable = cardDetails != null &&
+                    (cardDetails.ndefType == null || cardDetails.ndefWritable == false)
+                if (cardUnwritable) {
+                    Text(
+                        if (cardDetails?.ndefType == null) {
+                            "That card isn't an NDEF card, so it can't be written."
+                        } else {
+                            "That card is read-only, so it can't be written."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 FilledTonalButton(
                     onClick = { viewModel.startCardWrite(tag) },
-                    enabled = !overCap && nfcUsable,
+                    enabled = !overCap && nfcUsable && !cardUnwritable,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),

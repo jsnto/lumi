@@ -51,7 +51,7 @@ import org.robolectric.shadows.ShadowToast
  * SAVE TO CARD: the "Save to NFC card" section arms the app's existing
  * foreground-dispatch scan (no reader mode) targeted at a card write
  * for the tag's OWN card: a presented card is written the tag's data
- * (its name and the play mode) through the existing write path only
+ * (its name and its song list) through the existing write path only
  * when the card's NFC ID matches the tag's uid - a mismatched card is
  * reported and never written. For the matched card, the verdict is
  * discovery-time data: a card that isn't NDEF, is read-only, or is too
@@ -939,5 +939,119 @@ class TagCardWriteUiTest {
         compose.onNodeWithText("Scan a card").performClick()
         compose.waitForIdle()
         assertTrue("the re-enabled button arms the card-write scan", viewModel.scanActive.value)
+    }
+
+    // ---- the card's own writability gating (the tag's card, as its last
+    // presented handle reported it, refuses the write) ----
+
+    @Test
+    fun aReadOnlyCardDisablesTheSaveButton_withANoteSayingWhy() {
+        // The tag's OWN card, as its last presented handle reported it,
+        // is READ-ONLY: the settle-time gate would refuse it from the
+        // same discovery data, so the save-to-card control is greyed out
+        // and the note next to it says why - a write that cannot succeed
+        // cannot even be attempted.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        // A normal read of the tag's own (read-only) card records its
+        // discovery details for the tag's uid - the details section shows
+        // the same fact (Writable: No) that the gate would reach...
+        sendTag(controller, forgeTag(TAG_UID, writable = false))
+        idleUntil(
+            {
+                try {
+                    compose.onNodeWithText("No").assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the read-only detail",
+        )
+        compose.onNodeWithText("Scan a card").performScrollTo()
+
+        // ...the note next to the button says why...
+        idleUntil(
+            {
+                try {
+                    compose.onNodeWithText("That card is read-only, so it can't be written.").assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the read-only note",
+        )
+        // ...and the button carries the disabled semantic...
+        assertTrue(
+            "the save button is disabled while the tag's card is read-only",
+            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        // ...and a tap arms nothing: no scan, no card-write target.
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
+        assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
+    }
+
+    @Test
+    fun aNonNdefCardDisablesTheSaveButton_withItsOwnNote() {
+        // The tag's OWN card, as its last presented handle reported it,
+        // carries NO NDEF tech: there is no NDEF area the write could
+        // reach, so the save-to-card control is greyed out with its own
+        // note, and a tap arms nothing.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        sendTag(controller, forgeTag(TAG_UID, ndef = false))
+        compose.onNodeWithText("Scan a card").performScrollTo()
+
+        idleUntil(
+            {
+                try {
+                    compose.onNodeWithText("That card isn't an NDEF card, so it can't be written.").assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the non-NDEF note",
+        )
+        assertTrue(
+            "the save button is disabled while the tag's card is not an NDEF card",
+            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
+        assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
+    }
+
+    @Test
+    fun aWritableCardKeepsTheSaveButtonEnabled() {
+        // The tag's OWN card, as its last presented handle reported it,
+        // is NDEF and writable: the card offers no refusal - its notes
+        // stay absent and the button stays enabled exactly as before, so
+        // a tap arms the write scan.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        sendTag(controller, forgeTag(TAG_UID))
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("That card is read-only, so it can't be written.").assertDoesNotExist()
+        compose.onNodeWithText("That card isn't an NDEF card, so it can't be written.").assertDoesNotExist()
+        assertFalse(
+            "the save button stays enabled for the tag's own writable card",
+            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+        assertTrue("the enabled button arms the card-write scan", viewModel.scanActive.value)
     }
 }
