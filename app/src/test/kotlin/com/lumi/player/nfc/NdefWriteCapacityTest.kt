@@ -2,7 +2,6 @@ package com.lumi.player.nfc
 
 import android.nfc.Tag
 import android.os.Bundle
-import com.lumi.player.data.PlayMode
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,12 +27,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class NdefWriteCapacityTest {
 
-    private val data = LumiTagData(name = "Hallway", mode = PlayMode.PROXIMITY)
+    private val data = LumiTagData(name = "Hallway")
 
     /** A payload carrying the full ordered song list (a write saves the songs too). */
     private val withSongs = LumiTagData(
         name = "Hallway",
-        mode = PlayMode.PROXIMITY,
         songs = listOf("First song", "Second song", "Gone song"),
     )
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -59,8 +60,18 @@ internal fun TagsPane(
             // another row of the list. It arms the unified scan (the same
             // read path playback uses: the foreground-dispatch read into
             // LumiViewModel.onTagDetected).
+            //
+            // The fill is the theme's LIGHTER variant of the same accent
+            // (primaryContainer/onPrimaryContainer - the settled palette's
+            // peach fill with the deep label, the language the rest of the
+            // settings UI uses): the default primary fill reads too dark
+            // next to the pane's cards and chips.
             Button(
                 onClick = { viewModel.startTagScan() },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp),

@@ -19,6 +19,8 @@ import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
+import com.lumi.player.data.SongDownloadResult
+import com.lumi.player.data.SongDownloader
 import com.lumi.player.data.SongMetadata
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongRow
@@ -140,6 +142,32 @@ class LumiViewModel(
     private val _tagCardDetails = MutableStateFlow<Map<String, TagCardDetails>>(emptyMap())
     val tagCardDetails: StateFlow<Map<String, TagCardDetails>> = _tagCardDetails.asStateFlow()
 
+    // The per-song download urls observed per presented tag uid (the card
+    // side's "secret option" - see [LumiTagData.songUrls]): a read updates
+    // the entry for THAT uid only, so a tag's page keeps its own urls no
+    // matter what is scanned afterwards. The map is the card payload's
+    // clamped-name → url map. Read-only app-side: the app's own card write
+    // never carries urls.
+    private val _tagSongUrls = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
+    val tagSongUrls: StateFlow<Map<String, Map<String, String>>> = _tagSongUrls.asStateFlow()
+
+    // ---- song downloads (the tag page's download icon, Music/lumi) ----
+
+    /**
+     * The download state of one tag song row (keyed by the row's link id -
+     * the row's stable identity; no entry means idle).
+     */
+    sealed interface SongDownloadState {
+        /** Downloading: [progress] is the 0..1 fraction, or null while the total size is unknown. */
+        data class InFlight(val progress: Float?) : SongDownloadState
+
+        /** The download failed (retryable): the row's download action retries. */
+        data object Failed : SongDownloadState
+    }
+
+    private val _songDownloadStates = MutableStateFlow<Map<Long, SongDownloadState>>(emptyMap())
+    val songDownloadStates: StateFlow<Map<Long, SongDownloadState>> = _songDownloadStates.asStateFlow()
+
     // ---- device NFC usability (published by MainActivity from the NfcAdapter) ----
 
     /**
@@ -257,6 +285,7 @@ class LumiViewModel(
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (tag != null) inspectTagDetails(uid, tag)
+        if (tag != null) readTagSongUrls(uid, tag)
         // A card-write scan (the tag details page's "Save to NFC card")
         // is armed for a specific card write: the read's card is written
         // the target tag's data ONLY when the card's NFC ID is the tag's
@@ -367,6 +396,21 @@ class LumiViewModel(
             // body runs before any suspension, so the publish is ordered
             // with the read that produced it.
             _tagCardDetails.value = _tagCardDetails.value + (uid to tag.cardDetails())
+        }
+    }
+
+    /**
+     * Best-effort read of the presented card's per-song download urls (the
+     * card side's "secret option"): the read's payload publishes its
+     * clamped-name → url map for that uid. It is off the playback path's
+     * critical path (the playback read never waits on it), and a read that
+     * answers nothing publishes an empty map - a re-scan refreshes the
+     * record, including clearing urls the card no longer carries.
+     */
+    private fun readTagSongUrls(uid: String, tag: Tag) {
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) { songPayloadReader(tag) }
+            _tagSongUrls.value = _tagSongUrls.value + (uid to (data?.songUrls ?: emptyMap()))
         }
     }
 
@@ -827,6 +871,54 @@ class LumiViewModel(
      */
     internal var tagInspector: (Tag?, LumiTagData) -> TagInspect = { tag, fallback ->
         LumiTagNdef.inspect(tag, fallback)
+    }
+
+    /**
+     * Test seam: the card's lumi payload read for the per-song download
+     * urls (a presentation's best-effort read), replaced in unit tests.
+     */
+    internal var songPayloadReader: suspend (Tag?) -> LumiTagData? = { tag ->
+        LumiTagNdef.readFromTag(tag)
+    }
+
+    /**
+     * Test seam: the song download (the Music/lumi MediaStore write),
+     * replaced in unit tests.
+     */
+    internal var songDownloader: suspend (
+        songName: String,
+        url: String,
+        onProgress: (Float?) -> Unit,
+    ) -> SongDownloadResult = { name, url, onProgress ->
+        SongDownloader(context.contentResolver).download(name, url, onProgress)
+    }
+
+    /**
+     * Downloads the song a tag row points at ([url] is the card's url for
+     * [songName]; the page has already checked the download-icon predicate
+     * - present, valid, not in content) into the public music folder's
+     * lumi subfolder. A download already in flight for the row is ignored
+     * (no double start); a failure lands in the row's retryable failed
+     * state.
+     */
+    fun downloadTagSong(linkId: Long, songName: String, url: String) {
+        if (_songDownloadStates.value[linkId] is SongDownloadState.InFlight) return
+        _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.InFlight(null))
+        viewModelScope.launch {
+            when (val result = songDownloader(songName, url) { progress ->
+                _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.InFlight(progress))
+            }) {
+                is SongDownloadResult.Success -> {
+                    _songDownloadStates.value = _songDownloadStates.value - linkId
+                    event("Saved \"$songName\" to Music/lumi.")
+                }
+
+                is SongDownloadResult.Failure -> {
+                    _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.Failed)
+                    event("Couldn't download \"$songName\" - tap to try again.")
+                }
+            }
+        }
     }
 
     fun discardCaptured() {
