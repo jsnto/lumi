@@ -40,11 +40,22 @@ sealed interface SongDownloadResult {
  */
 class SongDownloader(
     private val resolver: ContentResolver,
+    // Finite timeouts: a host that never completes the handshake, or that
+    // stalls the body after answering, fails the download (the retryable
+    // state) instead of hanging it in flight.
+    private val connectTimeoutMs: Int = 15_000,
+    private val readTimeoutMs: Int = 30_000,
     // Test seam: the HTTP open (tests substitute a fake body + size).
     private val openUrl: (String) -> OpenedUrl = { url ->
         val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
         connection.connect()
-        if (connection.responseCode in 400..599) {
+        // A final code of 300+ is not the resource: a 3xx the platform did
+        // not follow (cross-protocol redirects are not auto-followed) or a
+        // 4xx/5xx refusal - streaming its body would save a stub (or
+        // nothing) as the "song".
+        if (connection.responseCode >= 300) {
             throw java.io.IOException("HTTP " + connection.responseCode)
         }
         OpenedUrl(connection.inputStream, connection.contentLength.toLong())

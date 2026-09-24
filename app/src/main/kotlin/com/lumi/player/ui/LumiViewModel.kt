@@ -150,7 +150,9 @@ class LumiViewModel(
     // known urls. The entry updates for THAT uid only, so a tag's page
     // keeps its own urls no matter what is scanned afterwards. The map is
     // the card payload's clamped-name → url map. Read-only app-side: the
-    // app's own card write never carries urls.
+    // app's own card write never carries urls. A successful card write
+    // clears the entry (the card now carries the app's url-less payload);
+    // a refused or failed write leaves it (the card was not rewritten).
     private val _tagSongUrls = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
     val tagSongUrls: StateFlow<Map<String, Map<String, String>>> = _tagSongUrls.asStateFlow()
 
@@ -460,7 +462,8 @@ class LumiViewModel(
      * that passes reaches the physical write (which itself reports a
      * failure - an unknown-capacity card can turn out too small there, or
      * the card left range mid-write). A write that lands remembers the
-     * card's last saved name + songs (the per-card memory). The scan
+     * card's last saved name + songs (the per-card memory) and clears the
+     * card's published urls (the written payload carries none). The scan
      * settles either way (the target is cleared and the flag disarmed):
      * further reads are normal reads, never re-routed to this write - the
      * user re-arms the action to try again.
@@ -499,10 +502,12 @@ class LumiViewModel(
                     is CardWriteGate.Ok ->
                         if (withContext(Dispatchers.IO) { tagWriter(tag, payload) }) {
                             // The write landed: the card now carries the
-                            // name + songs, and the per-uid memory follows
-                            // the written card (the restore source that
-                            // survives the tag row's deletion).
+                            // name + songs (the app's url-less payload),
+                            // and the per-uid memory follows the written
+                            // card (the restore source that survives the
+                            // tag row's deletion).
                             repository.rememberTag(target.uid, target.name, names)
+                            _tagSongUrls.value = _tagSongUrls.value + (uid to emptyMap())
                             "Saved to the card."
                         } else {
                             "Couldn't write to that card - keep it on the phone and try again."

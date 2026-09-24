@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -137,6 +138,119 @@ class SongDownloaderTest {
         }
         assertTrue("a mid-stream failure is a failure", result is SongDownloadResult.Failure)
         assertEquals(1, provider.deleted.size)
+    }
+
+    @Test
+    fun aFinalRedirectCodeIsAFailure_notStreamedAsTheSong() {
+        // A 3xx the platform does not follow (a cross-protocol redirect -
+        // HttpURLConnection only auto-follows same-protocol ones) is a
+        // final code of 300+: streaming its body would save a stub (or
+        // nothing) as the "song", so the download fails and the
+        // half-inserted row is cleaned up.
+        val server = RawHttpServer { out ->
+            out.write(
+                (
+                    "HTTP/1.1 301 Moved Permanently\r\n" +
+                        "Location: https://cdn.example.com/elsewhere/song.mp3\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "\r\n"
+                ).toByteArray(),
+            )
+            out.flush()
+        }
+        try {
+            val result = runBlocking {
+                SongDownloader(resolver)
+                    .download(
+                        "Porch song",
+                        "http://127.0.0.1:" + server.port + "/song.mp3",
+                    ) { }
+            }
+            assertTrue("a 3xx final code fails the download", result is SongDownloadResult.Failure)
+            assertEquals("the half-inserted row is cleaned up", 1, provider.deleted.size)
+        } finally {
+            server.release()
+        }
+    }
+
+    @Test
+    fun aStalledBodySettlesIntoAFailure_insteadOfHanging() {
+        // A host that accepts the connection, answers the headers, and
+        // never sends the body: the read timeout (the constructor's - here
+        // a short one, the default is 30s) must settle the download into
+        // the retryable failure state instead of leaving it in flight
+        // forever.
+        val server = RawHttpServer { out ->
+            out.write(
+                (
+                    "HTTP/1.1 200 OK\r\n" +
+                        "Content-Length: 1024\r\n" +
+                        "\r\n"
+                ).toByteArray(),
+            )
+            out.flush()
+            // Deliberately send NO body: the client's read must time out.
+        }
+        val progress = mutableListOf<Float?>()
+        try {
+            val result = runBlocking {
+                SongDownloader(resolver, connectTimeoutMs = 5_000, readTimeoutMs = 500)
+                    .download(
+                        "Porch song",
+                        "http://127.0.0.1:" + server.port + "/song.mp3",
+                    ) { progress += it }
+            }
+            assertTrue("a stalled body fails the download instead of hanging", result is SongDownloadResult.Failure)
+            assertTrue("the row was in flight (determinate 0) before the stall", progress.first() == 0f)
+            assertEquals("the half-inserted row is cleaned up", 1, provider.deleted.size)
+        } finally {
+            server.release()
+        }
+    }
+
+    /**
+     * A one-shot raw-socket HTTP responder on 127.0.0.1 (the JDK's
+     * `com.sun.net.httpserver` is not on the unit-test compile classpath):
+     * accepts one request, consumes its header block, hands the socket's
+     * output stream to [respond] (which writes the response headers and
+     * may or may not then send a body), and holds the connection open
+     * until [release] (the stalled-body case needs the socket to stay
+     * half-open).
+     */
+    private class RawHttpServer(private val respond: (java.io.OutputStream) -> Unit) {
+        private val serverSocket =
+            java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        val port: Int = serverSocket.localPort
+        @Volatile
+        private var released = false
+        private val worker = thread(isDaemon = true) {
+            try {
+                serverSocket.use { server ->
+                    val client = server.accept()
+                    try {
+                        val reader = java.io.BufferedReader(client.getInputStream().reader())
+                        while (true) {
+                            val line = reader.readLine()
+                            if (line == null || line.isEmpty()) break
+                        }
+                        respond(client.getOutputStream())
+                        // Hold the socket open until release(): the
+                        // stalled-body case needs the connection to stay
+                        // half-open (a closed socket would EOF the client's
+                        // read instead of timing it out).
+                        while (!released) Thread.sleep(10)
+                    } finally {
+                        client.close()
+                    }
+                }
+            } catch (e: Exception) {
+                // One-shot test server: a torn-down socket just ends the
+                // worker (daemon) thread.
+            }
+        }
+        fun release() {
+            released = true
+        }
     }
 
     private class FakeMediaProvider : ContentProvider() {
