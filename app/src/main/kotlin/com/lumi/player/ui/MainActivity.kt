@@ -56,7 +56,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
@@ -131,6 +133,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this, factory = lumiViewModelFactory(app))[LumiViewModel::class.java]
+        val initialThemeMode = runCatching {
+            runBlocking { viewModel.repository.observeThemeMode().first() }
+        }.getOrDefault(LumiThemeMode.FOLLOW_SYSTEM)
         nfc = NfcAdapter.getDefaultAdapter(this)
 
         requestNotificationPermissionIfNeeded()
@@ -157,7 +162,7 @@ class MainActivity : ComponentActivity() {
             // option): applied app-wide through the theme, effective
             // immediately on change - no app restart required.
             val themeMode by viewModel.themeMode.collectAsState(
-                initial = viewModel.themeMode.value,
+                initial = initialThemeMode,
             )
             val darkTheme = resolvedDarkTheme(themeMode)
             // The window chrome (status bar, the light-status-bar icons,
@@ -167,9 +172,11 @@ class MainActivity : ComponentActivity() {
             // the UI: dark mode takes the dark background on the status
             // bar and clears the white flash at launch; light mode
             // restores the captured manifest chrome byte-identical.
+            @Suppress("DEPRECATION") // navigationBarColor is deprecated in the API 35 stub
             val originalChrome = remember {
                 OriginalWindowChrome(
                     statusBarColor = window.statusBarColor,
+                    navigationBarColor = window.navigationBarColor,
                     systemUiVisibility = window.decorView.systemUiVisibility,
                     background = window.decorView.background,
                 )
@@ -843,42 +850,46 @@ class MainActivity : ComponentActivity() {
 
 /**
  * The window chrome as the manifest's fixed-light theme created it (the
- * status bar color, the light-status-bar flag, and the window background
- * behind the first frame), captured on the first composition so the light
- * mode can restore it byte-identical.
+ * status bar color, the navigation bar color, the light-status-bar flag,
+ * and the window background behind the first frame), captured on the
+ * first composition so the light mode can restore it byte-identical.
  */
 private data class OriginalWindowChrome(
     val statusBarColor: Int,
+    val navigationBarColor: Int,
     val systemUiVisibility: Int,
     val background: Drawable?,
 )
 
 /**
  * Applies the window chrome for the resolved dark flag: dark mode takes the
- * dark background on the status bar, turns the light-status-bar icons off,
- * and sets the window background to the dark color so the manifest's
- * near-white background never flashes before the first dark frame; light
- * mode restores the captured manifest chrome. The light-status-bar icons go
- * through the decor view's [View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR] bit - the
- * same underlying state the window insets controller reads on the real
- * device (the pruned test mirror reduces `Window.getInsetsController()` to
- * null, so the flag bit is the only mirror-safe surface, and it is the
- * pre-`WindowInsetsController` API on API 26). The `statusBarColor` write is
- * a no-op in the pruned test mirror (the instrumented `PhoneWindow` body
- * never executes - probed: set + idle leaves the getter at 0) but runs the
- * real AOSP body on the device, so the status bar band follows the mode
- * there too.
+ * dark background on the status bar and the navigation bar, turns the
+ * light-status-bar icons off, and sets the window background to the dark
+ * color so the manifest's near-white background never flashes before the
+ * first dark frame; light mode restores the captured manifest chrome. The
+ * light-status-bar icons go through the decor view's
+ * [View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR] bit - the same underlying state
+ * the window insets controller reads on the real device (the pruned test
+ * mirror reduces `Window.getInsetsController()` to null, so the flag bit is
+ * the only mirror-safe surface, and it is the pre-`WindowInsetsController`
+ * API on API 26). The `statusBarColor` and `navigationBarColor` writes are
+ * no-ops in the pruned test mirror (the instrumented `PhoneWindow` bodies
+ * never execute - probed: set + idle leaves the getter at 0) but run the
+ * real AOSP bodies on the device, so the status bar and navigation bar
+ * bands follow the mode there too.
  */
 @Suppress("DEPRECATION")
 private fun Window.applyWindowChrome(darkTheme: Boolean, original: OriginalWindowChrome) {
     if (darkTheme) {
         val color = LumiDarkBackground.toArgb()
         statusBarColor = color
+        navigationBarColor = color
         decorView.systemUiVisibility =
             decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
         decorView.background = ColorDrawable(color)
     } else {
         statusBarColor = original.statusBarColor
+        navigationBarColor = original.navigationBarColor
         decorView.systemUiVisibility = original.systemUiVisibility
         original.background?.let { decorView.background = it }
     }

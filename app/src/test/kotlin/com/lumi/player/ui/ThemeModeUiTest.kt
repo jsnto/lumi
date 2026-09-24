@@ -330,4 +330,42 @@ class ThemeModeUiTest {
             assertNull(activity.window.decorView.background)
         }
     }
+
+    /**
+     * A cold launch with DARK stored is dark from the first composition:
+     * onCreate seeds the first frame with the stored mode synchronously, so
+     * the view model's async themeMode flow (which starts from the
+     * follow-system placeholder) cannot win the race and flash the
+     * manifest's near-white window background and the light palette before
+     * the first dark frame. Pinned on the mirror-observable surface: right
+     * after the fresh activity's first composition - with no further
+     * pumping of the async flow - the dark window background is already in
+     * place.
+     */
+    @Test
+    fun coldLaunchWithStoredDarkIsDarkFromTheFirstComposition() {
+        // Store DARK through a first activity (pump the looper for the
+        // Room round trip), then destroy it.
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Appearance").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Dark").performClick()
+        awaitThemeMode(activity, LumiThemeMode.DARK)
+        controller.destroy()
+
+        // Cold-launch a fresh activity over the same store: the dark
+        // window background is already in place from the first
+        // composition - no further pumping of the async flow.
+        val cold = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val background = cold.get().window.decorView.background
+        assertNotNull(
+            "the dark window background must be in place from the first composition",
+            background,
+        )
+        assertEquals(0xFF140F0A.toInt(), (background as ColorDrawable).color)
+    }
 }
