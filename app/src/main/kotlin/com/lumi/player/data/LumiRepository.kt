@@ -1,6 +1,7 @@
 package com.lumi.player.data
 
 import androidx.room.withTransaction
+import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -32,11 +33,33 @@ class LumiRepository(private val db: LumiDatabase) {
                 ?: PlayMode.CONTINUOUS
         }
 
-    /** Ordered content list for a tag, updated live as links or entries change. */
-    fun observeEntriesForTag(tagId: Long): Flow<List<EntryEntity>> =
+    /**
+     * A tag's ordered song list, updated live as links or content change.
+     * Name-based semantics (a tag song is identified by NAME, not by the
+     * linked entry row): every link comes back at its original sort
+     * position, and each resolves to the FIRST stored content entry with
+     * the link's song name - or to nothing, when no content entry carries
+     * the name any more ([TagSongRow.entry] is `null`, the tag's "song not
+     * found" row). A song deleted from the library and later re-imported
+     * under the same name resolves to the re-imported entry and plays
+     * again, without re-adding it to the tag.
+     */
+    fun observeEntriesForTag(tagId: Long): Flow<List<TagSongRow>> =
         dao.observeLinksForTag(tagId).combine(dao.observeEntries()) { links, entries ->
-            val byId = entries.associateBy { it.id }
-            links.mapNotNull { byId[it.entryId] }
+            // The content list's order (createdAt, id): the first stored
+            // copy of a name is the one the row resolves to (groupBy keeps
+            // each name's copies in that order; a second stored copy never
+            // shadows the first).
+            val byName = entries.groupBy { it.label }.mapValues { it.value.first() }
+            links.map { link ->
+                TagSongRow(
+                    linkId = link.id,
+                    entryId = link.entryId,
+                    sortOrder = link.sortOrder,
+                    name = link.songName,
+                    entry = byName[link.songName],
+                )
+            }
         }
 
     // ---- tags ----
@@ -54,6 +77,28 @@ class LumiRepository(private val db: LumiDatabase) {
     }
 
     suspend fun tagByUid(uid: String): TagEntity? = dao.tagByUid(uid.trim())
+
+    /**
+     * The first stored content entry with the display name [label] - a tag
+     * song's name resolution, first stored copy wins. An exact stored name
+     * wins outright; a name of exactly the payload's 50-char clamp
+     * ([LumiTagNdef.MAX_SONG_NAME_LENGTH]) that no entry carries exactly -
+     * the payload clamps longer stored labels to their own prefix at write
+     * time, so such a name can only be a shortened longer label - resolves
+     * to the stored entry whose label starts with it, and only when
+     * exactly one does (zero or several keep the name unresolved: the
+     * tag's visible "song not found" row, never a guess); a name under the
+     * clamp that no entry carries exactly resolves to nothing - a short
+     * name is never a clamp product, so a prefix hit would silently link
+     * a different song.
+     */
+    suspend fun entryByLabel(label: String): EntryEntity? {
+        if (label.isBlank()) return null
+        dao.entryByLabel(label)?.let { return it }
+        if (label.length != LumiTagNdef.MAX_SONG_NAME_LENGTH) return null
+        val prefixMatches = dao.entries().filter { it.label.startsWith(label) }
+        return if (prefixMatches.size == 1) prefixMatches.single() else null
+    }
 
     /** Renames a registered tag; a no-op when the UID is unknown. */
     suspend fun renameTag(uid: String, name: String) {
@@ -95,26 +140,50 @@ class LumiRepository(private val db: LumiDatabase) {
     /**
      * Links an ALREADY-STORED entry to the end of [tagId]'s song list - the
      * in-app add-song flow (a tag's list is an assignment over the app's
-     * existing content, not a store of new files). Linking the existing row
-     * means a song already on another tag links without copying its entry.
-     * Returns false when the tag or the entry no longer exists (deleted
-     * while the pick was in flight) or when the tag already links the entry
-     * (a second pick of the same song must not duplicate the link).
+     * existing content, not a store of new files). The link stores the
+     * entry's display name as the song's identity (a tag song is identified
+     * by name, resolved live against the content) plus the entry as the
+     * provenance hint. Returns false when the tag or the entry no longer
+     * exists (deleted while the pick was in flight) or when the tag already
+     * links a song with the entry's name (a second pick of the same song -
+     * or of a duplicate-named row - must not duplicate the link).
      */
     suspend fun linkEntryToTag(tagId: Long, entryId: Long): Boolean {
         return db.withTransaction {
-            if (dao.tagById(tagId) == null) return@withTransaction false
-            if (dao.entryById(entryId) == null) return@withTransaction false
-            if (dao.linkCount(tagId, entryId) > 0) return@withTransaction false
+            val tag = dao.tagById(tagId) ?: return@withTransaction false
+            val entry = dao.entryById(entryId) ?: return@withTransaction false
+            if (dao.linkCountBySongName(tag.id, entry.label) > 0) return@withTransaction false
             dao.insertLink(
                 TagLinkEntity(
-                    tagId = tagId,
-                    entryId = entryId,
-                    sortOrder = dao.linkCountForTag(tagId),
+                    tagId = tag.id,
+                    entryId = entry.id,
+                    songName = entry.label,
+                    sortOrder = dao.linkCountForTag(tag.id),
                 )
             )
             true
         }
+    }
+
+    /**
+     * Appends a name-only link to the end of [tagId]'s song list - the
+     * restore path (a re-scanned card's remembered or carried song list
+     * landing on a freshly re-registered tag). [songName] is the song's
+     * identity; [entryId] is the entry the name currently resolves to, when
+     * it resolves to any (the provenance hint), and null when the name
+     * shows as "song not found". A no-op (null) when the tag is gone.
+     */
+    suspend fun insertLinkByName(tagId: Long, songName: String, entryId: Long?): TagEntity? {
+        if (dao.tagById(tagId) == null) return null
+        dao.insertLink(
+            TagLinkEntity(
+                tagId = tagId,
+                entryId = entryId,
+                songName = songName,
+                sortOrder = dao.linkCountForTag(tagId),
+            ),
+        )
+        return dao.tagById(tagId)
     }
 
     suspend fun deleteEntry(entry: EntryEntity) = dao.deleteEntry(entry)
@@ -186,13 +255,14 @@ class LumiRepository(private val db: LumiDatabase) {
      * gone with its songs still stored (or the songs gone with the folder
      * still rescannable). [importedPayloads] are the content uris the
      * folder's walk identified - rows the folder didn't identify are
-     * untouched - and tag links to the deleted rows cascade off them the
-     * same way a single-entry removal does. Returns the number of content
-     * rows deleted (0 for an empty set - e.g. a folder whose tree can no
-     * longer be read, where only the folder row is removed). A row that
-     * survives the deletion (a shared song another folder also imports) is
-     * UNMARKED in the same transaction, so it degrades into the individual
-     * content list.
+     * untouched - and a tag's link to a deleted row survives the deletion
+     * (tag_links carries no foreign key to entries): the song keeps its place on
+     * the tag's list as a "song not found" row. Returns the number of
+     * content rows deleted (0 for an empty set - e.g. a folder whose tree
+     * can no longer be read, where only the folder row is removed). A row
+     * that survives the deletion (a shared song another folder also
+     * imports) is UNMARKED in the same transaction, so it degrades into the
+     * individual content list.
      */
     suspend fun removeFolder(folder: FolderEntity, importedPayloads: Set<String>): Int =
         db.withTransaction {
@@ -206,50 +276,129 @@ class LumiRepository(private val db: LumiDatabase) {
 
     // ---- links ----
 
-    /** The tag's current song list in link order. */
-    suspend fun entriesForTag(tagId: Long): List<EntryEntity> = dao.entriesForTag(tagId)
+    /**
+     * A tag's current song list in link order - name-based semantics (see
+     * [observeEntriesForTag]): every link comes back at its original sort
+     * position, resolved to the first stored content entry with its song
+     * name, or to nothing (the tag's "song not found" row) when no content
+     * entry carries the name.
+     */
+    suspend fun entriesForTag(tagId: Long): List<TagSongRow> {
+        val byName = dao.entries().groupBy { it.label }.mapValues { it.value.first() }
+        return dao.linksForTag(tagId).map { link ->
+            TagSongRow(
+                linkId = link.id,
+                entryId = link.entryId,
+                sortOrder = link.sortOrder,
+                name = link.songName,
+                entry = byName[link.songName],
+            )
+        }
+    }
+
+    /** The tag's ordered song NAMES (its links' name snapshots, in link
+     * order, "song not found" names among them) - the card payload's song
+     * list and the per-card memory's song list. */
+    suspend fun songNamesForTag(tagId: Long): List<String> =
+        dao.linksForTag(tagId).map { it.songName }
 
     /**
-     * Unlinks ONE entry from ONE tag - the inverse of [linkEntryToTag]:
-     * only the tag's link to the entry goes. The entry itself stays in the
-     * content list (its folder membership untouched), its links to any
-     * other tags are untouched, and the remaining songs keep their relative
-     * link order - their sortOrder values are renumbered densely to 0..n-1
-     * in the current read order, so a later append (sortOrder = the tag's
-     * link count) still lands at the end. Returns false when the tag or the
-     * entry no longer exists (deleted while the removal was in flight) or
-     * when the tag does not link the entry.
+     * Unlinks ONE link from ONE tag - the inverse of [linkEntryToTag]:
+     * only that link (addressed by its stored link row's id) goes. For a
+     * song that still exists the song stays in the content list (its folder
+     * membership untouched), its links to any other tags are untouched, and
+     * the remaining songs keep their relative order - their sortOrder values
+     * are renumbered densely to 0..n-1 in the current read order, so a later
+     * append (sortOrder = the tag's link count) still lands at the end.
+     * For a song whose name resolves to no content (the "song not found"
+     * row) the dead link is what goes: the removal cleans the missing row
+     * out of the list. Returns false when the tag no longer exists (deleted
+     * while the removal was in flight) or when it carries no such link.
      */
-    suspend fun unlinkEntryFromTag(tagId: Long, entryId: Long): Boolean {
+    suspend fun unlinkLinkFromTag(tagId: Long, linkId: Long): Boolean {
         return db.withTransaction {
             if (dao.tagById(tagId) == null) return@withTransaction false
-            if (dao.entryById(entryId) == null) return@withTransaction false
-            val current = dao.entriesForTag(tagId).map { it.id }
-            if (current.isEmpty()) return@withTransaction false
-            val next = current.filterNot { it == entryId }
-            if (next == current) return@withTransaction false
+            val current = dao.linksForTag(tagId)
+            if (current.none { it.id == linkId }) return@withTransaction false
+            val next = current.filterNot { it.id == linkId }
             dao.replaceLinksForTag(
                 tagId,
-                next.mapIndexed { index, id ->
-                    TagLinkEntity(tagId = tagId, entryId = id, sortOrder = index)
+                next.mapIndexed { index, link ->
+                    TagLinkEntity(
+                        tagId = tagId,
+                        entryId = link.entryId,
+                        songName = link.songName,
+                        sortOrder = index,
+                    )
                 },
             )
             true
         }
     }
 
-    /** Reads and replaces the tag's ordered content list in one Room transaction. */
+    /**
+     * Reads and replaces the tag's ordered song list in one Room
+     * transaction. The [transform] sees the CURRENT list's link ids in
+     * link order - the dead (missing) links among them: a transform that
+     * echoes them back keeps the missing rows at their positions, and a
+     * reorder never drops a link whose song is missing. Returns the list
+     * the transform settled on.
+     */
     suspend fun updateTagEntries(tagId: Long, transform: (List<Long>) -> List<Long>): List<Long> {
         return db.withTransaction {
-            val next = transform(entriesForTag(tagId).map { it.id })
+            val current = dao.linksForTag(tagId)
+            val byLink = current.associateBy { it.id }
+            val next = transform(current.map { it.id })
+            // Only a permutation of the current link set is a reorder; a
+            // list that changed in flight (a link added or removed between
+            // the read and the write) leaves the stored links untouched.
+            if (next.size != current.size || next.toSet() != byLink.keys || next.distinct().size != next.size) {
+                return@withTransaction current.map { it.id }
+            }
             dao.replaceLinksForTag(
                 tagId,
-                next.mapIndexed { index, entryId ->
-                    TagLinkEntity(tagId = tagId, entryId = entryId, sortOrder = index)
+                next.mapIndexed { index, linkId ->
+                    byLink.getValue(linkId).let {
+                        TagLinkEntity(
+                            tagId = tagId,
+                            entryId = it.entryId,
+                            songName = it.songName,
+                            sortOrder = index,
+                        )
+                    }
                 },
             )
             next
         }
+    }
+
+    // ---- per-card memory (survives the tag row's deletion) ----
+
+    /**
+     * The last saved name + song list for the card uid [uid] (the card's
+     * NFC uid string, the [TagEntity.uid] shape), if one was remembered -
+     * the restore source for a re-scanned card whose payload carries no
+     * song list.
+     */
+    suspend fun memoryForUid(uid: String): TagMemory? {
+        val row = dao.memoryByUid(uid.trim()) ?: return null
+        return TagMemory(name = row.name, songs = TagMemory.songsFromJson(row.songs))
+    }
+
+    /**
+     * Remembers the last saved name + song list for the card uid [uid] -
+     * written on registration and on a successful card write. Deleting a
+     * tag row never touches the record (the table carries no foreign key
+     * to tags), so re-scanning the same card later can restore it.
+     */
+    suspend fun rememberTag(uid: String, name: String, songs: List<String>) {
+        dao.upsertMemory(
+            TagMemoryEntity(
+                uid = uid.trim(),
+                name = name,
+                songs = TagMemory.songsToJson(songs),
+            ),
+        )
     }
 
     // ---- remembered playback positions ----

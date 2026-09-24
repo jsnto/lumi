@@ -10,12 +10,16 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Before
@@ -31,11 +35,18 @@ import org.robolectric.shadows.ShadowLooper
 /**
  * Behavioral coverage for the tag-registration dialog's tag-payload
  * integration: a captured tag that carries the app's lumi payload
- * pre-fills the name field and pre-selects its play mode, and a writable
- * tag offers the optional "Save and write to tag" step while a non-
- * writable (or unformatted) tag only offers plain save. The mode only
- * records what mode the tag was registered with (form pre-fill on
+ * pre-fills the name field (and the play mode), a captured tag whose
+ * payload is missing or nameless pre-fills the card's REMEMBERED name, and
+ * the dialog offers plain Save only - registration NEVER writes the
+ * physical card (the explicit card-write action is the only write path).
+ * The mode only records what the tag was registered with (form pre-fill on
  * re-read); saving a tag never changes the app's play mode.
+ *
+ * The per-card memory coverage too: a save remembers the card's last saved
+ * name + song list per card uid, so a card whose tag was deleted and is
+ * re-scanned restores the remembered name and songs - from the card's own
+ * payload when it carries the song list (the new format), else from the
+ * remembered list.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -71,9 +82,9 @@ class RegistrationPrefillUiTest {
         return viewModelOf(activity)
     }
 
-    private fun openSettingsAndCapture(data: LumiTagData?, writable: Boolean): LumiViewModel {
+    private fun openSettingsAndCapture(data: LumiTagData?): LumiViewModel {
         val viewModel = openSettings()
-        viewModel.captureForTest(UID, data, writable)
+        viewModel.captureForTest(UID, data)
         compose.waitForIdle()
         return viewModel
     }
@@ -82,12 +93,20 @@ class RegistrationPrefillUiTest {
         Thread { runBlocking { block() } }.also { it.start() }.apply { join() }
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    private fun <T> dbAndGet(block: suspend () -> T): T {
+        var result: T? = null
+        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "condition") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
             Thread.sleep(10)
         }
+        check(cond()) { "timed out waiting for $message" }
     }
 
     /** Idles the main looper for [durationMs] unconditionally. */
@@ -99,12 +118,13 @@ class RegistrationPrefillUiTest {
         }
     }
 
-    private fun savedTagName(uid: String): String? {
-        var result: String? = null
-        Thread {
-            result = runBlocking { app().repository.tagByUid(uid)?.name }
-        }.also { it.start() }.apply { join() }
-        return result
+    private fun savedTagName(uid: String): String? =
+        dbAndGet { app().repository.tagByUid(uid)?.name }
+
+    /** The registered tag's song names, in link order (empty when unregistered). */
+    private fun songNamesForTagUid(uid: String): List<String> = dbAndGet {
+        val tag = app().repository.tagByUid(uid)
+        if (tag != null) app().repository.entriesForTag(tag.id).map { it.name } else emptyList()
     }
 
     private fun playModeOf(viewModel: LumiViewModel): PlayMode = viewModel.playMode.value
@@ -112,25 +132,33 @@ class RegistrationPrefillUiTest {
     // ---- prefill from the tag's own payload ----
 
     @Test
-    fun registration_tagWithLumiPayload_prefillsNameAndOffersWrite() {
+    fun registration_tagWithLumiPayload_prefillsNameAndMode_andOffersOnlySave() {
         val viewModel = openSettings()
         // Live capture shape: the dialog opens before the async NDEF read
         // lands, so the payload arrives after the form has already composed.
-        viewModel.captureForTest(UID, null, false)
+        viewModel.captureForTest(UID, null)
         compose.waitForIdle()
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
         compose.onNodeWithText("Name (optional)").assertIsDisplayed()
-        compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
-        viewModel.captureForTest(UID, LumiTagData("Hallway", PlayMode.PROXIMITY), true)
+        viewModel.captureForTest(
+            UID,
+            LumiTagData("Hallway", PlayMode.PROXIMITY, listOf("First song")),
+        )
         compose.waitForIdle()
-        // The name field picks up the tag's payload; a writable tag offers
-        // the optional write step.
+        // The capture's prefill (the async DB merge) has to land before
+        // the dialog's form fills from it.
+        idleUntil({ viewModel.capturedTagData.value?.name == "Hallway" }, message = "the payload's prefill")
+        // The name field picks up the tag's payload. Registration offers
+        // plain Save only - it never writes the physical card.
         compose.onNodeWithText("Hallway").assertIsDisplayed()
-        compose.onNodeWithText("Save and write to tag").assertIsDisplayed()
+        compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
+        compose.onNodeWithText("Save").assertIsDisplayed()
 
         // Saving must NOT change the app's play mode, even though the tag's
         // preselected mode (PROXIMITY) differs from the app's (CONTINUOUS).
-        compose.onNodeWithText("Save and write to tag").performClick()
+        var writes = 0
+        viewModel.tagWriter = { _, _ -> writes++; false }
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
@@ -139,6 +167,11 @@ class RegistrationPrefillUiTest {
             playModeOf(viewModel),
         )
         assertEquals("The saved tag must carry the pre-filled name", "Hallway", savedTagName(UID))
+        assertEquals(
+            "registration must never write the physical card",
+            0,
+            writes,
+        )
     }
 
     @Test
@@ -148,7 +181,6 @@ class RegistrationPrefillUiTest {
         // play mode must stay CONTINUOUS.
         val viewModel = openSettingsAndCapture(
             data = LumiTagData("Porch", PlayMode.PROXIMITY),
-            writable = false,
         )
         compose.onNodeWithText("Porch").assertIsDisplayed()
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
@@ -164,58 +196,33 @@ class RegistrationPrefillUiTest {
     }
 
     @Test
-    fun registration_rewritingRegisteredTag_updatesStoredName() {
-        // The tag is already registered under its stored name.
-        db { app().repository.addTag(UID, "Old Name") }
-        val viewModel = openSettingsAndCapture(data = null, writable = true)
-        viewModel.tagWriter = { _, _ -> true }
-        compose.onNodeWithText("Name (optional)").assertIsDisplayed()
-        // Name the tag and write that name to it: the stored record must
-        // follow the written tag payload.
-        compose.onNodeWithText("Name (optional)").performTextInput("Porch")
-        compose.waitForIdle()
-        compose.onNodeWithText("Save and write to tag").performClick()
-        compose.waitForIdle()
-        idleUntil({ savedTagName(UID) == "Porch" })
-        assertEquals(
-            "the stored name must follow the written tag payload",
-            "Porch",
-            savedTagName(UID),
-        )
-    }
-
-    @Test
-    fun registration_writeTrimsNameSoTagAndDbMatch() {
-        // The DB stores the name trimmed, so the tag write must use the
-        // same trimmed value - otherwise a name with surrounding
-        // whitespace would leave the tag and the DB record diverging.
-        val viewModel = openSettingsAndCapture(data = null, writable = true)
-        var writtenName: String? = null
-        viewModel.tagWriter = { _, data ->
-            writtenName = data.name
-            true
-        }
-        compose.onNodeWithText("Name (optional)").assertIsDisplayed()
+    fun registration_savingNeverWritesTheCard_andStoresTheTrimmedName() {
+        // Registration never writes the physical card - not even when the
+        // card would take the payload: the write is the explicit card-write
+        // action's job. The stored name is still trimmed (the payload a
+        // later card write carries must match it).
+        val viewModel = openSettingsAndCapture(data = null)
+        var writes = 0
+        viewModel.tagWriter = { _, _ -> writes++; true }
         compose.onNodeWithText("Name (optional)").performTextInput("  Porch  ")
         compose.waitForIdle()
-        compose.onNodeWithText("Save and write to tag").performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ savedTagName(UID) != null && writtenName != null })
+        idleUntil({ savedTagName(UID) != null })
         assertEquals("the DB stores the trimmed name", "Porch", savedTagName(UID))
-        assertEquals("the tag must be written with the same trimmed name", "Porch", writtenName)
+        assertEquals("registration must never write the card", 0, writes)
     }
 
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun registration_nameInput_isClampedToTagPayloadLimit() {
         // The dialog's name field clamps to MAX_NAME_LENGTH, so the name
-        // saved to the DB and the name written to the tag can never
+        // saved to the DB and the name a later card write carries can never
         // diverge by truncation.
         // Pre-fill the field so the editable node can be selected by its
         // (merged-tree) text, then overwrite it with an oversized name.
         val viewModel = openSettingsAndCapture(
             data = LumiTagData("Prefill", PlayMode.CONTINUOUS),
-            writable = false,
         )
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
         compose.onNodeWithText("Prefill")
@@ -236,8 +243,8 @@ class RegistrationPrefillUiTest {
     }
 
     @Test
-    fun registration_plainTag_emptyFormAndNoWriteOption() {
-        val viewModel = openSettingsAndCapture(data = null, writable = false)
+    fun registration_plainTag_emptyFormAndSaveOnly() {
+        val viewModel = openSettingsAndCapture(data = null)
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
         compose.onNodeWithText("Save").performClick()
@@ -248,7 +255,11 @@ class RegistrationPrefillUiTest {
             PlayMode.CONTINUOUS,
             playModeOf(viewModel),
         )
-        assertEquals("The saved tag must have the empty name from the empty form", "", savedTagName(UID))
+        assertEquals(
+            "The saved tag must have the empty name from the empty form",
+            "",
+            savedTagName(UID),
+        )
     }
 
     @Test
@@ -257,16 +268,174 @@ class RegistrationPrefillUiTest {
         // so the user may start typing in that window; when the payload then
         // arrives it must not clobber what the user already typed.
         val viewModel = openSettings()
-        viewModel.captureForTest(UID, null, false)
+        viewModel.captureForTest(UID, null)
         compose.waitForIdle()
         compose.onNodeWithText("Name (optional)").performTextInput("Mine")
         compose.waitForIdle()
-        viewModel.captureForTest(UID, LumiTagData("Hallway", PlayMode.PROXIMITY), true)
+        viewModel.captureForTest(
+            UID,
+            LumiTagData("Hallway", PlayMode.PROXIMITY, listOf("First song")),
+        )
         compose.waitForIdle()
         compose.onNodeWithText("Mine").assertIsDisplayed()
         compose.onNodeWithText("Hallway").assertDoesNotExist()
-        // Writability from the late read still takes effect.
-        compose.onNodeWithText("Save and write to tag").assertIsDisplayed()
+    }
+
+    // ---- per-card memory: the name + songs that survive the tag's deletion ----
+
+    /**
+     * Seeds the card's first life: the content entries the card's song
+     * names resolve to, a first registration under [UID] (saved with its
+     * payload's song list), and the tag's deletion (the card leaves the
+     * app). The memory written by the first save is what the re-scan
+     * restores from when the card carries no payload.
+     */
+    private fun seedFirstLifeAndDelete(viewModel: LumiViewModel, songs: List<String>) {
+        db {
+            songs.forEachIndexed { i, name ->
+                app().repository.addEntry(EntryType.AUDIO, name, "content://song$i")
+            }
+        }
+        viewModel.captureForTest(
+            UID,
+            LumiTagData("Porch", PlayMode.PROXIMITY, songs),
+        )
+        compose.waitForIdle()
+        // The capture's prefill + restore songs (the async DB merge) have
+        // to be published before the Save click consumes them.
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        // The save's restore links land in the same coroutine, right
+        // after the tag row: poll until every link is written.
+        idleUntil({ songNamesForTagUid(UID).size == songs.size }, message = "the restored links")
+        assertEquals("the first save restores the carried songs", songs, songNamesForTagUid(UID))
+        // The save's rememberTag (the per-card memory) is the coroutine's
+        // LAST DB step: it reads the links the save just wrote, so it has
+        // to land - with its full song list - before the tag row goes.
+        idleUntil(
+            { dbAndGet { app().repository.memoryForUid(UID) }?.songs == songs },
+            message = "the remembered memory",
+        )
+        db { app().repository.deleteTag(app().repository.tagByUid(UID)!!) }
+        assertNull("the tag row is gone", savedTagName(UID))
+    }
+
+    @Test
+    fun rescanningADeletedTagWhoseCardCarriesTheSongList_restoresTheNameAndSongs() {
+        val viewModel = openSettings()
+        seedFirstLifeAndDelete(viewModel, listOf("First song", "Gone song"))
+
+        // Re-scan the same card: the card was written in the new format, so
+        // its payload still carries the ordered song list - the restore
+        // source.
+        viewModel.captureForTest(
+            UID,
+            LumiTagData("Porch", PlayMode.PROXIMITY, listOf("First song", "Gone song")),
+        )
+        compose.waitForIdle()
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        // The payload's name prefills the form again...
+        compose.onNodeWithText("Porch").assertIsDisplayed()
+        // ...and saving brings the tag back with its songs - name-for-name,
+        // in the carried order, each resolving to the live content entry.
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        idleUntil(
+            { songNamesForTagUid(UID).size == 2 },
+            message = "the restored links",
+        )
+        assertEquals(
+            "the re-saved tag's songs are restored from the card payload",
+            listOf("First song", "Gone song"),
+            songNamesForTagUid(UID),
+        )
+        val resolved = dbAndGet {
+            val tagId = app().repository.tagByUid(UID)!!.id
+            app().repository.entriesForTag(tagId).map { it.entry }
+        }
+        assertEquals(
+            "every restored song resolves to a live entry (plays again)",
+            2,
+            resolved.count { it != null },
+        )
+    }
+
+    @Test
+    fun rescanningADeletedTagWhoseCardCarriesNoPayload_restoresTheRememberedNameAndSongs() {
+        val viewModel = openSettings()
+        seedFirstLifeAndDelete(viewModel, listOf("First song", "Gone song"))
+
+        // Re-scan the same card: a legacy card the app never wrote (its
+        // payload carries no song list - or no payload at all). The
+        // REMEMBERED name prefills the form and the REMEMBERED songs
+        // restore on save.
+        viewModel.captureForTest(UID, null)
+        compose.waitForIdle()
+        idleUntil({ viewModel.capturedTagData.value?.name == "Porch" }, message = "the remembered name's prefill")
+        compose.onNodeWithText("Porch").assertIsDisplayed()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        assertEquals("the remembered name is saved again", "Porch", savedTagName(UID))
+        idleUntil(
+            { songNamesForTagUid(UID).size == 2 },
+            message = "the remembered links",
+        )
+        assertEquals(
+            "the remembered songs are restored onto the re-saved tag",
+            listOf("First song", "Gone song"),
+            songNamesForTagUid(UID),
+        )
+    }
+
+    @Test
+    fun rescanningADeletedTagWhoseCardCarriesAClampedLongSongName_restoresItToTheLiveEntry() {
+        // A song whose content label exceeds the payload's 50-char name
+        // cap: the card write carries its clamped form, and the re-scan's
+        // save must resolve the clamped name back to the live entry (the
+        // song plays again and the add-song picker flags the real row by
+        // its full label) instead of stranding it as a "song not found"
+        // row.
+        val fullLabel = "a".repeat(45) + "-very-long-song-title.mp3"
+        val viewModel = openSettings()
+        seedFirstLifeAndDelete(viewModel, listOf(fullLabel))
+
+        // The card was written in the new format: its payload carries the
+        // song list in the codec's clamped form (the 50-char name cap).
+        val written = checkNotNull(
+            LumiTagNdef.fromJson(
+                LumiTagNdef.toJson(
+                    LumiTagData("Porch", PlayMode.PROXIMITY, listOf(fullLabel)),
+                ),
+            ),
+        )
+        viewModel.captureForTest(UID, written)
+        compose.waitForIdle()
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        idleUntil({ savedTagName(UID) != null })
+        idleUntil({ songNamesForTagUid(UID).size == 1 }, message = "the restored link")
+
+        // The clamped carried name resolved back to the content entry: the
+        // restored link carries the entry's FULL label (the live name
+        // resolution matches it) with the entry as its provenance.
+        val rows = dbAndGet { app().repository.entriesForTag(app().repository.tagByUid(UID)!!.id) }
+        assertEquals(1, rows.size)
+        assertEquals(
+            "the link stores the entry's full label, not the clamped one",
+            fullLabel,
+            rows.single().name,
+        )
+        assertEquals(
+            "the link's provenance is the live entry its full label names",
+            dbAndGet { app().repository.observeEntries().first().single { it.label == fullLabel }.id },
+            rows.single().entryId,
+        )
+        assertNotNull("the restored song resolves to the live entry and plays", rows.single().entry)
     }
 
     // ---- stale capture read must not overwrite a newer session ----

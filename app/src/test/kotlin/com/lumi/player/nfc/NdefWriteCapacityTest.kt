@@ -30,8 +30,19 @@ class NdefWriteCapacityTest {
 
     private val data = LumiTagData(name = "Hallway", mode = PlayMode.PROXIMITY)
 
+    /** A payload carrying the full ordered song list (a write saves the songs too). */
+    private val withSongs = LumiTagData(
+        name = "Hallway",
+        mode = PlayMode.PROXIMITY,
+        songs = listOf("First song", "Second song", "Gone song"),
+    )
+
     private val needed: Int by lazy {
         LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(data))
+    }
+
+    private val neededWithSongs: Int by lazy {
+        LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(withSongs))
     }
 
     @Test
@@ -43,6 +54,31 @@ class NdefWriteCapacityTest {
         assertTrue(
             "an unknown-capacity writable card passes the pre-refusal",
             LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = 0), data),
+        )
+        assertTrue(
+            "...and a song-list payload (the write's real data) too",
+            LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = 0), withSongs),
+        )
+    }
+
+    @Test
+    fun aCardRoomyForNameAndModeButNotTheSongList_isRefused() {
+        // The payload's size depends on the song list: an area that fits
+        // the name + mode but not the full payload (a card that would
+        // have taken the old-format write) is refused for the song-list
+        // write - a genuinely too-small card fails with the write's own
+        // refusal message.
+        assertTrue(
+            "the song-list payload is larger than the name+mode payload",
+            neededWithSongs > needed,
+        )
+        assertFalse(
+            "an area that fits only the old payload is refused for the song list",
+            LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = needed + 1), withSongs),
+        )
+        assertTrue(
+            "...and the same area takes the name+mode payload",
+            LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = needed + 1), data),
         )
     }
 

@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.TagSongRow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -93,7 +94,7 @@ class TagPickerDispatchUiTest {
     }
 
     /** The tag's current song list, read off the database. */
-    private fun tagLinks(tagId: Long): List<EntryEntity> =
+    private fun tagLinks(tagId: Long): List<TagSongRow> =
         dbAndGet { app().repository.entriesForTag(tagId) }
 
     /**
@@ -169,7 +170,7 @@ class TagPickerDispatchUiTest {
         idleUntil({ entryCount() == 1 })
         compose.waitForIdle()
         compose.onNodeWithText("Untitled").assertExists()
-        val linked = tagLinks(tagId).map { it.id }
+        val linked = tagLinks(tagId).map { it.entryId }
         assertEquals(
             "a Content-pane pick must not link the entry to any tag",
             emptyList<Long>(),
@@ -186,7 +187,7 @@ class TagPickerDispatchUiTest {
         val newId = dbAndGet {
             app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id
         }
-        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(existingId) }; true }
+        dbAndGet { listOf(existingId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openMainActivity()
         compose.onNodeWithContentDescription("Settings").performClick()
@@ -223,7 +224,7 @@ class TagPickerDispatchUiTest {
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ tagLinks(tagId).size == 2 })
-        val labels: List<String> = tagLinks(tagId).map { it.label }
+        val labels: List<String> = tagLinks(tagId).mapNotNull { it.entry?.label }
         assertEquals(
             "the checked song must be appended after the tag's existing song",
             listOf("First song", "Second song"),
@@ -234,7 +235,7 @@ class TagPickerDispatchUiTest {
             2,
             entryCount(),
         )
-        assertEquals(listOf(existingId, newId), tagLinks(tagId).map { it.id })
+        assertEquals(listOf(existingId, newId), tagLinks(tagId).map { it.entryId })
     }
 
     companion object {

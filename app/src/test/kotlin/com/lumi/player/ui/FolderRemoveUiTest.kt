@@ -151,11 +151,11 @@ class FolderRemoveUiTest {
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 2 songs from the folder.")
 
-        // Link one of the imported songs to a tag, so the cascade off the
-        // deleted entry is observable.
+        // Link one of the imported songs to a tag, so the link's survival
+        // past the deleted entry (as a "song not found" row) is observable.
         val tag = checkNotNull(dbAndGet { app().repository.addTag("uid-1", "Test tag") })
         val entryA = dbAndGet { app().repository.observeEntries().first() }.first { it.label == "song-a.mp3" }
-        dbAndGet { app().repository.updateTagEntries(tag.id) { it + entryA.id } }
+        dbAndGet { app().repository.linkEntryToTag(tag.id, entryA.id) }
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
@@ -183,12 +183,16 @@ class FolderRemoveUiTest {
         // The folder row and its imported songs are gone...
         assertTrue("the folder row is removed", dbAndGet { app().repository.observeFolders().first() }.isEmpty())
         assertTrue("the imported songs are removed", dbAndGet { app().repository.observeEntries().first() }.isEmpty())
-        // ...and the tag link cascaded off the deleted entry (the tag row
-        // itself stays, as a single-entry removal does).
-        assertTrue(
-            "the tag link cascaded off the deleted entry",
-            dbAndGet { app().repository.entriesForTag(tag.id) }.isEmpty(),
-        )
+        // ...and the tag's link survives the deleted entry (the link
+        // stores the song's NAME and no foreign key to entries): the song
+        // keeps its place on the tag's list as a "song not found" row,
+        // rendering its snapshot name (the tag row itself stays, as a
+        // single-entry removal does).
+        val rows = dbAndGet { app().repository.entriesForTag(tag.id) }
+        assertEquals("the dead link keeps its row", 1, rows.size)
+        assertEquals("the missing row keeps the song's name", "song-a.mp3", rows.single().name)
+        assertEquals(entryA.id, rows.single().entryId)
+        assertNull("the missing row carries no entry", rows.single().entry)
         assertEquals(1, dbAndGet { app().repository.observeTags().first() }.size)
     }
 

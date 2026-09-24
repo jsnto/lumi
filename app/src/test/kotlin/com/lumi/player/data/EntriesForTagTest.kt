@@ -4,6 +4,9 @@ import com.lumi.player.LumiApp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -11,12 +14,15 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * Behavioral coverage for the tag-content resolution after the refactor
- * replaced the per-link `entryById` reads with a single join query
- * ([LumiDao.entriesForTag]): the tag's list must come back in link order,
- * tags sharing or interleaving entries must not see each other's rows,
- * and the transactional [LumiRepository.updateTagEntries] (which reads
- * through the same query) must keep replacing the whole list.
+ * Behavioral coverage for a tag's name-based song list: a tag song is
+ * identified by NAME (the link's snapshot column), resolved live against
+ * the content. A name whose song has been removed from the library keeps
+ * its row on the tag's list - at its original sort position, rendering its
+ * snapshot name (a [TagSongRow] with a null entry) - and a song deleted
+ * and later re-imported under the same name resolves to the re-imported
+ * entry and plays again, without re-adding it to the tag. The
+ * renumber/reorder seams address links by their own ids and keep missing
+ * songs at their positions instead of dropping them.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = LumiApp::class)
@@ -25,59 +31,279 @@ class EntriesForTagTest {
     private fun repository(): LumiRepository =
         (RuntimeEnvironment.getApplication() as LumiApp).repository
 
-    @Test
-    fun entriesForTag_returnsEntriesInLinkOrder_notInsertionOrder() = runBlocking {
-        val repo = repository()
-        val tag = repo.addTag("UID-A", "Hallway")!!
-        // Insert in one order, link in another: the link order wins.
-        val first = repo.addEntry(EntryType.AUDIO, "First", "content://first")
-        val second = repo.addEntry(EntryType.AUDIO, "Second", "content://second")
-        val third = repo.addEntry(EntryType.AUDIO, "Third", "content://third")
-        repo.updateTagEntries(tag.id) { listOf(second.id, first.id, third.id) }
+    /** The tag's rows as song names (every row carries its own name). */
+    private fun names(rows: List<TagSongRow>): List<String> = rows.map { it.name }
 
-        assertEquals(
-            listOf("Second", "First", "Third"),
-            repo.entriesForTag(tag.id).map { it.label },
+    @Test
+    fun entriesForTagReturnsSongsInLinkOrderResolvedLive() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+        val c = repo.addEntry(EntryType.AUDIO, "Gamma", "content://c")
+        // Linked in an order that is NOT the entries' insertion order, so
+        // a query that forgot the sort order would come back wrong.
+        repo.linkEntryToTag(tag.id, c.id)
+        repo.linkEntryToTag(tag.id, a.id)
+        repo.linkEntryToTag(tag.id, b.id)
+
+        val linked = repo.entriesForTag(tag.id)
+        // Every row carries the link's own identity (in LINK order - the
+        // order the songs were added to the tag, not storage order)...
+        assertEquals(3, linked.size)
+        assertEquals(listOf(0, 1, 2), linked.map { it.sortOrder })
+        // ...the song's snapshot name...
+        assertEquals(listOf("Gamma", "Alpha", "Beta"), names(linked))
+        // ...and the still-existing entry the name resolves to.
+        assertEquals(listOf(c.id, a.id, b.id), linked.map { it.entryId })
+        assertEquals(c.id, linked[0].entry?.id)
+        assertEquals("content://c", linked[0].entry?.payload)
+    }
+
+    @Test
+    fun observeEntriesForTagEmitsInOrderAndFollowsChanges() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+        repo.linkEntryToTag(tag.id, a.id)
+
+        val flow = repo.observeEntriesForTag(tag.id)
+        assertEquals(listOf("Alpha"), names(flow.first()))
+
+        repo.linkEntryToTag(tag.id, b.id)
+        assertEquals(listOf("Alpha", "Beta"), names(flow.first()))
+    }
+
+    @Test
+    fun aDeletedSongKeepsItsRowAtItsOriginalPosition_renderingItsName() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+        val c = repo.addEntry(EntryType.AUDIO, "Gamma", "content://c")
+        repo.linkEntryToTag(tag.id, a.id)
+        repo.linkEntryToTag(tag.id, b.id)
+        repo.linkEntryToTag(tag.id, c.id)
+
+        // The song's deletion does NOT cascade off the tag's link (the
+        // link stores the song's NAME and no foreign key to entries): the
+        // song keeps its place in the list, rendering its snapshot name.
+        repo.deleteEntry(b)
+        // The song is gone from the content list itself...
+        val content = repo.observeEntries().first()
+        assertEquals("only the surviving entries stay", 2, content.size)
+        assertFalse(
+            "the deleted entry left the content list",
+            content.any { it.id == b.id },
         )
-        // The live observation reads the same links and must agree.
+        // ...but its song on the tag does not follow it.
+
+        val rows = repo.entriesForTag(tag.id)
+        assertEquals("the song keeps its row", 3, rows.size)
+        // At its ORIGINAL position: the missing row sits where the song
+        // was, the other rows keep their order...
+        assertEquals(listOf("Alpha", "Beta", "Gamma"), names(rows))
+        // ...rendering the deleted song's name (the snapshot)...
         assertEquals(
-            listOf("Second", "First", "Third"),
-            repo.observeEntriesForTag(tag.id).first().map { it.label },
+            "the missing row renders the song's snapshot name",
+            "Beta",
+            rows[1].name,
+        )
+        // ...with its deleted entry id as the provenance hint...
+        assertEquals(
+            "the missing row carries the deleted entry's id",
+            b.id,
+            rows[1].entryId,
+        )
+        assertNull("the missing row's entry is null", rows[1].entry)
+        assertEquals("the missing row keeps its sort position", 1, rows[1].sortOrder)
+
+        // The live observation carries the same semantics (the flow is
+        // what the tag detail page renders).
+        val flow = repo.observeEntriesForTag(tag.id)
+        assertEquals(listOf("Alpha", "Beta", "Gamma"), names(flow.first()))
+        repo.deleteEntry(a)
+        assertEquals(listOf("Alpha", "Beta", "Gamma"), names(flow.first()))
+        assertEquals(
+            "a second deletion leaves two missing rows",
+            2,
+            flow.first().count { it.entry == null },
         )
     }
 
     @Test
-    fun entriesForTag_neverMixesRowsAcrossTags_sharingEntries() = runBlocking {
-        val repo = repository()
-        val a = repo.addTag("UID-A", "Hallway")!!
-        val b = repo.addTag("UID-B", "Bedroom")!!
-        // The same entry is linked from both tags in different orders:
-        // the join must not bleed one tag's rows into the other.
-        val shared = repo.addEntry(EntryType.AUDIO, "Shared", "content://shared")
-        val onlyA = repo.addEntry(EntryType.AUDIO, "OnlyA", "content://only-a")
-        val onlyB = repo.addEntry(EntryType.AUDIO, "OnlyB", "content://only-b")
-        repo.updateTagEntries(a.id) { listOf(shared.id, onlyA.id) }
-        repo.updateTagEntries(b.id) { listOf(onlyB.id, shared.id) }
+    fun aDeletedSongReimportedUnderTheSameName_resolvesToTheNewEntry_andPlaysAgain() =
+        runBlocking {
+            val repo = repository()
+            val tag = repo.addTag("uid-a", "Porch")!!
+            val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+            val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+            repo.linkEntryToTag(tag.id, a.id)
+            repo.linkEntryToTag(tag.id, b.id)
+            repo.deleteEntry(b)
 
-        assertEquals(listOf("Shared", "OnlyA"), repo.entriesForTag(a.id).map { it.label })
-        assertEquals(listOf("OnlyB", "Shared"), repo.entriesForTag(b.id).map { it.label })
-        assertEquals(
-            listOf("OnlyB", "Shared"),
-            repo.observeEntriesForTag(b.id).first().map { it.label },
+            // The song is missing...
+            assertEquals("Beta", names(repo.entriesForTag(tag.id))[1])
+            assertNull(repo.entriesForTag(tag.id)[1].entry)
+
+            // ...and later re-imported under the SAME name (a different
+            // entry row: the old entry is gone). The tag's song resolves
+            // to the re-imported entry - no re-adding, no new link: the
+            // song plays again.
+            val reimported = repo.addEntry(EntryType.AUDIO, "Beta", "content://b-new")
+            val rows = repo.entriesForTag(tag.id)
+            assertEquals(2, rows.size)
+            assertEquals(listOf("Alpha", "Beta"), names(rows))
+            assertEquals(
+                "the re-imported song resolves to the new entry",
+                reimported.id,
+                rows[1].entry?.id,
+            )
+            assertEquals(
+                "the song is playable again - the spec the player queues",
+                listOf("content://a", "content://b-new"),
+                rows.mapNotNull { it.entry?.payload },
+            )
+            // The LIVE flow resolves it the same way (the page never
+            // needs a refresh).
+            val flow = repo.observeEntriesForTag(tag.id)
+            assertEquals(reimported.id, flow.first()[1].entry?.id)
+        }
+
+    @Test
+    fun aNameAlreadyOnTheTag_refusesALinkToADifferentEntryWithTheSameName() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val first = repo.addEntry(EntryType.AUDIO, "Song", "content://one")
+        assertTrue("the first pick links", repo.linkEntryToTag(tag.id, first.id))
+
+        // A duplicate-named row (a second stored copy of the song): the
+        // tag already has the song BY NAME, so no second link.
+        val duplicate = repo.addEntry(EntryType.AUDIO, "Song", "content://two")
+        assertFalse(
+            "a same-name entry must not create a second link",
+            repo.linkEntryToTag(tag.id, duplicate.id),
         )
+        assertEquals("exactly one link for the name", 1, repo.entriesForTag(tag.id).size)
+
+        // The same refusal holds for a re-imported copy once the original
+        // is deleted: the name is still on the tag (its missing row
+        // resolves to the re-imported entry), so the link is never
+        // duplicated.
+        val reimported = repo.addEntry(EntryType.AUDIO, "Song", "content://three")
+        assertFalse(
+            "a re-imported same-name entry must not create a second link",
+            repo.linkEntryToTag(tag.id, reimported.id),
+        )
+        assertEquals("still exactly one link for the name", 1, repo.entriesForTag(tag.id).size)
     }
 
     @Test
-    fun updateTagEntries_readsThroughTheJoinQuery_andReplacesTheList() = runBlocking {
+    fun unlinkAndReorderKeepMissingSongsInTheList() = runBlocking {
         val repo = repository()
-        val tag = repo.addTag("UID-C", "Kitchen")!!
-        val one = repo.addEntry(EntryType.AUDIO, "One", "content://one")
-        val two = repo.addEntry(EntryType.AUDIO, "Two", "content://two")
-        repo.updateTagEntries(tag.id) { listOf(one.id) }
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+        val c = repo.addEntry(EntryType.AUDIO, "Gamma", "content://c")
+        repo.linkEntryToTag(tag.id, a.id)
+        repo.linkEntryToTag(tag.id, b.id)
+        repo.linkEntryToTag(tag.id, c.id)
+        repo.deleteEntry(b)
 
-        // Append by reading the current (join-backed) id list back.
-        val next = repo.updateTagEntries(tag.id) { it + two.id }
-        assertEquals(listOf(one.id, two.id), next)
-        assertEquals(listOf("One", "Two"), repo.entriesForTag(tag.id).map { it.label })
+        // A reorder of the full row list (the missing song included) keeps
+        // the missing row at its new position - a persisted reorder never
+        // drops it. The reorder addresses the links by their own ids.
+        val rows = repo.entriesForTag(tag.id)
+        val reordered = rows.toMutableList().apply {
+            val missing = removeAt(1)
+            add(missing)
+        }
+        repo.updateTagEntries(tag.id) { current -> reordered.map { it.linkId } }
+        assertEquals(
+            listOf("Alpha", "Gamma", "Beta"),
+            names(repo.entriesForTag(tag.id)),
+        )
+
+        // Unlinking the missing song removes its link and returns true
+        // (the missing row IS the link, addressed by its link id).
+        val missing = repo.entriesForTag(tag.id).last()
+        assertNull(missing.entry)
+        assertEquals(true, repo.unlinkLinkFromTag(tag.id, missing.linkId))
+        assertEquals(listOf("Alpha", "Gamma"), names(repo.entriesForTag(tag.id)))
     }
+
+    @Test
+    fun songNamesForTagIsTheOrderedList_includingMissingSongs() = runBlocking {
+        val repo = repository()
+        val tag = repo.addTag("uid-a", "Porch")!!
+        val a = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+        val b = repo.addEntry(EntryType.AUDIO, "Beta", "content://b")
+        repo.linkEntryToTag(tag.id, a.id)
+        repo.linkEntryToTag(tag.id, b.id)
+        assertEquals(listOf("Alpha", "Beta"), repo.songNamesForTag(tag.id))
+
+        // The payload's song list (and the per-card memory's) carries the
+        // missing songs' names too - a write saves the full ordered list.
+        repo.deleteEntry(b)
+        assertEquals(listOf("Alpha", "Beta"), repo.songNamesForTag(tag.id))
+    }
+
+    @Test
+    fun insertLinkByNameAppendsALinkThatResolvesToTheLiveEntry_orStaysMissing() =
+        runBlocking {
+            val repo = repository()
+            val tag = repo.addTag("uid-a", "Porch")!!
+            val live = repo.addEntry(EntryType.AUDIO, "Alpha", "content://a")
+
+            // A name with a live entry resolves to it (the provenance
+            // hint carried).
+            repo.insertLinkByName(tag.id, "Alpha", live.id)
+            // A name with no entry stays missing (no provenance hint).
+            repo.insertLinkByName(tag.id, "Gone song", null)
+
+            val rows = repo.entriesForTag(tag.id)
+            assertEquals(listOf("Alpha", "Gone song"), names(rows))
+            assertEquals(live.id, rows[0].entry?.id)
+            assertNull(rows[1].entry)
+            assertNull(rows[1].entryId)
+            assertEquals(listOf(0, 1), rows.map { it.sortOrder })
+        }
+
+    @Test
+    fun entryByLabelResolvesTheExactName_elseOnlyTheExactlyClampedSinglePrefix() =
+        runBlocking {
+            val repo = repository()
+            // An exact stored name wins outright, even when a longer
+            // stored label also carries it as a prefix.
+            repo.addEntry(EntryType.AUDIO, "Exact song (the full title).mp3", "content://longer")
+            val exact = repo.addEntry(EntryType.AUDIO, "Exact song", "content://exact")
+            assertEquals(exact.id, repo.entryByLabel("Exact song")?.id)
+            // A name of exactly the payload's 50-char clamp that no entry
+            // carries exactly resolves to the stored entry its longer
+            // label was clamped from - the shape of a song name the card
+            // payload's 50-char name cap wrote as a prefix of its longer
+            // stored label...
+            val clamped = "y".repeat(50)
+            val live = repo.addEntry(EntryType.AUDIO, "$clamped one.mp3", "content://first")
+            assertEquals(live.id, repo.entryByLabel(clamped)?.id)
+            // ...but only when exactly one stored label carries it as a
+            // prefix: two labels sharing the clamped prefix leave the name
+            // unresolved (the tag's visible "song not found" row) - never
+            // a first-wins guess between them.
+            val shared = "z".repeat(50)
+            repo.addEntry(EntryType.AUDIO, "$shared one.mp3", "content://shared1")
+            repo.addEntry(EntryType.AUDIO, "$shared two.mp3", "content://shared2")
+            assertNull("a clamped name two labels share resolves to nothing", repo.entryByLabel(shared))
+            // A name UNDER the clamp that no entry carries exactly resolves
+            // to nothing even when a stored label starts with it: a short
+            // name is never a clamp product, so a prefix hit would silently
+            // link a different song (a deleted "My Song" must stay a
+            // visible "song not found" row while "My Song (Remix)" plays).
+            val short = "y".repeat(49)
+            repo.addEntry(EntryType.AUDIO, "$short remix.mp3", "content://short")
+            assertNull("a sub-clamp name is exact-only - no prefix link", repo.entryByLabel(short))
+            // A name the content carries in no form resolves to nothing.
+            assertNull(repo.entryByLabel("Gone song"))
+        }
 }

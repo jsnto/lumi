@@ -52,8 +52,27 @@ data class FolderEntity(
 )
 
 /**
- * Ordered association from a tag to an entry. A tag's content list is the set
- * of links sorted by [sortOrder].
+ * Ordered association from a tag to a song. A tag's content list is the
+ * set of links sorted by [sortOrder].
+ *
+ * A tag song is identified by NAME, not by the linked entry row: [songName]
+ * is a snapshot of the song's display name taken when the link was made,
+ * and the row is playable while a content entry with that name exists
+ * (evaluated live - a song deleted from the library and later re-imported
+ * under the same name becomes playable again without re-adding it). A
+ * name that resolves to no content shows on the tag's page as the "song
+ * not found" row, rendering its name from this snapshot.
+ *
+ * The reference to the ENTRY row ([entryId]) is NOT a foreign key and is
+ * only a provenance hint (the entry the link was made from): deleting an
+ * entry must neither be blocked nor cascade, so a link survives its
+ * entry's deletion - the song keeps its place on the tag's list as a
+ * "song not found" row instead of vanishing from it. (An ON DELETE NO
+ * ACTION foreign key would not work: it blocks the entry's deletion while
+ * a link still references it.) It is null for links that were restored
+ * from a name list without a live entry (a card payload's song list, a
+ * remembered per-uid song list). The link to the tag row cascades off it,
+ * as before: deleting a tag takes its song list with it.
  */
 @Entity(
     tableName = "tag_links",
@@ -64,20 +83,36 @@ data class FolderEntity(
             childColumns = ["tagId"],
             onDelete = ForeignKey.CASCADE,
         ),
-        ForeignKey(
-            entity = EntryEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["entryId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
     ],
-    indices = [Index(value = ["tagId"]), Index(value = ["entryId"])],
+    indices = [Index(value = ["tagId"])],
 )
 data class TagLinkEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val tagId: Long,
-    val entryId: Long,
+    val entryId: Long?,
+    val songName: String,
     val sortOrder: Int,
+)
+
+/**
+ * The last saved name and song list for a card uid - the per-card memory
+ * that survives the tag row's deletion. Written on registration (the
+ * naming dialog's save) and on a successful card write, keyed by the
+ * card's NFC uid (the [TagEntity.uid] string), it is the restore source
+ * for a re-scanned card whose payload carries no song list (a card
+ * written before the payload carried songs, or one never written):
+ * re-scanning the same card after its tag was deleted and saving it again
+ * restores the remembered name and songs. Deleting a tag row never
+ * destroys the record - the table carries no foreign key to tags.
+ *
+ * [songs] is the ordered song-name list as a JSON array string (the same
+ * shape the tag payload's song list decodes to).
+ */
+@Entity(tableName = "tag_memory")
+data class TagMemoryEntity(
+    @PrimaryKey val uid: String,
+    val name: String,
+    val songs: String,
 )
 
 /** Simple key/value settings table. */

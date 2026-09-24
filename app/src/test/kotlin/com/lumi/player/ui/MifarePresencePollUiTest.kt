@@ -156,7 +156,7 @@ class MifarePresencePollUiTest {
             if (tagA) {
                 val tag = app().repository.addTag(UID_A, "Tag A")!!
                 val entry = app().repository.addEntry(EntryType.AUDIO, "Song A", "content://a")
-                app().repository.updateTagEntries(tag.id) { it + entry.id }
+                app().repository.linkEntryToTag(tag.id, entry.id)
             }
         }
     }

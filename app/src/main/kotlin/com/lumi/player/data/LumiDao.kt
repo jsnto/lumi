@@ -61,9 +61,11 @@ interface LumiDao {
     suspend fun entriesByPayloads(payloads: Set<String>): List<EntryEntity>
 
     /**
-     * Deletes the stored content rows whose payload is in [payloads]; tag
-     * links to the deleted rows cascade off with them, the same way a
-     * single-entry deletion does.
+     * Deletes the stored content rows whose payload is in [payloads]; a
+     * tag's link to a deleted row survives the deletion (tag_links carries
+     * no foreign key to entries - the song's name snapshot is what the tag
+     * keeps), so the song holds its place on the tag's list as a "song not
+     * found" row.
      */
     @Query("DELETE FROM entries WHERE payload IN (:payloads)")
     suspend fun deleteEntriesByPayloads(payloads: Set<String>): Int
@@ -113,27 +115,30 @@ interface LumiDao {
     @Query("SELECT * FROM tag_links WHERE tagId = :tagId ORDER BY sortOrder ASC, id ASC")
     fun observeLinksForTag(tagId: Long): Flow<List<TagLinkEntity>>
 
-    /** A tag's entries in link order (one join instead of a query per link). */
-    @Query(
-        "SELECT e.* FROM entries e " +
-            "JOIN tag_links l ON e.id = l.entryId " +
-            "WHERE l.tagId = :tagId " +
-            "ORDER BY l.sortOrder ASC, l.id ASC",
-    )
-    suspend fun entriesForTag(tagId: Long): List<EntryEntity>
+    /** A tag's links in link order (the rows of the left join). */
+    @Query("SELECT * FROM tag_links WHERE tagId = :tagId ORDER BY sortOrder ASC, id ASC")
+    suspend fun linksForTag(tagId: Long): List<TagLinkEntity>
+
+    /** All entries in the content list's order (the right side of the tag song rows' name resolution - the first stored copy of a name wins). */
+    @Query("SELECT * FROM entries ORDER BY createdAt ASC, id ASC")
+    suspend fun entries(): List<EntryEntity>
+
+    /** The first stored content entry with the display name [label], in the content list's order (a tag song's live resolution). */
+    @Query("SELECT * FROM entries WHERE label = :label ORDER BY createdAt ASC, id ASC LIMIT 1")
+    suspend fun entryByLabel(label: String): EntryEntity?
 
     @Query("DELETE FROM tag_links WHERE tagId = :tagId")
     suspend fun clearLinksForTag(tagId: Long)
 
-    /** Whether the tag already links the entry (the in-app add-song list's "already on the tag" guard). */
-    @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId AND entryId = :entryId")
-    suspend fun linkCount(tagId: Long, entryId: Long): Int
+    /** Whether the tag already links a song with the display name [songName] (the add-song flows' "already on the tag" guard - a tag song is identified by name). */
+    @Query("SELECT COUNT(*) FROM tag_links WHERE tagId = :tagId AND songName = :songName")
+    suspend fun linkCountBySongName(tagId: Long, songName: String): Int
 
-    /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
+    /** The tags that play a song with the entry's display name (the song profile's assign-to-tag flags - a tag song is identified by name, so a tag that links the name plays this song), live. */
     @Query(
         "SELECT t.* FROM tags t " +
             "JOIN tag_links l ON t.id = l.tagId " +
-            "WHERE l.entryId = :entryId " +
+            "WHERE l.songName = (SELECT label FROM entries WHERE id = :entryId) " +
             "ORDER BY t.createdAt ASC, t.id ASC",
     )
     fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>>
@@ -159,6 +164,14 @@ interface LumiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSetting(setting: SettingsEntity)
+
+    // ---- per-card memory (the last saved name + songs, survives tag deletion) ----
+
+    @Query("SELECT * FROM tag_memory WHERE uid = :uid LIMIT 1")
+    suspend fun memoryByUid(uid: String): TagMemoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMemory(memory: TagMemoryEntity)
 
     // ---- remembered tag playback positions ----
 
