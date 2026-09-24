@@ -468,6 +468,26 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: appearance (theme mode) ----
+
+    /**
+     * The app's appearance mode (the settings screen's "Appearance" choice).
+     * Unset or invalid stored values fall back to follow-system - the
+     * default: the app tracks the phone's own light/dark setting.
+     */
+    fun observeThemeMode(): Flow<LumiThemeMode> =
+        dao.observeSettings().map { rows ->
+            themeModeFromStored(
+                rows.firstOrNull { it.key == SettingsEntity.THEME_MODE }?.value,
+            )
+        }
+
+    suspend fun setThemeMode(mode: LumiThemeMode) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.THEME_MODE, mode.storedValue()),
+        )
+    }
+
     // ---- settings: keep screen on ----
 
     /**

@@ -94,9 +94,9 @@ fun PlayerScreen(
 
     val type = playState.currentType?.let { EntryType.fromStorage(it) }
     val idle = playState.status == PlaybackStatus.IDLE
-    // The blob's accent: the loaded entry's color, or the idle blue. It tints
-    // the blob and its halo; the screen gradient stays warm.
-    val blobColor = type?.let(EntryPresentation::color) ?: Color(0xFF64B5F6)
+    // The blob's accent: the loaded entry's color, or the idle sky-blue.
+    // It tints the blob and its halo; the screen gradient follows the theme.
+    val blobColor = type?.let(EntryPresentation::color) ?: Color(0xFF4FC3F7)
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(

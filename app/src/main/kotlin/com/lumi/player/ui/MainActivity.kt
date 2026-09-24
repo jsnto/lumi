@@ -21,6 +21,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -30,6 +31,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.lumi.player.LumiApp
+import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.GenericPresencePoller
 import com.lumi.player.nfc.GenericPresenceSession
@@ -142,7 +144,13 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            LumiTheme {
+            // The appearance choice (the settings screen's "Appearance"
+            // option): applied app-wide through the theme, effective
+            // immediately on change - no app restart required.
+            val themeMode by viewModel.themeMode.collectAsState(
+                initial = viewModel.themeMode.value,
+            )
+            LumiTheme(themeMode) {
                 LumiRoot(
                     viewModel = viewModel,
                     nfcMissing = nfcMissing,

@@ -33,8 +33,10 @@ object EntryPresentation {
     }
 
     fun color(type: EntryType): Color = when (type) {
-        EntryType.AUDIO -> Color(0xFFFF8A65)
-        EntryType.VIDEO -> Color(0xFF9575CD)
-        EntryType.URL -> Color(0xFF4DB6AC)
+        // Bright candy accents: vivid enough to read in the light scheme's
+        // warm gradient AND the dark scheme's cocoa night.
+        EntryType.AUDIO -> Color(0xFFFF8A3D)
+        EntryType.VIDEO -> Color(0xFFB388FF)
+        EntryType.URL -> Color(0xFF4DD0E1)
     }
 }

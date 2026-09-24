@@ -16,6 +16,7 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.ContentSortDirection
+import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.SongMetadata
@@ -552,6 +553,23 @@ class LumiViewModel(
 
     fun setContentSortDirection(direction: ContentSortDirection) {
         viewModelScope.launch { repository.setContentSortDirection(direction) }
+    }
+
+    // ---- settings: appearance (theme mode) ----
+
+    /**
+     * The app's appearance mode (the settings screen's "Appearance"
+     * choice): follow the system (the default - the phone's own light/dark
+     * setting), or force light / dark. Persisted in the database; the
+     * activity applies it app-wide through the theme, effective immediately
+     * on change (no app restart required).
+     */
+    val themeMode: StateFlow<LumiThemeMode> =
+        repository.observeThemeMode()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, LumiThemeMode.FOLLOW_SYSTEM)
+
+    fun setThemeMode(mode: LumiThemeMode) {
+        viewModelScope.launch { repository.setThemeMode(mode) }
     }
 
     // ---- content: manual playback (the play buttons) ----
