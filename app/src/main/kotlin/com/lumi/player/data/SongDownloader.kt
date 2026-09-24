@@ -92,7 +92,10 @@ class SongDownloader(
                             stream.write(buffer, 0, n)
                             received += n
                             if (total > 0) {
-                                onProgress((received / total).toFloat().coerceIn(0f, 1f))
+                                // A real fraction (received/total): an integer
+                                // division would report 0 for the whole
+                                // transfer and jump to 1 on the final read.
+                                onProgress((received.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f))
                             }
                         }
                     }

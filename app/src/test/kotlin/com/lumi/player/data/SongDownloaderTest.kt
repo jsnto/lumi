@@ -88,6 +88,31 @@ class SongDownloaderTest {
     }
 
     @Test
+    fun aMultiChunkDownload_reportsTheIntermediateFraction_notAnIntegerStep() {
+        // A body larger than the 64 KB stream buffer settles over several
+        // reads: the determinate progress is the received/total FRACTION -
+        // a whole-transfer read reports ~0.5 mid-way. (The pre-fix
+        // Long/Long integer division reported 0 for the entire transfer
+        // and jumped straight to 1 on the final read, so this assertion
+        // fails on it.)
+        val body = ByteArray(130_000) { it.toByte() }
+        val progress = mutableListOf<Float?>()
+        val result = runBlocking {
+            SongDownloader(resolver) { url ->
+                SongDownloader.OpenedUrl(ByteArrayInputStream(body), body.size.toLong())
+            }.download("Porch song", "https://cdn.example.com/x/porch.mp3") { progress += it }
+        }
+        assertTrue("the download succeeds", result is SongDownloadResult.Success)
+        assertTrue("0f is reported first", progress.first() == 0f)
+        assertTrue("1f is the last report", progress.last() == 1f)
+        progress.forEach { it?.let { f -> assertTrue(f in 0f..1f) } }
+        assertTrue(
+            "an intermediate report is a real fraction between 0 and 1",
+            progress.any { it != null && it > 0f && it < 1f },
+        )
+    }
+
+    @Test
     fun anUnknownSizeIsAnIndeterminateProgress() {
         val body = ByteArray(3) { 1 }
         val progress = mutableListOf<Float?>()
