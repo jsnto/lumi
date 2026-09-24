@@ -819,10 +819,13 @@ class LumiViewModel(
             // the card payload's list when it carried one, else the
             // remembered per-uid list. Names land in their carried order;
             // each resolves to the live content entry its name points at
-            // (a name the payload's 50-char name cap wrote as a prefix
-            // resolves to the longer stored label), and the link stores
-            // that entry's full label - or the carried name, when nothing
-            // resolves (the tag's "song not found" row).
+            // (a 50-char clamped name the payload's name cap wrote as a
+            // prefix resolves to the one longer stored label it was
+            // clamped from, and only when exactly one label starts with
+            // it; a name the content carries in no form resolves to
+            // nothing), and the link stores that entry's full label - or
+            // the carried name, when nothing resolves (the tag's "song not
+            // found" row).
             if (tag != null && restoreSongs.isNotEmpty() && repository.entriesForTag(tag.id).isEmpty()) {
                 restoreSongs.distinct().forEach { songName ->
                     val entry = repository.entryByLabel(songName)

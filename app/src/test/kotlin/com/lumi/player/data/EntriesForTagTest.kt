@@ -271,7 +271,7 @@ class EntriesForTagTest {
         }
 
     @Test
-    fun entryByLabelResolvesTheExactName_elseTheFirstStoredLabelCarryingItAsAPrefix() =
+    fun entryByLabelResolvesTheExactName_elseOnlyTheExactlyClampedSinglePrefix() =
         runBlocking {
             val repo = repository()
             // An exact stored name wins outright, even when a longer
@@ -279,14 +279,30 @@ class EntriesForTagTest {
             repo.addEntry(EntryType.AUDIO, "Exact song (the full title).mp3", "content://longer")
             val exact = repo.addEntry(EntryType.AUDIO, "Exact song", "content://exact")
             assertEquals(exact.id, repo.entryByLabel("Exact song")?.id)
-            // A name no entry carries exactly resolves to the FIRST stored
-            // entry whose label carries it as a prefix - the shape of a
-            // song name the card payload's 50-char name cap wrote as a
-            // prefix of its longer stored label.
-            val carried = "y".repeat(49)
-            val first = repo.addEntry(EntryType.AUDIO, "$carried one.mp3", "content://first")
-            repo.addEntry(EntryType.AUDIO, "$carried two.mp3", "content://second")
-            assertEquals(first.id, repo.entryByLabel(carried)?.id)
+            // A name of exactly the payload's 50-char clamp that no entry
+            // carries exactly resolves to the stored entry its longer
+            // label was clamped from - the shape of a song name the card
+            // payload's 50-char name cap wrote as a prefix of its longer
+            // stored label...
+            val clamped = "y".repeat(50)
+            val live = repo.addEntry(EntryType.AUDIO, "$clamped one.mp3", "content://first")
+            assertEquals(live.id, repo.entryByLabel(clamped)?.id)
+            // ...but only when exactly one stored label carries it as a
+            // prefix: two labels sharing the clamped prefix leave the name
+            // unresolved (the tag's visible "song not found" row) - never
+            // a first-wins guess between them.
+            val shared = "z".repeat(50)
+            repo.addEntry(EntryType.AUDIO, "$shared one.mp3", "content://shared1")
+            repo.addEntry(EntryType.AUDIO, "$shared two.mp3", "content://shared2")
+            assertNull("a clamped name two labels share resolves to nothing", repo.entryByLabel(shared))
+            // A name UNDER the clamp that no entry carries exactly resolves
+            // to nothing even when a stored label starts with it: a short
+            // name is never a clamp product, so a prefix hit would silently
+            // link a different song (a deleted "My Song" must stay a
+            // visible "song not found" row while "My Song (Remix)" plays).
+            val short = "y".repeat(49)
+            repo.addEntry(EntryType.AUDIO, "$short remix.mp3", "content://short")
+            assertNull("a sub-clamp name is exact-only - no prefix link", repo.entryByLabel(short))
             // A name the content carries in no form resolves to nothing.
             assertNull(repo.entryByLabel("Gone song"))
         }

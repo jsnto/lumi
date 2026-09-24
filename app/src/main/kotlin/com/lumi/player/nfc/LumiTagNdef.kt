@@ -62,12 +62,14 @@ object LumiTagNdef {
      * The song display names' cap in the payload: each name is clamped to
      * the tag-name length, so a card cannot carry a name the tag cannot
      * display. A stored label longer than the cap is carried as its first
-     * [MAX_SONG_NAME_LENGTH] characters, and the restore path resolves that
-     * prefix back to the longer stored label (the first content entry
-     * whose label carries it), so a card round trip never strands a song
-     * as "song not found".
+     * [MAX_SONG_NAME_LENGTH] characters, and the restore path resolves a
+     * carried name of exactly this length back to the longer stored label
+     * it was clamped from - and only when exactly one stored label starts
+     * with it (zero or several keep the name a visible "song not found"),
+     * so a card round trip neither strands a song nor links a different
+     * one.
      */
-    private const val MAX_SONG_NAME_LENGTH = MAX_NAME_LENGTH
+    const val MAX_SONG_NAME_LENGTH = MAX_NAME_LENGTH
 
     private val TYPE_BYTES: ByteArray = MIME_TYPE.toByteArray(StandardCharsets.UTF_8)
 

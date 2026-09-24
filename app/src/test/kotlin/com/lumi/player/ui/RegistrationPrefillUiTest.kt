@@ -15,6 +15,7 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -429,7 +430,11 @@ class RegistrationPrefillUiTest {
             fullLabel,
             rows.single().name,
         )
-        assertEquals(dbAndGet { app().repository.entryByLabel(fullLabel)?.id }, rows.single().entryId)
+        assertEquals(
+            "the link's provenance is the live entry its full label names",
+            dbAndGet { app().repository.observeEntries().first().single { it.label == fullLabel }.id },
+            rows.single().entryId,
+        )
         assertNotNull("the restored song resolves to the live entry and plays", rows.single().entry)
     }
 

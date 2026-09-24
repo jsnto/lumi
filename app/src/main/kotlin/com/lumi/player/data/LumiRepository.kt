@@ -1,6 +1,7 @@
 package com.lumi.player.data
 
 import androidx.room.withTransaction
+import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -80,16 +81,23 @@ class LumiRepository(private val db: LumiDatabase) {
     /**
      * The first stored content entry with the display name [label] - a tag
      * song's name resolution, first stored copy wins. An exact stored name
-     * wins outright; a name no entry carries exactly (the card payload's
-     * song names are clamped to the payload's 50-char name cap at write
-     * time, so a longer stored label is carried as its own prefix) resolves
-     * to the first stored entry whose label carries it as a prefix; a name
-     * the content carries in no form resolves to nothing.
+     * wins outright; a name of exactly the payload's 50-char clamp
+     * ([LumiTagNdef.MAX_SONG_NAME_LENGTH]) that no entry carries exactly -
+     * the payload clamps longer stored labels to their own prefix at write
+     * time, so such a name can only be a shortened longer label - resolves
+     * to the stored entry whose label starts with it, and only when
+     * exactly one does (zero or several keep the name unresolved: the
+     * tag's visible "song not found" row, never a guess); a name under the
+     * clamp that no entry carries exactly resolves to nothing - a short
+     * name is never a clamp product, so a prefix hit would silently link
+     * a different song.
      */
     suspend fun entryByLabel(label: String): EntryEntity? {
         if (label.isBlank()) return null
         dao.entryByLabel(label)?.let { return it }
-        return dao.entries().firstOrNull { it.label.startsWith(label) }
+        if (label.length != LumiTagNdef.MAX_SONG_NAME_LENGTH) return null
+        val prefixMatches = dao.entries().filter { it.label.startsWith(label) }
+        return if (prefixMatches.size == 1) prefixMatches.single() else null
     }
 
     /** Renames a registered tag; a no-op when the UID is unknown. */
