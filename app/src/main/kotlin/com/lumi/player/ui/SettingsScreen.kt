@@ -438,8 +438,8 @@ fun SettingsScreen(
 
     // The tag's edit dialog (the tag detail page's edit action): the name
     // is the only stored detail - the UID is hardware-derived and stays
-    // read-only. Saving goes through the view model's rename path, the same
-    // one the tag payload write uses.
+    // read-only. Saving goes through the view model's rename path, so the
+    // page's displayed name follows the saved value.
     editTag?.let { tag ->
         TagEditDialog(
             uid = tag.uid,

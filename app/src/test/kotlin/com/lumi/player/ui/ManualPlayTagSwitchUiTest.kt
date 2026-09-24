@@ -150,6 +150,17 @@ class ManualPlayTagSwitchUiTest {
         app().repository.addEntry(EntryType.AUDIO, "Manual song", "content://manual-empty")
     }
 
+    /** Proximity mode; a registered tag whose single linked song has left the
+     * library (the link survives as a "song not found" row) + a manual song. */
+    private fun setupDeadLinkTag(): EntryEntity = runBlocking {
+        app().repository.setPlayMode(PlayMode.PROXIMITY)
+        val tag = app().repository.addTag(UID_DEAD, "Shelf")!!
+        val gone = app().repository.addEntry(EntryType.AUDIO, "Gone song", "content://gone-dead")
+        app().repository.linkEntryToTag(tag.id, gone.id)
+        app().repository.deleteEntry(gone)
+        app().repository.addEntry(EntryType.AUDIO, "Manual song", "content://manual-dead")
+    }
+
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch {
@@ -309,8 +320,53 @@ class ManualPlayTagSwitchUiTest {
         )
     }
 
+    @Test
+    fun readingATagWhoseSongsAllLeftTheLibrary_reportsTheMissingSongs_notTheEmptyTag() {
+        val manual = setupDeadLinkTag()
+        val controller = startMainActivity()
+        val viewModel = viewModelOf(controller)
+        val events = eventsOf(viewModel)
+        val activations = tagActivationsOf(viewModel)
+
+        // A manual song is playing, then the user pauses it (the session
+        // stays, unattached to any tag).
+        viewModel.playEntry(manual)
+        val manualStart = nextServiceIntent()
+        assertNotNull("the content play button must start the player service", manualStart)
+        assertEquals(PlayerService.ACTION_START, manualStart!!.action)
+        PlayerStateHolder.update {
+            PlayerUiState().copy(status = PlaybackStatus.PAUSED, activeTagUid = null)
+        }
+
+        // Reading the dead-link tag reports that its songs are gone - not
+        // the empty-tag copy (its page still lists the "song not found"
+        // rows) - and must not make it the active tag.
+        sendTag(controller, UID_DEAD)
+        idleUntil(
+            cond = { events.any { it == "None of Shelf's songs are in the content list anymore." } },
+            message = "the all-songs-missing report",
+        )
+        assertTrue(
+            "the report must not read as if the tag were empty",
+            events.none { it.startsWith("Nothing is linked") },
+        )
+        assertNull(
+            "a tag whose songs are all missing must not become the active tag",
+            viewModel.activeTagUid,
+        )
+        assertTrue(
+            "reading a dead-link tag must not arm the presence poll",
+            activations.isEmpty(),
+        )
+        assertNull(
+            "a read of a dead-link tag starts nothing",
+            shadowOf(app() as Application).nextStartedService,
+        )
+    }
+
     companion object {
         const val UID_A = "04A1B2C3"
         const val UID_EMPTY = "04C0FFEE01"
+        const val UID_DEAD = "04DEAD01"
     }
 }

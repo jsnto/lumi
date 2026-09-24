@@ -256,12 +256,20 @@ class LumiViewModel(
             // removed from the library contributes no spec to the queue
             // (and a list whose songs are all missing plays nothing, like
             // an empty one: it must not become the active tag).
-            val entries = repository.entriesForTag(tag.id).mapNotNull { it.entry }
+            val rows = repository.entriesForTag(tag.id)
+            val entries = rows.mapNotNull { it.entry }
             if (entries.isEmpty()) {
-                // A tag with no linked songs plays nothing: it must not become
-                // the active tag (that would hold the policy, and arm the
-                // presence poll, for a list that never plays).
-                event("Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet.")
+                // A tag that plays nothing (no links, or every linked song
+                // gone from the library) must not become the active tag
+                // (that would hold the policy, and arm the presence poll,
+                // for a list that never plays).
+                event(
+                    if (rows.isEmpty()) {
+                        "Nothing is linked to ${tag.name.ifEmpty { "this tag" }} yet."
+                    } else {
+                        "None of ${tag.name.ifEmpty { "this tag" }}'s songs are in the content list anymore."
+                    },
+                )
                 return@launch
             }
             when (policy.onTagDetected(uid, paused)) {
