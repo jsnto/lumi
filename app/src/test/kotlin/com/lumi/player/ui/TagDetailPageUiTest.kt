@@ -92,7 +92,13 @@ class TagDetailPageUiTest {
     }
 
     /** Pumps the main looper until [cond] holds or fails. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    // 15 s default (not 5 s): the drag-reorder tests poll a Room write
+    // that runs on the main looper, and on a COLD test JVM (this class
+    // first in the fork, or a single-method run) the write can settle
+    // slower than 5 s - a cold-start timing flake, not a product bug
+    // (warm JVMs settle the same writes in <100 ms). The budget is a
+    // wait allowance, never a behavior assertion.
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -103,7 +109,7 @@ class TagDetailPageUiTest {
     }
 
     /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
+    private fun waitForText(text: String, timeoutMs: Long = 15_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -1159,10 +1165,53 @@ class TagDetailPageUiTest {
 
         // Second drag on the SAME node: the song now leading (the second
         // song, on the first song's old handle node) goes down one pitch.
-        compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
-            down(center)
-            moveBy(Offset(0f, pitch.toFloat()))
-            up()
+        // The synthetic gesture is retried (bounded) until the reorder
+        // lands: on a COLD test JVM the second performTouchInput's DOWN is
+        // sometimes silently dropped by the compose input pipeline right
+        // after the first drag's write recomposed the list - the gesture
+        // is then a pure no-op (no drag, no write; observed: the order
+        // unchanged for 20 s, geometry correct) - and a re-dispatched
+        // gesture after a brief real-time settle lands. A dropped gesture
+        // is recognized as "the order is still the pre-drag one"; any
+        // other order is a misapplied drag and fails the test instead of
+        // being retried. (Not a product race: the handle's own
+        // pointerInput loop is untouched between gestures, and every
+        // warm-JVM run lands the gesture on the first dispatch.)
+        val secondDragTarget = listOf(firstId, secondId, thirdId)
+        val preSecondDragOrder = listOf(secondId, firstId, thirdId)
+        var secondDragAttempts = 0
+        while (true) {
+            compose.onNodeWithContentDescription("Reorder Second song").performTouchInput {
+                down(center)
+                moveBy(Offset(0f, pitch.toFloat()))
+                up()
+            }
+            secondDragAttempts++
+            var landed = false
+            val deadline = System.currentTimeMillis() + 2_000
+            while (System.currentTimeMillis() < deadline) {
+                if (tagLinks(tagId).map { it.entryId } == secondDragTarget) {
+                    landed = true
+                    break
+                }
+                ShadowLooper.idleMainLooper()
+                compose.waitForIdle()
+                Thread.sleep(50)
+            }
+            if (landed) break
+            val now = tagLinks(tagId).map { it.entryId }
+            if (now == secondDragTarget) break // landed during the final poll
+            check(now == preSecondDragOrder) {
+                "the second drag neither landed nor stayed a no-op: $now"
+            }
+            check(secondDragAttempts < 5) {
+                "the second drag's synthetic gesture was dropped on every attempt"
+            }
+            // The gesture was dropped (a cold-JVM input-pipeline race):
+            // let the pipeline settle in real time, then re-dispatch.
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(150)
+            compose.waitForIdle()
         }
         idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(firstId, secondId, thirdId) })
         compose.waitForIdle()
