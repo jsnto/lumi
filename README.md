@@ -36,16 +36,18 @@ server or account — everything is stored locally on the device.
    song can be removed from the tag (it stays in the content list), and
    the list can be reordered by dragging a song's handle to set the play
    order; managing the list never writes to the tag), a "Save to NFC
-   card" section that writes the tag's data (its name, play mode, and
-   song list) to the tag's own card — only a card whose NFC ID matches
-   the tag's is written, a mismatched card is reported and left
-   untouched, and a card that can't take it (not NDEF, read-only, or too
-   small) is reported with nothing written — and a danger zone to delete
-   the tag (its songs stay in the content list). The button is greyed
-   out with a note while the tag's data is too large for the card
-   payload, and a write that lands remembers the tag's name and song
-   list on the card, so re-scanning a card whose tag was deleted
-   pre-fills its name and restores its songs.
+   card" section that writes the tag's data (its name and song list) to
+   the tag's own card — only a card whose NFC ID matches the tag's is
+   written, a mismatched card is reported and left untouched, and a
+   card that can't take it (not NDEF, read-only, or too small) is
+   reported with nothing written — and a danger zone to delete the tag
+   (its songs stay in the content list). The button is greyed out with
+   a note while the tag's data is too large for the card payload, while
+   the phone's own NFC is unusable (no NFC hardware, or the radio off),
+   or while the tag's own card is known not to be writable (not an
+   NDEF card, or read-only), and a write that lands remembers the
+   tag's name and song list on the card, so re-scanning a card whose
+   tag was deleted pre-fills its name and restores its songs.
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual
