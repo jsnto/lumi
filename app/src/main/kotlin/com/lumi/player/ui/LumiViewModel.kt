@@ -346,8 +346,13 @@ class LumiViewModel(
      * found" names among them - the names a re-registered tag restores
      * name-for-name) - the card's own payload shape - through the existing
      * write path, but ONLY when the card's NFC ID ([uid]) is the tag's own
-     * uid: a mismatched card is reported and nothing is written to it. For
-     * the matching card the verdict is discovery-time data (no connect, no
+     * uid: a mismatched card is reported and nothing is written to it.
+     * Before any per-card verdict the payload's own size is checked
+     * against the app's write cap ([LumiTagNdef.MAX_PAYLOAD_BYTES]): a
+     * payload that exceeds it can be refused by NO card, so it is
+     * reported as too large - a permanent size fact, never as a card
+     * failure to retry - and nothing is written to any card. For the
+     * matching card the verdict is discovery-time data (no connect, no
      * RF): a card that isn't NDEF, is read-only, or is too small to hold
      * the payload is reported and nothing is written to it; only a card
      * that passes reaches the physical write (which itself reports a
@@ -378,6 +383,13 @@ class LumiViewModel(
             // included - the restore source for a re-registered tag).
             val names = repository.songNamesForTag(target.id)
             val payload = LumiTagData(name = target.name, mode = playMode.value, songs = names)
+            val messageBytes = LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(payload))
+            if (messageBytes > LumiTagNdef.MAX_PAYLOAD_BYTES) {
+                event(
+                    "The tag's data is too large to save to a card - it needs $messageBytes bytes, the app writes at most ${LumiTagNdef.MAX_PAYLOAD_BYTES}. Nothing was written.",
+                )
+                return@launch
+            }
             val gate = withContext(Dispatchers.IO) { cardWriteGate(tag, payload) }
             event(
                 when (gate) {

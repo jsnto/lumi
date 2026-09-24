@@ -397,7 +397,8 @@ fun SettingsScreen(
     // (the song profile's own scan) instead links its target song to the
     // scanned tag, and the copy names the song it will assign. A card-write
     // scan (the tag details page's "Save to NFC card") writes the tag's
-    // data to WHATEVER card is presented, and the copy asks for a card.
+    // data to the presented card only when its NFC ID matches the tag's,
+    // and the copy asks for the tag's own card.
     if (scanActive) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagScan() },

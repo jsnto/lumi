@@ -14,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -528,6 +529,62 @@ class TagCardWriteUiTest {
             message = "the too-small report",
         )
         assertEquals("nothing was written to the too-small card", 0, writes)
+    }
+
+    @Test
+    fun aTagListOverTheAppCapIsReported_asTooLarge_neverAsACardFailure() {
+        // The payload carries the tag's full song list: a long list
+        // exceeds the app's own write cap (LumiTagNdef.MAX_PAYLOAD_BYTES).
+        // That refusal is the cap's, not any card's - it must be reported
+        // as a permanent size fact, never as a card failure the user
+        // could retry.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+        val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
+        val names = (0 until 12).map { "Song %02d ".format(it + 1) + "x".repeat(42) }
+        dbAndGet {
+            names.forEach {
+                app().repository.linkEntryToTag(
+                    tagId,
+                    app().repository.addEntry(com.lumi.player.data.EntryType.AUDIO, it, "content://$it").id,
+                )
+            }
+        }
+
+        val needed = LumiTagNdef.messageByteLength(
+            LumiTagNdef.toNdefMessage(LumiTagData("Porch", viewModel.playMode.value, names)),
+        )
+        check(needed > LumiTagNdef.MAX_PAYLOAD_BYTES) { "the test list must exceed the app's write cap" }
+
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+
+        var writes = 0
+        viewModel.tagWriter = { _, _ ->
+            writes++
+            false
+        }
+
+        // The tag's own card with plenty of capacity (a card the gate
+        // would pass): the cap refusal still wins, and no physical write
+        // is attempted at all.
+        sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 4096))
+
+        idleUntil(
+            {
+                val toast = ShadowToast.getTextOfLatestToast()
+                toast != null &&
+                    toast.startsWith("The tag's data is too large to save to a card") &&
+                    toast.contains("it needs $needed bytes") &&
+                    toast.contains("Nothing was written.")
+            },
+            message = "the too-large report",
+        )
+        assertEquals("no physical write is attempted for an over-cap payload", 0, writes)
+        assertTrue("the scan is disarmed after settling", !viewModel.scanActive.value)
+        assertNull("the card-write target is cleared after settling", viewModel.cardWriteTarget.value)
+        assertNull("the presented card was not captured for registration", viewModel.capturedUid.value)
     }
 
     @Test
