@@ -29,7 +29,7 @@ data class TagInspect(val data: LumiTagData?, val writable: Boolean)
 /**
  * NDEF codec for the app's own tag payload: a single NDEF record with the
  * custom MIME type [MIME_TYPE] whose payload is a small JSON object
- * (`{"name": …, "mode": …}`).
+ * (`{"name": …, "mode": …, "songs": […]}`).
  *
  * Reading is lenient (a tag with no lumi record, a malformed payload, or an
  * unknown mode all degrade to "no record" / defaults; a payload without a
