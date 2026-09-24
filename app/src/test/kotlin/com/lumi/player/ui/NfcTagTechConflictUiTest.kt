@@ -288,7 +288,7 @@ class NfcTagTechConflictUiTest {
             app().repository.setPlayMode(mode)
             val tag = app().repository.addTag(UID_ON_DEVICE, "Tag 1")!!
             val entry = app().repository.addEntry(EntryType.AUDIO, "Song", "content://song")
-            app().repository.updateTagEntries(tag.id) { it + entry.id }
+            app().repository.linkEntryToTag(tag.id, entry.id)
         }
     }
 

@@ -16,6 +16,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.TagSongRow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -197,7 +199,7 @@ class TagAddSongTreeUiTest {
             .and(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, state))
 
     /** The tag's current song list (link order), read off the database. */
-    private fun tagLinks(): List<EntryEntity> =
+    private fun tagLinks(): List<TagSongRow> =
         dbAndGet { app().repository.entriesForTag(dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }) }
 
     /** Whether the dialog's Save button carries the disabled semantic. */
@@ -457,7 +459,7 @@ class TagAddSongTreeUiTest {
         assertEquals(
             "the checked songs land in the tree's render order (the folder's nested row first)",
             listOf(ids["album"]!!, ids["alpha"]!!),
-            links.map { it.id },
+            links.map { it.entryId },
         )
     }
 
@@ -490,7 +492,7 @@ class TagAddSongTreeUiTest {
             { tagLinks().size == 2 },
             message = "both checked songs to be linked",
         )
-        val labels = tagLinks().map { it.label }
+        val labels = tagLinks().mapNotNull { it.entry?.label }
         assertEquals(
             "the collapsed row's check survives the collapse into the save, in the tree's render order",
             listOf("Root song", "Beta"),
@@ -503,7 +505,7 @@ class TagAddSongTreeUiTest {
         val ids = storeTreeContent()
         val controller = openTagPage()
         val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
-        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(ids["alpha"]!!) } }
+        dbAndGet { listOf(ids["alpha"]!!).forEach { app().repository.linkEntryToTag(tagId, it) } }
         // The page's own song list (the flag's source) must be selected
         // before the picker is opened.
         idleUntil({ mainViewModel(controller.get()).effectiveSelectedTagId.value == tagId })
@@ -530,7 +532,7 @@ class TagAddSongTreeUiTest {
         // The commit runs on the main looper through the view model, so
         // pump until the checked link has settled in the database.
         idleUntil(
-            { tagLinks().map { it.label } == listOf("Alpha", "Beta") },
+            { tagLinks().mapNotNull { it.entry?.label } == listOf("Alpha", "Beta") },
             message = "the checked song to be linked after the flagged one",
         )
 
@@ -538,9 +540,9 @@ class TagAddSongTreeUiTest {
         assertEquals(
             "the flagged song is not re-linked; only the checked one is",
             listOf("Alpha", "Beta"),
-            links.map { it.label },
+            links.mapNotNull { it.entry?.label },
         )
-        assertEquals(1, links.count { it.label == "Alpha" })
+        assertEquals(1, links.count { it.entry?.label == "Alpha" })
 
         // Re-opening the picker, BOTH songs are on the tag now, so both
         // rows are flagged (one flag node per flagged row).
@@ -552,11 +554,77 @@ class TagAddSongTreeUiTest {
     }
 
     @Test
+    fun aReimportedMissingSongResolvesToTheDeadLink_andFlagsInThePicker() {
+        // The tag's song list carries a dead link: the "Gone song" entry
+        // was linked, then deleted from the library (the link survives,
+        // rendering its snapshot name). A NEW entry with the same label
+        // was re-imported into the content list. A tag song is identified
+        // by NAME: the re-imported song IS the song the tag plays - it
+        // resolves the dead link (the page's row becomes playable again
+        // without re-adding), and the picker must flag it "Already on
+        // this tag" so the name can never be linked twice.
+        val controller = openTagPage()
+        val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
+        val goneId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Gone song", "content://gone").id }
+        dbAndGet { listOf(goneId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
+        dbAndGet {
+            app().repository.deleteEntry(
+                app().repository.observeEntries().first().single { it.id == goneId },
+            )
+            true
+        }
+        // The re-import: a fresh content row with the same name.
+        val reimportedId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Gone song", "content://gone-again").id }
+
+        idleUntil({ mainViewModel(controller.get()).effectiveSelectedTagId.value == tagId })
+
+        // The page's row resolves live to the re-imported entry: the
+        // warning copy is gone, the row is playable again.
+        idleUntil({
+            try {
+                compose.onNodeWithText("this song is no longer in the content list").assertDoesNotExist()
+                true
+            } catch (e: AssertionError) {
+                false
+            }
+        })
+        compose.onNodeWithText("Gone song").assertExists()
+        val links = tagLinks()
+        assertEquals("the re-imported entry resolved the tag's existing link", 1, links.size)
+        assertEquals(reimportedId, links.single().entry?.id)
+
+        // The picker flags the re-imported row (the name is on the tag):
+        // no checkbox, non-addable. (The label appears on the page behind
+        // the dialog too, so the flag's own copy is the unique assertion.)
+        openPicker()
+        idleUntil({
+            try {
+                compose.onNodeWithText("Already on this tag").assertExists()
+                true
+            } catch (e: AssertionError) {
+                false
+            }
+        }, message = "the flagged re-imported row")
+        compose.onNode(checkboxIn("Gone song", ToggleableState.Off)).assertDoesNotExist()
+        compose.onNode(checkboxIn("Gone song", ToggleableState.On)).assertDoesNotExist()
+
+        // Nothing can be checked (the only content row is the flagged
+        // one, which carries no checkbox): the Save is disabled, so the
+        // name can never be linked twice - the tag keeps its one link.
+        assertTrue("the Save is disabled while nothing is checkable", saveButtonDisabled())
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Add a song").assertExists()
+        assertEquals("no second link for a name the tag already carries", 1, tagLinks().size)
+        assertEquals(reimportedId, tagLinks().single().entry?.id)
+    }
+
+    @Test
     fun theSaveButtonIsDisabledWhileNothingIsChecked_evenWithFlaggedRows() {
         val ids = storeTreeContent()
         val controller = openTagPage()
         val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
-        dbAndGet { app().repository.updateTagEntries(tagId) { listOf(ids["alpha"]!!) } }
+        dbAndGet { listOf(ids["alpha"]!!).forEach { app().repository.linkEntryToTag(tagId, it) } }
         openPicker()
         waitForText("Music")
 
@@ -569,7 +637,7 @@ class TagAddSongTreeUiTest {
         // it directly.
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        assertEquals("the disabled save links nothing", listOf("Alpha"), tagLinks().map { it.label })
+        assertEquals("the disabled save links nothing", listOf("Alpha"), tagLinks().mapNotNull { it.entry?.label })
         compose.onNodeWithText("Add a song").assertExists()
     }
 

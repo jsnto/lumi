@@ -159,12 +159,12 @@ class NfcAlwaysListeningUiTest {
             if (tagA) {
                 val tag = app().repository.addTag(UID_A, "Tag A")!!
                 val entry = app().repository.addEntry(EntryType.AUDIO, "Song A", "content://a")
-                app().repository.updateTagEntries(tag.id) { it + entry.id }
+                app().repository.linkEntryToTag(tag.id, entry.id)
             }
             if (tagB) {
                 val tag = app().repository.addTag(UID_B, "Tag B")!!
                 val entry = app().repository.addEntry(EntryType.AUDIO, "Song B", "content://b")
-                app().repository.updateTagEntries(tag.id) { it + entry.id }
+                app().repository.linkEntryToTag(tag.id, entry.id)
             }
         }
     }
@@ -235,8 +235,8 @@ class NfcAlwaysListeningUiTest {
     /** The tag's specs exactly as [LumiViewModel] builds them for the service. */
     private fun specsForUid(uid: String): List<EntrySpec> = runBlocking {
         val tag = app().repository.tagByUid(uid)!!
-        app().repository.entriesForTag(tag.id).map {
-            EntrySpec(type = it.type, label = it.label, payload = it.payload)
+        app().repository.entriesForTag(tag.id).mapNotNull { row ->
+            row.entry?.let { EntrySpec(type = it.type, label = it.label, payload = it.payload) }
         }
     }
 

@@ -10,9 +10,18 @@ import java.nio.charset.StandardCharsets
 
 /**
  * The per-tag record the app reads from and writes to NFC tags: the tag's
- * name and the preferred play mode.
+ * name, the preferred play mode, and the tag's ordered song list (by the
+ * songs' display names - the same name-based identity the tag's song list
+ * uses, so a written list restores onto a re-registered tag name-for-name).
+ *
+ * Legacy payloads written before the song list was part of the record carry
+ * no "songs" field; they decode with an empty list.
  */
-data class LumiTagData(val name: String, val mode: PlayMode)
+data class LumiTagData(
+    val name: String,
+    val mode: PlayMode,
+    val songs: List<String> = emptyList(),
+)
 
 /** The tag's lumi payload and whether the tag can hold the app payload. */
 data class TagInspect(val data: LumiTagData?, val writable: Boolean)
@@ -23,9 +32,10 @@ data class TagInspect(val data: LumiTagData?, val writable: Boolean)
  * (`{"name": …, "mode": …}`).
  *
  * Reading is lenient (a tag with no lumi record, a malformed payload, or an
- * unknown mode all degrade to "no record" / defaults); writing is strict
- * (never write to a read-only tag or one whose NDEF area is known to be
- * too small for the new message - an area whose capacity the discovery
+ * unknown mode all degrade to "no record" / defaults; a payload without a
+ * song list - the legacy shape - decodes with an empty list); writing is
+ * strict (never write to a read-only tag or one whose NDEF area is known to
+ * be too small for the new message - an area whose capacity the discovery
  * did not report is written anyway, and a too-small one fails the write).
  *
  * API note: this compiles against the project's stub SDK (see AGENTS.md),
@@ -38,8 +48,18 @@ object LumiTagNdef {
 
     const val MIME_TYPE = "application/x-lumi"
     const val MAX_NAME_LENGTH = 50
-    /** Target maximum total NDEF payload size for a write. */
-    const val MAX_PAYLOAD_BYTES = 200
+    /**
+     * Target maximum total NDEF payload size for a write - sized for the
+     * payload WITH the ordered song list (name + mode + song display names):
+     * comfortably above a five-song list on the small NTAG215 (145 user
+     * bytes), far below the large cards. The discovery-data gate is the
+     * per-card check (a KNOWN-small area refuses up front); this is the
+     * app's own cap on how much it will try to push onto a card.
+     */
+    const val MAX_PAYLOAD_BYTES = 512
+
+    /** The song display names' cap in the payload: each name is clamped to the tag-name length, so a card cannot carry a name the tag cannot display. */
+    private const val MAX_SONG_NAME_LENGTH = MAX_NAME_LENGTH
 
     private val TYPE_BYTES: ByteArray = MIME_TYPE.toByteArray(StandardCharsets.UTF_8)
 
@@ -47,17 +67,27 @@ object LumiTagNdef {
         val json = JSONObject()
         json.put("name", data.name.take(MAX_NAME_LENGTH))
         json.put("mode", data.mode.storageValue)
+        val songs = org.json.JSONArray()
+        data.songs.forEach { songs.put(it.take(MAX_SONG_NAME_LENGTH)) }
+        json.put("songs", songs)
         return json.toString()
     }
 
     fun fromJson(json: String): LumiTagData? = try {
         val obj = JSONObject(json)
-        if (!obj.has("name") || !obj.has("mode")) null else
+        if (!obj.has("name") || !obj.has("mode")) null else {
+            val songs = obj.optJSONArray("songs")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it).take(MAX_SONG_NAME_LENGTH) }
+            } ?: emptyList()
             LumiTagData(
                 name = obj.getString("name").take(MAX_NAME_LENGTH),
                 // Unknown/missing mode values fall back to the default mode.
                 mode = PlayMode.fromStorage(obj.getString("mode")),
+                // Legacy payloads (pre-song-list) carry no "songs" field -
+                // they decode with an empty list, never as "no record".
+                songs = songs,
             )
+        }
     } catch (e: Exception) {
         null
     }

@@ -27,9 +27,32 @@ class LumiTagNdefTest {
     // ---- JSON ----
 
     @Test
-    fun json_roundTrips() {
-        val json = LumiTagNdef.toJson(data)
-        assertEquals(data, LumiTagNdef.fromJson(json))
+    fun json_roundTrips_includingTheSongList() {
+        val withSongs = LumiTagData(
+            name = "Hallway",
+            mode = PlayMode.PROXIMITY,
+            songs = listOf("First song", "Gone song", "Third \u00e9"),
+        )
+        assertEquals(withSongs, LumiTagNdef.fromJson(LumiTagNdef.toJson(withSongs)))
+    }
+
+    @Test
+    fun json_songsAreClampedToThePerSongLimit() {
+        val decoded = LumiTagNdef.fromJson(
+            LumiTagNdef.toJson(LumiTagData("T", PlayMode.CONTINUOUS, listOf("x".repeat(80)))),
+        )
+        assertEquals(listOf("x".repeat(50)), decoded?.songs)
+    }
+
+    @Test
+    fun json_legacyPayloadWithoutASongsField_decodesWithAnEmptyList() {
+        // A card written before the song list existed carries only name +
+        // mode: it must decode (not be treated as "no record") with an
+        // empty song list.
+        val decoded = LumiTagNdef.fromJson("""{"name":"Legacy","mode":"proximity"}""")
+        assertEquals("Legacy", decoded?.name)
+        assertEquals(PlayMode.PROXIMITY, decoded?.mode)
+        assertEquals(emptyList<String>(), decoded?.songs)
     }
 
     @Test
@@ -83,13 +106,19 @@ class LumiTagNdefTest {
     }
 
     @Test
-    fun payloadFitsThe200ByteTargetEvenWithAMaxLengthName() {
-        val message = LumiTagNdef.toNdefMessage(LumiTagData("y".repeat(50), PlayMode.PROXIMITY))
+    fun payloadFitsThe512ByteTargetWithAMaxLengthNameAndASongList() {
+        // The payload carries the full ordered song list (a write saves the
+        // name, the mode, and the songs): the worst case - a max-length
+        // name plus five max-length song names - fits the 512-byte target.
+        val message = LumiTagNdef.toNdefMessage(
+            LumiTagData("y".repeat(50), PlayMode.PROXIMITY, List(5) { "z".repeat(50) }),
+        )
         assertTrue(
             "payload of ${LumiTagNdef.messageByteLength(message)}B must fit the " +
                 "${LumiTagNdef.MAX_PAYLOAD_BYTES}B target",
             LumiTagNdef.messageByteLength(message) <= LumiTagNdef.MAX_PAYLOAD_BYTES,
         )
+        assertEquals("the target carries name + mode + a real song list", 512, LumiTagNdef.MAX_PAYLOAD_BYTES)
     }
 
     @Test

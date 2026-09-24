@@ -220,7 +220,7 @@ class SongProfileUiTest {
         // closes the list.
         clickOnceVisible("Porch")
         idleUntil(
-            cond = { dbAndGet { app().repository.entriesForTag(tag.id) }.map { it.id } == listOf(entry.id) },
+            cond = { dbAndGet { app().repository.entriesForTag(tag.id) }.map { it.entryId } == listOf(entry.id) },
             message = "the link",
         )
         compose.waitForIdle()
@@ -255,7 +255,7 @@ class SongProfileUiTest {
         assertEquals(
             "a re-pick must not duplicate the link",
             listOf(entry.id),
-            dbAndGet { app().repository.entriesForTag(tag.id) }.map { it.id },
+            dbAndGet { app().repository.entriesForTag(tag.id) }.map { it.entryId },
         )
         compose.onNodeWithText("Already on this tag").assertExists()
     }

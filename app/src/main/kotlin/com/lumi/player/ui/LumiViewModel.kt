@@ -20,6 +20,7 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.SongMetadata
 import com.lumi.player.data.TagEntity
+import com.lumi.player.data.TagSongRow
 import com.lumi.player.data.FolderChild
 import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.LumiRepository
@@ -123,36 +124,44 @@ class LumiViewModel(
     val scanAssignEntry: StateFlow<EntryEntity?> = _scanAssignEntry.asStateFlow()
 
     // The tag whose data a card-write scan will write (the tag details
-    // page's "Save to NFC card" action; null for a plain scan). Any card
-    // the armed scan reads is written the tag's data - even one the app
-    // has never seen.
+    // page's "Save to NFC card" action; null for a plain scan). The scan
+    // writes the tag's data only to the tag's OWN card - the presented
+    // card's NFC ID must match the tag's uid (a mismatched card is
+    // reported, nothing is written; see [settleCardWrite]).
     private val _cardWriteTarget = MutableStateFlow<TagEntity?>(null)
     val cardWriteTarget: StateFlow<TagEntity?> = _cardWriteTarget.asStateFlow()
 
-    // The card details observed from the last presented tag handle
-    // (the tag's uid and the details its discovery data carried): the
-    // tag details section shows the fields the presented handle actually
-    // carried - never guessed.
-    private val _tagCardDetails = MutableStateFlow<Pair<String, TagCardDetails>?>(null)
-    val tagCardDetails: StateFlow<Pair<String, TagCardDetails>?> = _tagCardDetails.asStateFlow()
+    // The card details observed per presented tag uid: a read updates the
+    // entry for THAT uid only, so a tag's page keeps its own details no
+    // matter what is scanned afterwards. A page shows the entry for its
+    // own uid - never guessed: a tag whose details were never observed
+    // shows the section empty.
+    private val _tagCardDetails = MutableStateFlow<Map<String, TagCardDetails>>(emptyMap())
+    val tagCardDetails: StateFlow<Map<String, TagCardDetails>> = _tagCardDetails.asStateFlow()
 
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
 
-    /** The payload the captured tag carried (name + mode), if it had one. */
+    /**
+     * The captured tag's prefill: the payload it carried (name + mode +
+     * song list), with the name falling back to the card's REMEMBERED name
+     * (the per-card memory) when the payload is missing or nameless - a
+     * re-scanned card whose tag was deleted prefills its old name. Null
+     * when neither the payload nor the memory offers anything.
+     */
     private val _capturedTagData = MutableStateFlow<LumiTagData?>(null)
     val capturedTagData: StateFlow<LumiTagData?> = _capturedTagData.asStateFlow()
 
-    /** Whether the captured tag is writable and fits the tag payload. */
-    private val _capturedTagWritable = MutableStateFlow(false)
-    val capturedTagWritable: StateFlow<Boolean> = _capturedTagWritable.asStateFlow()
-
-    // The raw NFC tag of the last registration capture, kept so the payload
-    // can be written to it after the user confirms the form. Writing must
-    // happen while the app is in the foreground and the tag still in range
-    // (the Android 10+ NFC write constraint); a tag that left range simply
-    // fails the write and the tag is still saved.
-    private var capturedTag: Tag? = null
+    /**
+     * The captured card's RESTORE SONG LIST - the song names a save of this
+     * capture should land on the tag when it comes back empty: the payload's
+     * ordered song list when the card carries one (the card payload is the
+     * restore source for tags written in the new format), else the
+     * remembered per-uid song list (the memory of cards written before the
+     * payload carried songs, or never written).
+     */
+    private val _capturedRestoreSongs = MutableStateFlow<List<String>>(emptyList())
+    val capturedRestoreSongs: StateFlow<List<String>> = _capturedRestoreSongs.asStateFlow()
 
     // ---- transient UI events (toasts/snackbars) ----
 
@@ -184,7 +193,7 @@ class LumiViewModel(
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val linkedEntries: StateFlow<List<EntryEntity>> =
+    val linkedEntries: StateFlow<List<TagSongRow>> =
         effectiveSelectedTagId.flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else repository.observeEntriesForTag(id)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -226,11 +235,12 @@ class LumiViewModel(
         if (tag != null) inspectTagDetails(uid, tag)
         // A card-write scan (the tag details page's "Save to NFC card")
         // is armed for a specific card write: the read's card is written
-        // the target tag's data, whatever tag it is (even one the app has
-        // never seen) - it never goes to registration or playback.
+        // the target tag's data ONLY when the card's NFC ID is the tag's
+        // own uid - a mismatched card is reported, nothing is written -
+        // and it never goes to registration or playback.
         val cardWrite = _cardWriteTarget.value
         if (_scanActive.value && cardWrite != null) {
-            settleCardWrite(cardWrite, tag)
+            settleCardWrite(cardWrite, uid, tag)
             return
         }
         if (_scanActive.value) {
@@ -241,7 +251,11 @@ class LumiViewModel(
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
             val tag = repository.tagByUid(uid) ?: return@launch
-            val entries = repository.entriesForTag(tag.id)
+            // The rows resolve live by name: a name whose song has been
+            // removed from the library contributes no spec to the queue
+            // (and a list whose songs are all missing plays nothing, like
+            // an empty one: it must not become the active tag).
+            val entries = repository.entriesForTag(tag.id).mapNotNull { it.entry }
             if (entries.isEmpty()) {
                 // A tag with no linked songs plays nothing: it must not become
                 // the active tag (that would hold the policy, and arm the
@@ -307,49 +321,73 @@ class LumiViewModel(
      * Observes a presented tag's additional card details (its tech list,
      * and, when the handle carries the NDEF tech, its NDEF type, capacity
      * and writability - all of it discovery-time data: no connection, no
-     * RF activity) and publishes them keyed by the tag's uid, for the tag
-     * details section. A page shows the details only for the tag it is
-     * open on (its own uid), so a read of another tag can never surface
-     * stale details.
+     * RF activity) and records them for that tag's uid. The record is
+     * PER-UID (a read updates only that uid's entry), so a tag's page
+     * keeps its own details no matter what is scanned afterwards, and a
+     * re-scan of the tag refreshes them. A page shows the details only
+     * for the tag it is open on (its own uid), so a read of another tag
+     * can never surface its details - and a tag whose details were never
+     * observed shows the section empty (never guessed).
      */
     private fun inspectTagDetails(uid: String, tag: Tag) {
         viewModelScope.launch {
             // Pure discovery-data reads (no IO, no binder): the launch
             // body runs before any suspension, so the publish is ordered
             // with the read that produced it.
-            _tagCardDetails.value = uid to tag.cardDetails()
+            _tagCardDetails.value = _tagCardDetails.value + (uid to tag.cardDetails())
         }
     }
 
     /**
      * Settles a tag read while a card-write scan is armed (the tag
      * details page's "Save to NFC card"): the read's card is written the
-     * target tag's data - the tag's name and the app's play mode, the
-     * card's own payload shape - through the existing write path. The
-     * card's verdict is discovery-time data (no connect, no RF): a card
-     * that isn't NDEF, is read-only, or is too small to hold the payload
-     * is reported and nothing is written to it; only a card that passes
-     * reaches the physical write (which itself reports a failure - an
-     * unknown-capacity card can turn out too small there, or the card
-     * left range mid-write). The scan settles either way (the target
-     * is cleared and the flag disarmed): further reads are normal reads,
-     * never re-routed to this write - the user re-arms the action to try
-     * again.
+     * target tag's data - the tag's name, the app's play mode, and the
+     * tag's ORDERED SONG LIST (by the songs' display names, "song not
+     * found" names among them - the names a re-registered tag restores
+     * name-for-name) - the card's own payload shape - through the existing
+     * write path, but ONLY when the card's NFC ID ([uid]) is the tag's own
+     * uid: a mismatched card is reported and nothing is written to it. For
+     * the matching card the verdict is discovery-time data (no connect, no
+     * RF): a card that isn't NDEF, is read-only, or is too small to hold
+     * the payload is reported and nothing is written to it; only a card
+     * that passes reaches the physical write (which itself reports a
+     * failure - an unknown-capacity card can turn out too small there, or
+     * the card left range mid-write). A write that lands remembers the
+     * card's last saved name + songs (the per-card memory). The scan
+     * settles either way (the target is cleared and the flag disarmed):
+     * further reads are normal reads, never re-routed to this write - the
+     * user re-arms the action to try again.
      */
-    private fun settleCardWrite(target: TagEntity, tag: Tag?) {
+    private fun settleCardWrite(target: TagEntity, uid: String, tag: Tag?) {
         _scanActive.value = false
         _cardWriteTarget.value = null
         if (tag == null) {
             event("Couldn't read that card - try again.")
             return
         }
-        val payload = LumiTagData(name = target.name, mode = playMode.value)
+        // The card must BE the tag's own card: the presented card's NFC
+        // ID has to match the tag's uid (the same string the tags table
+        // stores). A different card is reported and left untouched.
+        if (uid != target.uid) {
+            event("That card's NFC ID doesn't match this tag's - nothing was written.")
+            return
+        }
         viewModelScope.launch {
+            // The full payload: the tag's name + mode + ordered song list
+            // (the names the list shows, missing songs' snapshot names
+            // included - the restore source for a re-registered tag).
+            val names = repository.songNamesForTag(target.id)
+            val payload = LumiTagData(name = target.name, mode = playMode.value, songs = names)
             val gate = withContext(Dispatchers.IO) { cardWriteGate(tag, payload) }
             event(
                 when (gate) {
                     is CardWriteGate.Ok ->
                         if (withContext(Dispatchers.IO) { tagWriter(tag, payload) }) {
+                            // The write landed: the card now carries the
+                            // name + songs, and the per-uid memory follows
+                            // the written card (the restore source that
+                            // survives the tag row's deletion).
+                            repository.rememberTag(target.uid, target.name, names)
                             "Saved to the card."
                         } else {
                             "Couldn't write to that card - keep it on the phone and try again."
@@ -643,10 +681,12 @@ class LumiViewModel(
 
     /**
      * Arms the card-write scan (the tag details page's "Save to NFC card"
-     * action): the next tag read - ANY card, through the app's own
+     * action): the next tag read - through the app's own
      * foreground-dispatch read path ([onTagDetected]) - writes [tag]'s
-     * data to it (see [settleCardWrite]). The scan dialog's copy asks the
-     * user to hold a card against the back of the phone.
+     * data to it ONLY when that card's NFC ID is the tag's own uid
+     * (see [settleCardWrite]); a card with a different NFC ID is
+     * reported and nothing is written. The scan dialog's copy asks the
+     * user to hold the tag's own card against the back of the phone.
      */
     fun startCardWrite(tag: TagEntity) {
         _capturedUid.value = null
@@ -668,41 +708,56 @@ class LumiViewModel(
 
     /**
      * Records a tag captured during a registration session, reading its
-     * lumi payload (for form prefill) and its writability (for the optional
-     * "write to tag" step).
+     * lumi payload (for the name/mode/songs form prefill) and merging the
+     * card's per-uid memory (the last saved name + song list) as the
+     * fallback prefill and restore source. Registration NEVER writes the
+     * physical card - the explicit card-write action (the tag detail page's
+     * "Save to NFC card") is the only write path.
      */
     internal fun capture(uid: String, tag: Tag? = null) {
         _capturedUid.value = uid
-        capturedTag = tag
         if (tag == null) {
             _capturedTagData.value = null
-            _capturedTagWritable.value = false
+            _capturedRestoreSongs.value = emptyList()
             return
         }
         viewModelScope.launch {
-            // One NDEF session reads the payload and the writability.
-            val inspected = withContext(Dispatchers.IO) {
-                tagInspector(tag, LumiTagData(name = "", mode = playMode.value))
+            // One NDEF session reads the payload.
+            val data = withContext(Dispatchers.IO) {
+                tagInspector(tag, LumiTagData(name = "", mode = playMode.value)).data
             }
             if (_capturedUid.value != uid) return@launch
-            _capturedTagData.value = inspected.data
-            _capturedTagWritable.value = inspected.writable
+            publishCapture(uid, data)
         }
     }
 
-    /** Test seam: capture with explicit payload/writability (no live tag). */
-    internal fun captureForTest(uid: String, data: LumiTagData?, writable: Boolean) {
+    /** Test seam: capture with an explicit payload (no live tag). */
+    internal fun captureForTest(uid: String, data: LumiTagData?) {
         _capturedUid.value = uid
-        capturedTag = null
-        _capturedTagData.value = data
-        _capturedTagWritable.value = writable
+        viewModelScope.launch { publishCapture(uid, data) }
     }
 
-    /** Test seam: the physical tag write, replaced in unit tests. */
+    /**
+     * Publishes a capture's prefill + restore songs: the payload when it
+     * offers the name (a payload-less card falls back to the card's
+     * REMEMBERED name, and a nameless payload to the remembered one), and
+     * the restore song list (the payload's songs when non-empty, else the
+     * remembered songs).
+     */
+    private suspend fun publishCapture(uid: String, data: LumiTagData?) {
+        val memory = repository.memoryForUid(uid)
+        _capturedTagData.value = when {
+            data == null -> memory?.name?.takeIf { it.isNotBlank() }?.let { LumiTagData(it, playMode.value) }
+            data.name.isBlank() && (memory?.name?.isNotBlank() == true) -> data.copy(name = memory.name)
+            else -> data
+        }
+        _capturedRestoreSongs.value = data?.songs?.takeIf { it.isNotEmpty() } ?: (memory?.songs ?: emptyList())
+    }
+
+    /** Test seam: the physical card write, replaced in unit tests. */
     internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean = { tag, data ->
         LumiTagNdef.write(tag, data)
     }
-
     /**
      * Test seam: the physical tag inspect (payload + writability in one
      * NDEF session), replaced in unit tests.
@@ -715,61 +770,58 @@ class LumiViewModel(
         _capturedUid.value = null
         _scanAssignEntry.value = null
         _capturedTagData.value = null
-        _capturedTagWritable.value = false
-        capturedTag = null
+        _capturedRestoreSongs.value = emptyList()
     }
 
     /**
-     * Saves the captured tag under [name] and - when [writeToTag] and the
-     * tag is still reachable - writes the name + mode back to the tag so
-     * re-registering it later prefills the form. The mode only records what
-     * the tag was registered with (and prefills the form on re-read); it
-     * does NOT change the app's play mode. When the tag is already
-     * registered and the write lands, the stored record's name is updated
-     * to follow the written tag payload.
+     * Saves the captured tag under [name]. The mode only records what the
+     * tag was registered with (and prefills the form on re-read); it does
+     * NOT change the app's play mode. Registration never writes the
+     * physical card - the explicit card-write action is the only write
+     * path - but it remembers the card's last saved name + song list (the
+     * per-card memory that survives the tag row's deletion): when the card
+     * comes back with an EMPTY tag (its tag was deleted and re-registered,
+     * or a fresh registration of a card whose payload carries songs), the
+     * capture's restore song list (the payload's songs, else the remembered
+     * ones) is linked onto the tag name-for-name, with each name resolving
+     * to the live content entry that plays it - or staying a "song not
+     * found" row when no content carries the name.
      */
-    fun confirmTagName(name: String, mode: PlayMode, writeToTag: Boolean) {
+    fun confirmTagName(name: String, mode: PlayMode) {
         val uid = _capturedUid.value ?: return
-        val tag = capturedTag
+        val restoreSongs = _capturedRestoreSongs.value
         // A scan-to-assign's target song, if the capture came from one: it
         // is linked once this save settles (below).
         val assignEntry = _scanAssignEntry.value
         _capturedUid.value = null
         _capturedTagData.value = null
-        _capturedTagWritable.value = false
-        capturedTag = null
+        _capturedRestoreSongs.value = emptyList()
         viewModelScope.launch {
             val saved = repository.addTag(uid, name)
             event(if (saved != null) "Tag added!" else "That tag is already registered.")
+            val tag = saved ?: repository.tagByUid(uid)
+            // The card's songs restored onto a tag that came back empty -
+            // the card payload's list when it carried one, else the
+            // remembered per-uid list. Names land in their carried order,
+            // each with the live entry its name resolves to (or none).
+            if (tag != null && restoreSongs.isNotEmpty() && repository.entriesForTag(tag.id).isEmpty()) {
+                restoreSongs.distinct().forEach { songName ->
+                    repository.insertLinkByName(tag.id, songName, repository.entryByLabel(songName)?.id)
+                }
+            }
+            // The card's last saved name + song list remembered per uid -
+            // the restore source that survives this tag row's deletion.
+            // The name is stored the way the tag row stores it (trimmed),
+            // so a later re-scan prefills exactly what was saved.
+            tag?.let { repository.rememberTag(uid, name.trim(), repository.songNamesForTag(it.id)) }
             if (saved != null) _selectedTagId.value = saved.id
             // The scan-to-assign's song is assigned once its tag is saved -
             // the tag it was scanned against, looked up by uid when the tag
             // already existed.
             assignEntry?.let { entry ->
                 _scanAssignEntry.value = null
-                (saved ?: repository.tagByUid(uid))?.let { linkEntryToTag(it, entry) }
+                tag?.let { linkEntryToTag(it, entry) }
             }
-            if (writeToTag) writeTagPayload(tag, uid, name, mode, saved != null)
-        }
-    }
-
-    /**
-     * Writes the tag payload (the trimmed name + the registration mode) to
-     * the captured [tag] while it is in range. The DB stores the name
-     * trimmed, so it is written trimmed as well - the two can never
-     * diverge. A write that lands on an already-registered tag renames the
-     * stored record to follow the written payload; a tag that left range
-     * makes the write fail gracefully (the tag is still saved).
-     */
-    private suspend fun writeTagPayload(tag: Tag?, uid: String, name: String, mode: PlayMode, wasSaved: Boolean) {
-        val written = withContext(Dispatchers.IO) {
-            tagWriter(tag, LumiTagData(name.trim(), mode))
-        }
-        if (written) {
-            if (!wasSaved) repository.renameTag(uid, name)
-            event("Name written to the tag.")
-        } else {
-            event("Couldn't write to the tag - keep it on the phone and try again.")
         }
     }
 
@@ -1276,7 +1328,15 @@ class LumiViewModel(
 
     /** The one-song link (blocking: its write commits before returning). */
     private suspend fun linkOneEntryToTag(tag: TagEntity, entry: EntryEntity) {
-        if (repository.entriesForTag(tag.id).any { it.label == entry.label }) {
+        // The guard matches on the EXISTING songs' names (a tag song is
+        // identified by name): a second pick of the same song - or of a
+        // duplicate-named row - must not duplicate the link. A "song not
+        // found" row carries the deleted song's snapshot name, so re-adding
+        // a re-imported song with that name is a refusal, not a duplicate:
+        // the tag already shows that song (as the missing row), and the
+        // re-imported entry plays it (name-based resolution) - removing the
+        // missing row first is what re-links the new entry.
+        if (repository.entriesForTag(tag.id).any { it.name == entry.label }) {
             event("That song is already on the tag.")
             return
         }
@@ -1286,14 +1346,17 @@ class LumiViewModel(
 
     /**
      * Removes one song from one tag - the inverse of [linkEntryToTag]: the
-     * tag's link to [entry] goes, and nothing else - the song stays in the
-     * content list (its folder membership untouched), its links to any
-     * other tags are untouched, and the remaining songs keep their
-     * persisted order (the play order of what stays is unchanged).
+     * tag's LINK to [row] goes, and nothing else. For a song that still
+     * exists the song stays in the content list (its folder membership
+     * untouched), its links to any other tags are untouched, and the
+     * remaining songs keep their persisted order (the play order of what
+     * stays is unchanged). For a song that has ALREADY been
+     * deleted from the library (the tag's "song not found" row) the dead
+     * link itself goes: the missing row leaves the list.
      */
-    fun unlinkEntryFromTag(tag: TagEntity, entry: EntryEntity) {
+    fun unlinkSongFromTag(tag: TagEntity, row: TagSongRow) {
         viewModelScope.launch {
-            val removed = repository.unlinkEntryFromTag(tag.id, entry.id)
+            val removed = repository.unlinkLinkFromTag(tag.id, row.linkId)
             event(if (removed) "Song removed from the tag" else "Could not remove the song from that tag.")
         }
     }
@@ -1302,13 +1365,20 @@ class LumiViewModel(
      * Reorders the tag's song list - the tag detail page's drag reorder:
      * the persisted link order is replaced with [ordered] through the same
      * transactional seam the add-song flow appends through, so the play
-     * order (the link order) follows the reordered order. A list that is
+     * order (the link order) follows the reordered order. [ordered] is the
+     * page's full row list (rows whose song is missing among them), so a
+     * persisted reorder keeps every link, missing songs at their new
+     * positions included. A list that is
      * unchanged (a drag that ends where it started) writes nothing.
      */
-    fun reorderTagSongs(tag: TagEntity, ordered: List<EntryEntity>) {
+    fun reorderTagSongs(tag: TagEntity, ordered: List<TagSongRow>) {
         viewModelScope.launch {
-            val ids = ordered.map { it.id }
-            if (repository.entriesForTag(tag.id).map { it.id } == ids) return@launch
+            // The link's OWN id is the stable identity of a row (the entry
+            // reference is only a provenance hint - a re-imported entry
+            // changes nothing about the row), so the reorder addresses links
+            // by their stored ids.
+            val ids = ordered.map { it.linkId }
+            if (repository.entriesForTag(tag.id).map { it.linkId } == ids) return@launch
             var accepted = false
             repository.updateTagEntries(tag.id) { current ->
                 // The list may have changed between the drag and the write

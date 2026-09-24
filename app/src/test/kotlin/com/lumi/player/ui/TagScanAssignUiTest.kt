@@ -305,10 +305,10 @@ class TagScanAssignUiTest {
         compose.onNodeWithText(UNREGISTERED_UID).assertExists()
     }
 
-    /** The stored entry ids linked to the tag registered under [uid]. */
+    /** The stored link ids of the tag registered under [uid] (a tag song's link is the unit the name-based list carries). */
     private fun entryIdsForTagUid(uid: String): List<Long> = dbAndGet {
         val tag = app().repository.tagByUid(uid)
-        if (tag != null) app().repository.entriesForTag(tag.id).map { it.id } else emptyList()
+        if (tag != null) app().repository.entriesForTag(tag.id).map { it.linkId } else emptyList()
     }
 
     @Test

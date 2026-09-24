@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.ModeEdit
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.TagSongRow
 import com.lumi.player.nfc.ndefTypeName
 import kotlin.math.roundToInt
 
@@ -67,9 +69,15 @@ import kotlin.math.roundToInt
  * hardware-derived and read-only), its current song list - in the order the
  * songs were added, reorderable by dragging a row's handle, and each row
  * individually removable (the row's remove action unlinks that ONE song
- * from THIS tag - the song stays in the content list) - with an add-song
- * action aimed at THIS tag, and ends in a danger zone whose delete removes
- * the tag - and only the tag and its links.
+ * from THIS tag - the song stays in the content list). A song is
+ * identified by its NAME, resolved live against the content: a song that
+ * was removed from the library and later re-imported under the same name
+ * becomes playable again without re-adding it, and a name that resolves
+ * to no content shows as a "song not found" row (the row's link survives
+ * the song's removal; the row renders its snapshot name) - a warning
+ * sign at its original position, no play action, removable like any other
+ * row - with an add-song action aimed at THIS tag, and ends in a danger
+ * zone whose delete removes the tag - and only the tag and its links.
  *
  * The song list reuses the shared selection plumbing: opening the page
  * selects the tag, so [linked] (the selected tag's entries) is this tag's
@@ -81,9 +89,10 @@ import kotlin.math.roundToInt
  * A completed drag reorders the list and persists it through
  * [LumiViewModel.reorderTagSongs] - the play order is the link order, so
  * the persisted order is the play order. A row's remove action confirms
- * ([LumiViewModel.unlinkEntryFromTag], the inverse of the add-song link)
+ * ([LumiViewModel.unlinkSongFromTag], the inverse of the add-song link)
  * and drops only that tag's link to that one song: the song stays in the
- * content list, and if the list empties the page falls back to the
+ * content list (for a "song not found" row the dead link itself goes),
+ * and if the list empties the page falls back to the
  * "This tag plays nothing yet." state.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,12 +100,12 @@ import kotlin.math.roundToInt
 internal fun TagDetailPane(
     viewModel: LumiViewModel,
     tag: TagEntity,
-    linked: List<EntryEntity>,
+    linked: List<TagSongRow>,
     onBack: () -> Unit,
     onAddSong: () -> Unit,
     onEdit: (TagEntity) -> Unit,
     onDelete: (TagEntity) -> Unit,
-    onRemoveSong: (EntryEntity) -> Unit,
+    onRemoveSong: (TagSongRow) -> Unit,
 ) {
     // Pointing the shared selection at this tag makes the observed [linked]
     // list this tag's song list.
@@ -105,7 +114,7 @@ internal fun TagDetailPane(
     // The additional card details of the tag's last presented handle (see
     // the details section below): observed through the flow, so the page
     // re-composes when a read publishes the tag's details.
-    val tagDetailsState by viewModel.tagCardDetails.collectAsState()
+    val tagDetails by viewModel.tagCardDetails.collectAsState()
     Scaffold(topBar = { PaneTopAppBar(tag.name.ifEmpty { "Tag" }, onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -145,13 +154,13 @@ internal fun TagDetailPane(
                 // registration, or a playback read; discovery-time data
                 // only - no connect, no RF): each field shows only when
                 // the presented handle actually carried the value, never
-                // guessed. Keyed by the tag's uid, so a read of ANOTHER
-                // tag never surfaces stale details on this page. The
-                // local val keeps the smart cast (the delegate property
-                // itself never smart-casts).
-                val cardDetails = tagDetailsState
-                if (cardDetails != null && cardDetails.first == tag.uid) {
-                    val details = cardDetails.second
+                // guessed. The details are recorded PER UID (a read of
+                // another tag updates only that tag's entry), so this
+                // page keeps showing this tag's own details no matter
+                // what is scanned afterwards - and a tag whose details
+                // were never observed shows the section empty.
+                val details = tagDetails[tag.uid]
+                if (details != null) {
                     if (details.techNames.isNotEmpty()) {
                         CardDetailField("Tech", details.techNames.joinToString(", "))
                     }
@@ -180,7 +189,7 @@ internal fun TagDetailPane(
                     )
                 } else {
                     ReorderableSongList(
-                        songs = linked,
+                        rows = linked,
                         onReordered = { viewModel.reorderTagSongs(tag, it) },
                         onRemoveSong = onRemoveSong,
                     )
@@ -188,14 +197,15 @@ internal fun TagDetailPane(
             }
             // Save this tag's data to a physical NFC card: the button
             // arms the app's own scan (the foreground-dispatch read path)
-            // for a card write - the next card read, ANY card (even one
-            // the app has never seen), is written the tag's data (its name
-            // and the play mode, the card's own payload shape) when it is
-            // writable and can hold it; a card that isn't is reported and
-            // nothing is written.
+            // for a card write - the next card read is written the tag's
+            // data (its name, the play mode, and the tag's ordered song
+            // list, the card's own payload shape) when it is the tag's OWN
+            // card (its NFC ID matches the tag's) and is writable and can
+            // hold it; a card with a different NFC ID, or one that isn't,
+            // is reported and nothing is written.
             SectionCard(title = "Save to NFC card") {
                 Text(
-                    "Writes this tag's data (its name and the play mode) to an NFC card. Any card works - even one the app has never seen.",
+                    "Writes this tag's data (its name, the play mode, and its song list) to the NFC card. Only this tag's own card is written - a card with a different NFC ID is not.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 FilledTonalButton(
@@ -280,10 +290,16 @@ internal fun TagDetailPane(
  * a remove action (the row-level delete, which confirms and unlinks that ONE
  * song from THIS tag - the song stays in the content list) and a drag handle
  * that is pressed and dragged vertically. The two are separate regions, so
- * the remove never fights the drag gesture. While the drag is
+ * the remove never fights the drag gesture. A row whose song NAME resolves
+ * to no content (the tag's "song not found" row) renders a warning sign
+ * instead of the song, titled by the row's own snapshot name: it keeps its
+ * position, offers no play action and no drag handle, and its remove action
+ * drops the dead link. While the drag is
  * held, the list previews the new order live - the held row follows the
  * pointer and swaps places as it crosses a row boundary - and a completed
- * drag persists the order (the tag links' sortOrder) through [onReordered].
+ * drag persists the order (the tag links' sortOrder) through [onReordered],
+ * the page's full row list (missing rows included), so a persisted reorder
+ * never drops a link whose song is missing.
  * A drag that ends where it started - or a plain tap on the handle -
  * persists nothing.
  *
@@ -296,24 +312,27 @@ internal fun TagDetailPane(
  */
 @Composable
 private fun ReorderableSongList(
-    songs: List<EntryEntity>,
-    onReordered: (List<EntryEntity>) -> Unit,
-    onRemoveSong: (EntryEntity) -> Unit,
+    rows: List<TagSongRow>,
+    onReordered: (List<TagSongRow>) -> Unit,
+    onRemoveSong: (TagSongRow) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     // The observed list, mirrored into state: the drag's pointer closure
     // outlives recompositions, so it must read the CURRENT observed list
-    // through state - a plain capture of the [songs] parameter would go
+    // through state - a plain capture of the [rows] parameter would go
     // stale (e.g. after a song is added) and a drag would reorder against
     // a list that is no longer the one on screen.
-    var observed by remember { mutableStateOf(songs) }
-    LaunchedEffect(songs) { observed = songs }
+    var observed by remember { mutableStateOf(rows) }
+    LaunchedEffect(rows) { observed = rows }
 
     // The in-flight drag: the row being held, the order it is previewing, the
     // held row's offset past its last crossed boundary, and the indices the
     // drag started at and currently sits at (-1 while no drag is in flight).
+    // Rows are keyed by linkId - the row's stored link's id, the row's stable
+    // identity (a re-imported entry changes the row's entry reference, not
+    // its identity) - unique per row.
     var draggedId by remember { mutableStateOf<Long?>(null) }
-    var order by remember { mutableStateOf<List<EntryEntity>>(emptyList()) }
+    var order by remember { mutableStateOf<List<TagSongRow>>(emptyList()) }
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var dragStartIndex by remember { mutableIntStateOf(-1) }
     var dragCurrentIndex by remember { mutableIntStateOf(-1) }
@@ -326,8 +345,8 @@ private fun ReorderableSongList(
     // the write did not land as dragged (the list changed in flight),
     // and the provisional order is dropped so the page shows the
     // observed list.
-    var pending by remember { mutableStateOf<List<EntryEntity>?>(null) }
-    var pendingBaseline by remember { mutableStateOf<List<EntryEntity>?>(null) }
+    var pending by remember { mutableStateOf<List<TagSongRow>?>(null) }
+    var pendingBaseline by remember { mutableStateOf<List<TagSongRow>?>(null) }
     LaunchedEffect(pending, pendingBaseline, observed) {
         val pendingOrder = pending
         if (pendingOrder != null) {
@@ -345,7 +364,7 @@ private fun ReorderableSongList(
     val rowTops = remember { mutableMapOf<Long, Float>() }
     val pitch = remember { mutableFloatStateOf(0f) }
 
-    fun displayedList(): List<EntryEntity> {
+    fun displayedList(): List<TagSongRow> {
         val pendingOrder = pending
         return when {
             draggedId != null -> order
@@ -355,20 +374,20 @@ private fun ReorderableSongList(
     }
     val shown = displayedList()
 
-    fun handleDragged(entryId: Long, totalDeltaY: Float) {
+    fun handleDragged(linkId: Long, totalDeltaY: Float) {
         val pitchPx = pitch.floatValue
         if (pitchPx <= 0f) return
         val shown = displayedList()
         if (dragStartIndex < 0) {
             // First move of the drag: snapshot the order (the baseline the
             // pending order is echoed against) and mark the row.
-            val start = shown.indexOfFirst { it.id == entryId }
+            val start = shown.indexOfFirst { it.linkId == linkId }
             if (start < 0) return
             dragStartIndex = start
             dragCurrentIndex = start
             order = shown
             pendingBaseline = shown
-            draggedId = entryId
+            draggedId = linkId
         }
         val target = (dragStartIndex + (totalDeltaY / pitchPx).roundToInt())
             .coerceIn(0, shown.size - 1)
@@ -394,25 +413,38 @@ private fun ReorderableSongList(
     Column(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        shown.forEach { entry ->
-            val isDragging = entry.id == draggedId
+        shown.forEach { row ->
+            val entry = row.entry
+            // The row's own name: the live row's current label (the name
+            // its link resolved to), the missing row's snapshot name -
+            // a blank snapshot (a link stored before the name column
+            // existed, whose entry is gone) falls back to the generic
+            // marker.
+            val songName = row.name.ifBlank { "Song not found" }
+            val isDragging = row.linkId == draggedId
             SettingRow(
                 leading = {
                     IconChip(
-                        icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                        background = scheme.primaryContainer,
-                        content = scheme.onPrimaryContainer,
+                        // A row whose song name resolves to no content
+                        // renders the warning sign (the "song not found"
+                        // marker) instead of the song's icon.
+                        icon = if (entry != null) EntryPresentation.icon(EntryType.fromStorage(entry.type)) else Icons.Filled.Warning,
+                        background = if (entry != null) scheme.primaryContainer else scheme.errorContainer,
+                        content = if (entry != null) scheme.onPrimaryContainer else scheme.onErrorContainer,
                     )
                 },
-                title = entry.label,
-                detail = detailFor(entry.type, entry.payload),
+                // The row's own name (see [songName]): never a guessed
+                // placeholder for a row that remembers its song.
+                title = songName,
+                detail = if (entry != null) detailFor(entry.type, entry.payload)
+                else "this song is no longer in the content list",
                 modifier = Modifier
                     .graphicsLayer {
                         if (isDragging) translationY = dragOffsetPx
                     }
                     .onGloballyPositioned { coords ->
-                        rowTops[entry.id] = coords.localToRoot(Offset.Zero).y
-                        val tops = shown.mapNotNull { rowTops[it.id] }
+                        rowTops[row.linkId] = coords.localToRoot(Offset.Zero).y
+                        val tops = shown.mapNotNull { rowTops[it.linkId] }
                         if (draggedId == null && tops.size >= 2) {
                             pitch.floatValue = (tops[1] - tops[0]).coerceAtLeast(0f)
                         }
@@ -421,21 +453,27 @@ private fun ReorderableSongList(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // The per-song removal (the content pane's row-level
                         // delete language): the tag's link to this one song
-                        // goes; the song stays in the content list. A
+                        // goes; the song stays in the content list (for a
+                        // missing row the dead link itself goes). A
                         // separate region from the drag handle, so the
                         // remove never fights the drag gesture.
                         SoftIconButton(
                             icon = Icons.Default.Delete,
-                            contentDescription = "Remove ${entry.label} from the tag",
-                            onClick = { onRemoveSong(entry) },
+                            contentDescription = "Remove $songName from the tag",
+                            onClick = { onRemoveSong(row) },
                         )
-                        Spacer(Modifier.width(8.dp))
-                        SongDragHandle(
-                            entryId = entry.id,
-                            contentDescription = "Reorder ${entry.label}",
-                            onDrag = { id, delta -> handleDragged(id, delta) },
-                            onDragEnd = { handleDragEnded() },
-                        )
+                        // The drag handle exists only for rows that still
+                        // carry a song: a missing row keeps its position
+                        // but offers no play action, so no reorder either.
+                        if (entry != null) {
+                            Spacer(Modifier.width(8.dp))
+                            SongDragHandle(
+                                linkId = row.linkId,
+                                contentDescription = "Reorder $songName",
+                                onDrag = { id, delta -> handleDragged(id, delta) },
+                                onDragEnd = { handleDragEnded() },
+                            )
+                        }
                     }
                 },
             )
@@ -474,7 +512,7 @@ private fun CardDetailField(label: String, value: String) {
 }
 
 /** Moves the item at [from] to index [to] (the other items keep their order). */
-private fun List<EntryEntity>.moved(from: Int, to: Int): List<EntryEntity> {
+private fun <T> List<T>.moved(from: Int, to: Int): List<T> {
     if (from == to || from < 0 || from >= size || to < 0 || to >= size) return this
     val item = this[from]
     val copy = toMutableList()
@@ -500,13 +538,13 @@ private fun List<EntryEntity>.moved(from: Int, to: Int): List<EntryEntity> {
  */
 @Composable
 private fun SongDragHandle(
-    entryId: Long,
+    linkId: Long,
     contentDescription: String,
-    onDrag: (entryId: Long, totalDeltaY: Float) -> Unit,
+    onDrag: (linkId: Long, totalDeltaY: Float) -> Unit,
     onDragEnd: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val rowId = rememberUpdatedState(entryId)
+    val rowId = rememberUpdatedState(linkId)
     Box(
         modifier = Modifier
             .size(40.dp)

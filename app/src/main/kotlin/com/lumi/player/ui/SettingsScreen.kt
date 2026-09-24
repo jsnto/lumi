@@ -27,6 +27,7 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
+import com.lumi.player.data.TagSongRow
 import com.lumi.player.data.sortedTree
 import com.lumi.player.data.tagSongPickerTree
 import com.lumi.player.player.PlayerStateHolder
@@ -86,7 +87,6 @@ fun SettingsScreen(
     val pendingTagProfile by viewModel.pendingTagProfile.collectAsState(null)
     val capturedUid by viewModel.capturedUid.collectAsState(null)
     val capturedTagData by viewModel.capturedTagData.collectAsState(null)
-    val capturedTagWritable by viewModel.capturedTagWritable.collectAsState(false)
     // The content list's title sort direction (the content pane's sort
     // control; ascending by default).
     val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.ASCENDING)
@@ -107,9 +107,10 @@ fun SettingsScreen(
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
     // The tag detail page's per-song removal confirmation: the tag + the
-    // song a row's remove action asked to drop (the tag's link to that one
-    // song goes; the song stays in the content list).
-    var removeSong by remember { mutableStateOf<Pair<TagEntity, EntryEntity>?>(null) }
+    // row a row's remove action asked to drop (the tag's link to that one
+    // song goes; the song stays in the content list - or the dead link
+    // itself goes for a "Song not found" row).
+    var removeSong by remember { mutableStateOf<Pair<TagEntity, TagSongRow>?>(null) }
     // The tag whose edit dialog is showing (set by the tag detail page's
     // edit action on the Tag details section).
     var editTag by remember { mutableStateOf<TagEntity?>(null) }
@@ -377,7 +378,7 @@ fun SettingsScreen(
             val tree = tagSongPickerTree(entries, folders).sortedTree(contentSort)
             AddSongPickerDialog(
                 tree = tree,
-                alreadyOnTagLabels = linked.map { it.label }.toSet(),
+                alreadyOnTagLabels = linked.map { it.name }.toSet(),
                 onSave = { selected ->
                     // The Save commits the whole checked selection at once:
                     // each song links through the existing single-song link
@@ -414,7 +415,7 @@ fun SettingsScreen(
                 Text(
                     when {
                         target != null -> "Hold the back of the phone against any NFC tag to add “${target.label}” to it."
-                        cardWriteTarget != null -> "Hold any NFC card - even one the app has never seen - against the back of the phone to save this tag's data to it."
+                        cardWriteTarget != null -> "Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written."
                         else -> "Hold the back of the phone against any NFC tag…"
                     },
                 )
@@ -429,11 +430,9 @@ fun SettingsScreen(
         TagNameDialog(
             uid = capturedUid ?: "",
             prefill = capturedTagData,
-            writable = capturedTagWritable,
             defaultMode = playMode,
             onDismiss = { viewModel.discardCaptured() },
-            onSave = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = false) },
-            onSaveAndWrite = { name, mode -> viewModel.confirmTagName(name, mode, writeToTag = true) },
+            onSave = { name, mode -> viewModel.confirmTagName(name, mode) },
         )
     }
 
@@ -503,8 +502,15 @@ fun SettingsScreen(
 
     // The tag detail page's per-song removal confirmation: the effect is
     // stated before the destructive confirm - the tag's link to that one
-    // song goes; the song stays in the content list.
-    removeSong?.let { (tag, entry) ->
+    // song goes; the song stays in the content list (for a "song not
+    // found" row - a name that resolves to no content - the dead link
+    // itself goes). The name quoted is the row's own (a missing row's
+    // snapshot name, a live row's current label).
+    removeSong?.let { (tag, row) ->
+        val missing = row.entry == null
+        // A blank snapshot name (a link stored before the name column
+        // existed, whose song is gone) quotes the generic marker.
+        val songName = row.name.ifBlank { "Song not found" }
         AlertDialog(
             onDismissRequest = { removeSong = null },
             containerColor = MaterialTheme.colorScheme.surface,
@@ -514,15 +520,20 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    "“${entry.label}” will be removed from ${tag.name.ifEmpty { tag.uid }}. " +
-                        "It stays in the content list.",
+                    if (missing) {
+                        "“$songName” will be removed from ${tag.name.ifEmpty { tag.uid }}. " +
+                            "The song is already gone from the content list."
+                    } else {
+                        "“$songName” will be removed from ${tag.name.ifEmpty { tag.uid }}. " +
+                            "It stays in the content list."
+                    },
                 )
             },
             confirmButton = {
                 DestructivePillButton(
                     label = "Remove",
                     onClick = {
-                        viewModel.unlinkEntryFromTag(tag, entry)
+                        viewModel.unlinkSongFromTag(tag, row)
                         removeSong = null
                     },
                 )

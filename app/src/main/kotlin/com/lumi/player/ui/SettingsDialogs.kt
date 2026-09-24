@@ -318,19 +318,20 @@ private fun PickerTreeRows(
 /**
  * Dialog asking for a friendly name and the preferred play mode for a
  * freshly captured tag. Both fields are pre-filled from the tag's own
- * lumi payload when the tag carries one. When the tag is writable, an
- * extra "Save and write to tag" button offers to write the name + mode
- * back to the tag so re-registering it later pre-fills the form again.
+ * lumi payload when the tag carries one (the payload's name, falling back
+ * to the card's remembered name for a payload-less or nameless capture).
+ * Registration NEVER writes the physical card - the save registers (or
+ * updates) the tag and remembers the card's name + song list; the explicit
+ * card-write action (the tag detail page's "Save to NFC card") is the only
+ * write path.
  */
 @Composable
 internal fun TagNameDialog(
     uid: String,
     prefill: LumiTagData?,
-    writable: Boolean,
     defaultMode: PlayMode,
     onDismiss: () -> Unit,
     onSave: (String, PlayMode) -> Unit,
-    onSaveAndWrite: (String, PlayMode) -> Unit,
 ) {
     var name by remember(uid) { mutableStateOf("") }
     var mode by remember(uid) { mutableStateOf(defaultMode) }
@@ -383,17 +384,7 @@ internal fun TagNameDialog(
             }
         },
         confirmButton = {
-            if (writable) {
-                Row {
-                    TonalPillButton("Save", onClick = { onSave(name, mode) })
-                    TonalPillButton(
-                        "Save and write to tag",
-                        onClick = { onSaveAndWrite(name, mode) },
-                    )
-                }
-            } else {
-                TonalPillButton("Save", onClick = { onSave(name, mode) })
-            }
+            TonalPillButton("Save", onClick = { onSave(name, mode) })
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
