@@ -139,5 +139,8 @@ data class SettingsEntity(
 
         /** "asc"/"desc": the content list's title sort direction; unset sorts ascending. */
         const val CONTENT_SORT_DIRECTION = "content_sort_direction"
+
+        /** "system"/"light"/"dark": the app's appearance mode; unset follows the system. */
+        const val THEME_MODE = "theme_mode"
     }
 }

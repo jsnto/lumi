@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
+import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 
@@ -63,9 +65,11 @@ internal fun SettingsMenuPane(
     isPlaying: Boolean,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
+    themeMode: LumiThemeMode,
     onPlayMode: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
+    onAppearance: () -> Unit,
     onBack: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -128,6 +132,18 @@ internal fun SettingsMenuPane(
             KeepScreenOnRow(
                 checked = keepScreenOn,
                 onCheckedChange = onKeepScreenOnChange,
+            )
+            MenuRow(
+                icon = Icons.Filled.Palette,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
+                title = "Appearance",
+                subtitle = when (themeMode) {
+                    LumiThemeMode.FOLLOW_SYSTEM -> "Follow system"
+                    LumiThemeMode.LIGHT -> "Light"
+                    LumiThemeMode.DARK -> "Dark"
+                },
+                onClick = onAppearance,
             )
             Text(
                 text = "lumi v${BuildConfig.VERSION_NAME}",

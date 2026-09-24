@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongRow
@@ -41,12 +42,13 @@ private enum class SettingsPane {
     TagDetail,
     FolderDetail,
     EntryDetail,
+    Appearance,
 }
 
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
  * screen is a list of buttons, one per setting (play mode, NFC tags, content,
- * keep screen on); clicking a row navigates into that setting's own
+ * keep screen on, appearance); clicking a row navigates into that setting's own
  * configuration screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
@@ -90,6 +92,9 @@ fun SettingsScreen(
     // The content list's title sort direction (the content pane's sort
     // control; ascending by default).
     val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.ASCENDING)
+    // The app's appearance mode (the settings menu's "Appearance" row; the
+    // theme follows it app-wide, effective immediately on change).
+    val themeMode by viewModel.themeMode.collectAsState(LumiThemeMode.FOLLOW_SYSTEM)
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
     val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
@@ -222,14 +227,21 @@ fun SettingsScreen(
             isPlaying = playState.isPlaying,
             tags = tags,
             entries = entries,
+            themeMode = themeMode,
             onPlayMode = { pane = SettingsPane.PlayMode },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
+            onAppearance = { pane = SettingsPane.Appearance },
             onBack = onBack,
         )
         SettingsPane.PlayMode -> PlayModePane(
             viewModel = viewModel,
             playMode = playMode,
+            onBack = { pane = SettingsPane.Menu },
+        )
+        SettingsPane.Appearance -> AppearancePane(
+            viewModel = viewModel,
+            themeMode = themeMode,
             onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.Tags -> TagsPane(
