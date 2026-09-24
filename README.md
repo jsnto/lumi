@@ -9,8 +9,8 @@ server or account — everything is stored locally on the device.
 
 1. In **Settings**, register an NFC tag (hold the back of the phone against
    the tag after tapping "Scan NFC" in the NFC tags pane — the dialog lets
-   you name it and pick its preferred play mode; registration never
-   writes to the card, and a card previously written with the tag's data
+   you name it; registration never writes to the card, and a card
+   previously written with the tag's data
    (the tag page's "Save to NFC card") pre-fills the name and restores
    its saved song list), register content (pick an audio file from the
    device, or a whole folder to add every song in it and its subfolders —

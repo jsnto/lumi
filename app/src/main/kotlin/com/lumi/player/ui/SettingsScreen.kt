@@ -431,9 +431,8 @@ fun SettingsScreen(
         TagNameDialog(
             uid = capturedUid ?: "",
             prefill = capturedTagData,
-            defaultMode = playMode,
             onDismiss = { viewModel.discardCaptured() },
-            onSave = { name, mode -> viewModel.confirmTagName(name, mode) },
+            onSave = { name -> viewModel.confirmTagName(name) },
         )
     }
 

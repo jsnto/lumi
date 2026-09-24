@@ -721,7 +721,7 @@ class LumiViewModel(
 
     /**
      * Records a tag captured during a registration session, reading its
-     * lumi payload (for the name/mode/songs form prefill) and merging the
+     * lumi payload (for the name/songs form prefill) and merging the
      * card's per-uid memory (the last saved name + song list) as the
      * fallback prefill and restore source. Registration NEVER writes the
      * physical card - the explicit card-write action (the tag detail page's
@@ -787,9 +787,7 @@ class LumiViewModel(
     }
 
     /**
-     * Saves the captured tag under [name]. The mode only records what the
-     * tag was registered with (and prefills the form on re-read); it does
-     * NOT change the app's play mode. Registration never writes the
+     * Saves the captured tag under [name]. Registration never writes the
      * physical card - the explicit card-write action is the only write
      * path - but it remembers the card's last saved name + song list (the
      * per-card memory that survives the tag row's deletion): when the card
@@ -804,7 +802,7 @@ class LumiViewModel(
      * full) - or staying a "song not found" row when nothing resolves
      * (no exact match, or several labels share the clamped prefix).
      */
-    fun confirmTagName(name: String, mode: PlayMode) {
+    fun confirmTagName(name: String) {
         val uid = _capturedUid.value ?: return
         val restoreSongs = _capturedRestoreSongs.value
         // A scan-to-assign's target song, if the capture came from one: it

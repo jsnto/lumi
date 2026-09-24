@@ -42,7 +42,6 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderTreeLevel
 import com.lumi.player.data.collapseKey
-import com.lumi.player.data.PlayMode
 import com.lumi.player.data.rowsInTreeOrder
 import com.lumi.player.data.visibleRowCount
 import com.lumi.player.nfc.LumiTagData
@@ -316,32 +315,26 @@ private fun PickerTreeRows(
 }
 
 /**
- * Dialog asking for a friendly name and the preferred play mode for a
- * freshly captured tag. Both fields are pre-filled from the tag's own
- * lumi payload when the tag carries one (the payload's name, falling back
- * to the card's remembered name for a payload-less or nameless capture).
- * Registration NEVER writes the physical card - the save registers (or
- * updates) the tag and remembers the card's name + song list; the explicit
- * card-write action (the tag detail page's "Save to NFC card") is the only
- * write path.
+ * Dialog asking for a friendly name for a freshly captured tag. The name
+ * is pre-filled from the tag's own lumi payload when the tag carries one
+ * (the payload's name, falling back to the card's remembered name for a
+ * payload-less or nameless capture). Registration NEVER writes the
+ * physical card - the save registers (or updates) the tag and remembers
+ * the card's name + song list; the explicit card-write action (the tag
+ * detail page's "Save to NFC card") is the only write path.
  */
 @Composable
 internal fun TagNameDialog(
     uid: String,
     prefill: LumiTagData?,
-    defaultMode: PlayMode,
     onDismiss: () -> Unit,
-    onSave: (String, PlayMode) -> Unit,
+    onSave: (String) -> Unit,
 ) {
     var name by remember(uid) { mutableStateOf("") }
-    var mode by remember(uid) { mutableStateOf(defaultMode) }
     var fieldsTouched by remember(uid) { mutableStateOf(false) }
     LaunchedEffect(uid, prefill) {
         if (fieldsTouched) return@LaunchedEffect
-        prefill?.let {
-            name = it.name
-            mode = it.mode
-        }
+        prefill?.let { name = it.name }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -362,29 +355,10 @@ internal fun TagNameDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
-                ModeRow(
-                    title = "Continuous",
-                    detail = "Keeps playing until you tap a different tag.",
-                    selected = mode == PlayMode.CONTINUOUS,
-                    onSelect = {
-                        mode = PlayMode.CONTINUOUS
-                        fieldsTouched = true
-                    },
-                )
-                ModeRow(
-                    title = "Proximity",
-                    detail = "Plays while the tag stays near.",
-                    selected = mode == PlayMode.PROXIMITY,
-                    onSelect = {
-                        mode = PlayMode.PROXIMITY
-                        fieldsTouched = true
-                    },
-                )
             }
         },
         confirmButton = {
-            TonalPillButton("Save", onClick = { onSave(name, mode) })
+            TonalPillButton("Save", onClick = { onSave(name) })
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
