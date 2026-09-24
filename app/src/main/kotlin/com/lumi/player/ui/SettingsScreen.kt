@@ -485,7 +485,17 @@ fun SettingsScreen(
             title = {
                 Text("Remove content?", style = MaterialTheme.typography.headlineSmall)
             },
-            text = { Text("“${entry.label}” will be removed from the app and from every tag.") },
+            text = {
+                // The tag's link to the entry SURVIVES the removal (tag_links
+                // carries no foreign key to entries - the song's name snapshot
+                // is what the tag keeps), so the dialog states the real
+                // effect: the song leaves the content list and holds its
+                // place on the tag's list as a "song not found" row.
+                Text(
+                    "“${entry.label}” will be removed from the app. " +
+                        "Tags that play it keep a “song not found” row in its place.",
+                )
+            },
             confirmButton = {
                 DestructivePillButton(
                     label = "Remove",
