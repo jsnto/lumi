@@ -18,8 +18,11 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.LumiThemeMode
+import com.lumi.player.data.SettingsEntity
 import com.lumi.player.ui.theme.LumiTheme
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -31,6 +34,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -132,6 +136,24 @@ class ThemeModeUiTest {
         }
         return checkNotNull(captured) { "the theme probe must compose" }
     }
+
+    private fun app(): LumiApp = RuntimeEnvironment.getApplication() as LumiApp
+
+    /**
+     * Seeds a raw, un-sanitized value directly into the settings table,
+     * bypassing [LumiViewModel.setThemeMode] (which only ever writes the
+     * valid stored spellings), so adversarial values actually land in the
+     * database the way a hand-written or corrupt row would.
+     */
+    private suspend fun seedStoredThemeMode(raw: String) {
+        app().database.dao().upsertSetting(
+            SettingsEntity(SettingsEntity.THEME_MODE, raw),
+        )
+    }
+
+    /** The real repository's mapping of the stored value (the live read path). */
+    private suspend fun storedThemeMode(): LumiThemeMode =
+        app().repository.observeThemeMode().first()
 
     /** Sets the (system) phone's own light/dark setting for follow-system. */
     private fun setSystemNight(night: Boolean) {
@@ -367,5 +389,71 @@ class ThemeModeUiTest {
             background,
         )
         assertEquals(0xFF140F0A.toInt(), (background as ColorDrawable).color)
+    }
+
+    // The adversarial persistence contract, driven LIVE through the real
+    // database (the raw-write seam bypasses the view model's sanitizing
+    // setter, so the adversarial values are what the repository actually
+    // sees): every value that is not a valid mode spelling falls back to
+    // follow system, and every valid spelling round-trips to its mode.
+
+    @Test
+    fun freshStoreResolvesToFollowSystem() = runBlocking {
+        // No row at all (the first-launch state of a fresh store): the
+        // real repository mapping resolves to follow system.
+        assertEquals(LumiThemeMode.FOLLOW_SYSTEM, storedThemeMode())
+    }
+
+    @Test
+    fun emptyStoredValueResolvesToFollowSystem() = runBlocking {
+        seedStoredThemeMode("")
+        assertEquals(LumiThemeMode.FOLLOW_SYSTEM, storedThemeMode())
+    }
+
+    @Test
+    fun whitespaceOnlyStoredValueResolvesToFollowSystem() = runBlocking {
+        seedStoredThemeMode("   ")
+        assertEquals(LumiThemeMode.FOLLOW_SYSTEM, storedThemeMode())
+    }
+
+    @Test
+    fun garbageStoredValueResolvesToFollowSystem() = runBlocking {
+        seedStoredThemeMode("bogus-mode")
+        assertEquals(LumiThemeMode.FOLLOW_SYSTEM, storedThemeMode())
+    }
+
+    @Test
+    fun caseAndWhitespaceVariedStoredValuesResolveToTheirModes() = runBlocking {
+        seedStoredThemeMode(" DARK ")
+        assertEquals(LumiThemeMode.DARK, storedThemeMode())
+        seedStoredThemeMode("light")
+        assertEquals(LumiThemeMode.LIGHT, storedThemeMode())
+        seedStoredThemeMode("system")
+        assertEquals(LumiThemeMode.FOLLOW_SYSTEM, storedThemeMode())
+    }
+
+    /**
+     * The UI, not just the parse function, falls back: with a garbage
+     * value in the settings table, a cold launch of the real app shows
+     * the Appearance menu row's subtitle as "Follow system" - the
+     * resolved fallback - and never the raw stored value.
+     */
+    @Test
+    fun garbageStoredValueColdLaunchMenuShowsFollowSystem() {
+        runBlocking { seedStoredThemeMode("bogus-mode") }
+        val activity = openSettings()
+
+        compose.onNodeWithText("Appearance").assertIsDisplayed()
+        // The row's subtitle is the RESOLVED mode: the garbage value
+        // falls back to follow system in the UI, and the raw value never
+        // surfaces.
+        compose.onNodeWithText("Follow system").assertExists()
+        compose.onNodeWithText("bogus-mode").assertDoesNotExist()
+        // The view model (the row's data source) resolves it the same way.
+        assertEquals(
+            "the garbage stored value must resolve to follow system",
+            LumiThemeMode.FOLLOW_SYSTEM,
+            viewModelOf(activity).themeMode.value,
+        )
     }
 }
