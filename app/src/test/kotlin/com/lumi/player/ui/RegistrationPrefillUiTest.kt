@@ -15,6 +15,7 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
+import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -35,12 +36,12 @@ import org.robolectric.shadows.ShadowLooper
 /**
  * Behavioral coverage for the tag-registration dialog's tag-payload
  * integration: a captured tag that carries the app's lumi payload
- * pre-fills the name field (and the play mode), a captured tag whose
- * payload is missing or nameless pre-fills the card's REMEMBERED name, and
- * the dialog offers plain Save only - registration NEVER writes the
- * physical card (the explicit card-write action is the only write path).
- * The mode only records what the tag was registered with (form pre-fill on
- * re-read); saving a tag never changes the app's play mode.
+ * pre-fills the name field, a captured tag whose payload is missing or
+ * nameless pre-fills the card's REMEMBERED name, and the dialog offers
+ * plain Save only - registration NEVER writes the physical card (the
+ * explicit card-write action is the only write path). The play mode is
+ * unrelated to tags: a card's legacy "mode" field has no influence on the
+ * decode or the save, and saving a tag never changes the app's play mode.
  *
  * The per-card memory coverage too: a save remembers the card's last saved
  * name + song list per card uid, so a card whose tag was deleted and is
@@ -132,7 +133,7 @@ class RegistrationPrefillUiTest {
     // ---- prefill from the tag's own payload ----
 
     @Test
-    fun registration_tagWithLumiPayload_prefillsNameAndMode_andOffersOnlySave() {
+    fun registration_tagWithLumiPayload_prefillsName_andOffersOnlySave() {
         val viewModel = openSettings()
         // Live capture shape: the dialog opens before the async NDEF read
         // lands, so the payload arrives after the form has already composed.
@@ -142,7 +143,7 @@ class RegistrationPrefillUiTest {
         compose.onNodeWithText("Name (optional)").assertIsDisplayed()
         viewModel.captureForTest(
             UID,
-            LumiTagData("Hallway", listOf("First song"), PlayMode.PROXIMITY),
+            LumiTagData("Hallway", listOf("First song")),
         )
         compose.waitForIdle()
         // The capture's prefill (the async DB merge) has to land before
@@ -154,15 +155,16 @@ class RegistrationPrefillUiTest {
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
         compose.onNodeWithText("Save").assertIsDisplayed()
 
-        // Saving must NOT change the app's play mode, even though the tag's
-        // preselected mode (PROXIMITY) differs from the app's (CONTINUOUS).
+        // Saving must NOT change the app's play mode: the play mode is
+        // unrelated to tags, so registration never touches the app's own
+        // settings-driven mode.
         var writes = 0
         viewModel.tagWriter = { _, _ -> writes++; false }
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
-            "saving must not change the app play mode",
+            "saving a tag must not change the app play mode",
             PlayMode.CONTINUOUS,
             playModeOf(viewModel),
         )
@@ -175,12 +177,14 @@ class RegistrationPrefillUiTest {
     }
 
     @Test
-    fun registration_savingTagMode_doesNotChangeAppPlayMode() {
-        // App is in CONTINUOUS; the tag says PROXIMITY. Saving with the
-        // preselected mode records it on the tag payload only - the app's
-        // play mode must stay CONTINUOUS.
+    fun registration_savingATagWithALegacyModeField_doesNotChangeAppPlayMode() {
+        // A legacy card carries a "mode" field (written before the mode
+        // left the payload). The codec decodes it through name + songs only
+        // - the mode is unrelated to tags - so the card's mode must never
+        // leak into the app's own settings-driven play mode (CONTINUOUS
+        // here), and the tag is still saved under its pre-filled name.
         val viewModel = openSettingsAndCapture(
-            data = LumiTagData("Porch", emptyList(), PlayMode.PROXIMITY),
+            data = LumiTagNdef.fromJson("""{"name":"Porch","mode":"proximity"}"""),
         )
         compose.onNodeWithText("Porch").assertIsDisplayed()
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
@@ -188,7 +192,7 @@ class RegistrationPrefillUiTest {
         compose.waitForIdle()
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
-            "saving a tag must not switch the app play mode",
+            "a card's legacy mode field must not switch the app play mode",
             PlayMode.CONTINUOUS,
             playModeOf(viewModel),
         )
@@ -222,7 +226,7 @@ class RegistrationPrefillUiTest {
         // Pre-fill the field so the editable node can be selected by its
         // (merged-tree) text, then overwrite it with an oversized name.
         val viewModel = openSettingsAndCapture(
-            data = LumiTagData("Prefill", emptyList(), PlayMode.CONTINUOUS),
+            data = LumiTagData("Prefill"),
         )
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
         compose.onNodeWithText("Prefill")
@@ -274,7 +278,7 @@ class RegistrationPrefillUiTest {
         compose.waitForIdle()
         viewModel.captureForTest(
             UID,
-            LumiTagData("Hallway", listOf("First song"), PlayMode.PROXIMITY),
+            LumiTagData("Hallway", listOf("First song")),
         )
         compose.waitForIdle()
         compose.onNodeWithText("Mine").assertIsDisplayed()
@@ -298,7 +302,7 @@ class RegistrationPrefillUiTest {
         }
         viewModel.captureForTest(
             UID,
-            LumiTagData("Porch", songs, PlayMode.PROXIMITY),
+            LumiTagData("Porch", songs),
         )
         compose.waitForIdle()
         // The capture's prefill + restore songs (the async DB merge) have
@@ -332,7 +336,7 @@ class RegistrationPrefillUiTest {
         // source.
         viewModel.captureForTest(
             UID,
-            LumiTagData("Porch", listOf("First song", "Gone song"), PlayMode.PROXIMITY),
+            LumiTagData("Porch", listOf("First song", "Gone song")),
         )
         compose.waitForIdle()
         idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
@@ -408,7 +412,7 @@ class RegistrationPrefillUiTest {
         val written = checkNotNull(
             LumiTagNdef.fromJson(
                 LumiTagNdef.toJson(
-                    LumiTagData("Porch", listOf(fullLabel), PlayMode.PROXIMITY),
+                    LumiTagData("Porch", listOf(fullLabel)),
                 ),
             ),
         )
@@ -486,10 +490,10 @@ class RegistrationPrefillUiTest {
         viewModel.tagInspector = { _, _ ->
             if (entered.incrementAndGet() == 1) {
                 gateA.await()
-                TagInspect(LumiTagData("Stale", emptyList(), PlayMode.PROXIMITY), false)
+                TagInspect(TagPayloadRead.Answered(LumiTagData("Stale")), false)
             } else {
                 gateB.await()
-                TagInspect(LumiTagData("Fresh", emptyList(), PlayMode.CONTINUOUS), false)
+                TagInspect(TagPayloadRead.Answered(LumiTagData("Fresh")), false)
             }
         }
         viewModel.capture(UID_A, tagWithUid(UID_A))
@@ -511,8 +515,87 @@ class RegistrationPrefillUiTest {
         idleUntil({ viewModel.capturedTagData.value != null })
         assertEquals(
             "the active session's own read must publish",
-            LumiTagData("Fresh", emptyList(), PlayMode.CONTINUOUS),
+            LumiTagData("Fresh"),
             viewModel.capturedTagData.value,
+        )
+    }
+
+    @Test
+    fun registrationScan_readsTheCardOnce_andTheUrlsComeFromThatRead() {
+        // The scan's one NDEF read per presentation: the capture's own
+        // read publishes the prefill AND the card's per-song urls - no
+        // second read races it for the tag's single connection slot.
+        val viewModel = openSettings()
+        val inspects = AtomicInteger(0)
+        viewModel.tagInspector = { _, _ ->
+            inspects.incrementAndGet()
+            TagInspect(
+                TagPayloadRead.Answered(
+                    LumiTagData(
+                        "Porch",
+                        listOf("Gone song"),
+                        mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                    ),
+                ),
+                false,
+            )
+        }
+        var urlReads = 0
+        viewModel.songPayloadReader = { _ ->
+            urlReads++
+            TagPayloadRead.Answered(null)
+        }
+
+        // Arm the unified scan and deliver the unknown card the way the
+        // foreground dispatch does (the scan settles on the read).
+        viewModel.startTagScan()
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        assertEquals("the prefill comes from the capture's own read", "Porch", viewModel.capturedTagData.value?.name)
+        assertEquals(
+            "the card's urls publish from that SAME read",
+            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            viewModel.tagSongUrls.value[UID],
+        )
+        assertEquals("the presentation's one NDEF read is the capture's", 1, inspects.get())
+        assertEquals("no separate url read runs alongside the capture", 0, urlReads)
+    }
+
+    @Test
+    fun registrationScan_aFailedCaptureReadKeepsTheLastKnownUrls() {
+        // A card whose urls a plain read already published, then a
+        // re-scan whose capture read could not connect (the read's
+        // outcome is UNKNOWN - never "no record"): the last known urls
+        // stay, and the prefill still falls back to the memory as before.
+        val viewModel = openSettings()
+        viewModel.songPayloadReader = { _ ->
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    "Porch",
+                    listOf("Gone song"),
+                    mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                ),
+            )
+        }
+        // The plain read (no scan armed) publishes the card's urls.
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+        idleUntil({ viewModel.tagSongUrls.value[UID]?.isEmpty() == false }, message = "the urls from the plain read")
+
+        // The re-scan: the capture's read fails (it could not connect).
+        val inspects = AtomicInteger(0)
+        viewModel.tagInspector = { _, _ ->
+            inspects.incrementAndGet()
+            TagInspect(TagPayloadRead.Failed, false)
+        }
+        viewModel.startTagScan()
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+        idleUntil({ inspects.get() == 1 }, message = "the capture's read")
+        pumpMain(500)
+        assertEquals(
+            "a failed read keeps the last known urls",
+            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            viewModel.tagSongUrls.value[UID],
         )
     }
 

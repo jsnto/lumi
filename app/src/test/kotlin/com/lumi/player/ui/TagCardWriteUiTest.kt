@@ -17,6 +17,7 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -811,6 +812,100 @@ class TagCardWriteUiTest {
         assertEquals("the cancelled write never runs", 0, writes)
         assertNull("a post-cancel read does not register the card", viewModel.capturedUid.value)
         compose.onNodeWithText("Name (optional)").assertDoesNotExist()
+    }
+
+    @Test
+    fun theCardWriteScanMakesNoUrlRead_theWriteIsTheOnlyNdefClient() {
+        // The write path's one NDEF connection per presentation: no payload
+        // read runs alongside the armed write (a read holding the tag's
+        // single connection slot would make the write's own connect fail
+        // and surface a spurious write failure). A card whose urls a plain
+        // read published LOSES them when a write lands - the card now
+        // carries the app's url-less payload, so the urls it carried
+        // before the write are gone.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        // A plain read (no scan armed) publishes the card's urls...
+        val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
+        viewModel.songPayloadReader = { _ ->
+            TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
+        }
+        sendTag(controller, forgeTag(TAG_UID))
+        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
+
+        // ...and the card-write scan: its read must not run at all.
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+
+        var urlReads = 0
+        viewModel.songPayloadReader = { _ ->
+            urlReads++
+            TagPayloadRead.Failed
+        }
+        var writes = 0
+        viewModel.tagWriter = { _, _ ->
+            writes++
+            true
+        }
+
+        sendTag(controller, forgeTag(TAG_UID))
+        idleUntil(
+            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            message = "the save confirmation",
+        )
+        // Let the (absent) read settle, then assert the write was the
+        // presentation's only NDEF client.
+        Thread.sleep(500)
+        ShadowLooper.idleMainLooper()
+        compose.waitForIdle()
+        assertEquals("the write ran", 1, writes)
+        assertEquals("no url read ran alongside the write", 0, urlReads)
+        assertEquals(
+            "a landed write clears the published urls (the card now carries the app's url-less payload)",
+            emptyMap<String, String>(),
+            viewModel.tagSongUrls.value[TAG_UID],
+        )
+    }
+
+    @Test
+    fun aRefusedWriteKeepsThePublishedUrls_theCardWasNotRewritten() {
+        // The urls map reflects what the card carries: only a write that
+        // LANDS clears it. A gate refusal never rewrites the card, so the
+        // last known urls stay.
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+
+        val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
+        viewModel.songPayloadReader = { _ ->
+            TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
+        }
+        sendTag(controller, forgeTag(TAG_UID))
+        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
+
+        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Scan a card").performClick()
+        compose.waitForIdle()
+
+        var writes = 0
+        viewModel.tagWriter = { _, _ ->
+            writes++
+            true
+        }
+        // A read-only card: the gate refuses before any physical write.
+        sendTag(controller, forgeTag(TAG_UID, writable = false))
+
+        idleUntil(
+            { ShadowToast.getTextOfLatestToast() == "That card is read-only - nothing was written." },
+            message = "the read-only report",
+        )
+        assertEquals("nothing was written to the read-only card", 0, writes)
+        assertEquals(
+            "a refused write keeps the published urls (the card was not rewritten)",
+            urls,
+            viewModel.tagSongUrls.value[TAG_UID],
+        )
     }
 
     // ---- the phone's own NFC gating (a card write needs the phone's radio) ----

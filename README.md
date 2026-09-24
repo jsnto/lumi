@@ -35,7 +35,11 @@ server or account — everything is stored locally on the device.
    and saving the checked selection adds the checked songs at once — a
    song can be removed from the tag (it stays in the content list), and
    the list can be reordered by dragging a song's handle to set the play
-   order; managing the list never writes to the tag), a "Save to NFC
+   order; a song that is not in the content list can be downloaded from
+   its row when the tag's card carries a download link for it — the file
+   lands in the device's Music folder's lumi subfolder, with a per-row
+   progress while it downloads and a visible retryable failure state;
+   managing the list never writes to the tag), a "Save to NFC
    card" section that writes the tag's data (its name and song list) to
    the tag's own card — only a card whose NFC ID matches the tag's is
    written, a mismatched card is reported and left untouched, and a
@@ -113,6 +117,8 @@ the video/URL actions later does not require reworking storage.
 ## Permissions
 
 - **NFC / NFC NDEF** — reading tags (no runtime prompt; granted with the app).
+- **INTERNET** — downloading a song from a tag card's download link
+  (no runtime prompt; granted with the app).
 - **POST_NOTIFICATIONS** — asked on first launch (Android 13+); playback
   notification shown when granted.
 - **Foreground service (media)** — keeps audio playing in the background.
