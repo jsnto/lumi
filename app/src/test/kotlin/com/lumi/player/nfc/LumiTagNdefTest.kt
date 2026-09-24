@@ -22,7 +22,7 @@ import java.nio.charset.StandardCharsets
 @Config(sdk = [35])
 class LumiTagNdefTest {
 
-    private val data = LumiTagData(name = "Hallway", mode = PlayMode.PROXIMITY)
+    private val data = LumiTagData(name = "Hallway")
 
     // ---- JSON ----
 
@@ -33,13 +33,39 @@ class LumiTagNdefTest {
             mode = PlayMode.PROXIMITY,
             songs = listOf("First song", "Gone song", "Third \u00e9"),
         )
-        assertEquals(withSongs, LumiTagNdef.fromJson(LumiTagNdef.toJson(withSongs)))
+        val decoded = LumiTagNdef.fromJson(LumiTagNdef.toJson(withSongs))
+        assertEquals("Hallway", decoded?.name)
+        assertEquals(withSongs.songs, decoded?.songs)
+        // The written payload no longer carries the play mode (the mode
+        // is a legacy READ field only): the round trip keeps name +
+        // songs, and the mode settles to the default.
+        assertEquals(PlayMode.CONTINUOUS, decoded?.mode)
+    }
+
+    @Test
+    fun json_theWrittenPayloadCarriesNoPlayModeField() {
+        // Save-to-card writes name + songs only: the encoding of a
+        // current-format payload carries no "mode" key at all.
+        val obj = org.json.JSONObject(
+            LumiTagNdef.toJson(LumiTagData("Hallway", listOf("First song"))),
+        )
+        assertTrue("the name is written", obj.has("name"))
+        assertTrue("the song list is written", obj.has("songs"))
+        assertFalse("the play mode is no longer part of the written payload", obj.has("mode"))
+    }
+
+    @Test
+    fun json_aNameOnlyPayloadDecodesWithAnEmptySongListAndTheDefaultMode() {
+        // A card written in the current format carries name + songs and
+        // no mode: the minimal form (a name only) decodes cleanly, with
+        // the empty song list and the default mode.
+        assertEquals(LumiTagData("T"), LumiTagNdef.fromJson("""{"name":"T"}"""))
     }
 
     @Test
     fun json_songsAreClampedToThePerSongLimit() {
         val decoded = LumiTagNdef.fromJson(
-            LumiTagNdef.toJson(LumiTagData("T", PlayMode.CONTINUOUS, listOf("x".repeat(80)))),
+            LumiTagNdef.toJson(LumiTagData("T", listOf("x".repeat(80)))),
         )
         assertEquals(listOf("x".repeat(50)), decoded?.songs)
     }
@@ -58,7 +84,7 @@ class LumiTagNdefTest {
     @Test
     fun json_nameIsTruncatedTo50Chars() {
         val long = "x".repeat(80)
-        val decoded = LumiTagNdef.fromJson(LumiTagNdef.toJson(LumiTagData(long, PlayMode.CONTINUOUS)))
+        val decoded = LumiTagNdef.fromJson(LumiTagNdef.toJson(LumiTagData(long)))
         assertEquals("x".repeat(50), decoded?.name)
     }
 
@@ -69,8 +95,10 @@ class LumiTagNdefTest {
     }
 
     @Test
-    fun json_missingFieldsOrGarbage_decodesToNull() {
-        assertNull(LumiTagNdef.fromJson("""{"name":"T"}"""))
+    fun json_missingNameOrGarbage_decodesToNull() {
+        // A lumi record needs a name: a record that carries only the
+        // legacy mode field (no name) is "no record", as is garbage.
+        assertNull(LumiTagNdef.fromJson("""{"mode":"proximity"}"""))
         assertNull(LumiTagNdef.fromJson("not json at all"))
         assertNull(LumiTagNdef.fromJson("[]"))
     }
@@ -108,17 +136,17 @@ class LumiTagNdefTest {
     @Test
     fun payloadFitsThe512ByteTargetWithAMaxLengthNameAndASongList() {
         // The payload carries the full ordered song list (a write saves the
-        // name, the mode, and the songs): the worst case - a max-length
-        // name plus five max-length song names - fits the 512-byte target.
+        // name and the songs): the worst case - a max-length name plus five
+        // max-length song names - fits the 512-byte target.
         val message = LumiTagNdef.toNdefMessage(
-            LumiTagData("y".repeat(50), PlayMode.PROXIMITY, List(5) { "z".repeat(50) }),
+            LumiTagData("y".repeat(50), List(5) { "z".repeat(50) }),
         )
         assertTrue(
             "payload of ${LumiTagNdef.messageByteLength(message)}B must fit the " +
                 "${LumiTagNdef.MAX_PAYLOAD_BYTES}B target",
             LumiTagNdef.messageByteLength(message) <= LumiTagNdef.MAX_PAYLOAD_BYTES,
         )
-        assertEquals("the target carries name + mode + a real song list", 512, LumiTagNdef.MAX_PAYLOAD_BYTES)
+        assertEquals("the target carries name + a real song list", 512, LumiTagNdef.MAX_PAYLOAD_BYTES)
     }
 
     @Test

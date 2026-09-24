@@ -140,12 +140,34 @@ class LumiViewModel(
     private val _tagCardDetails = MutableStateFlow<Map<String, TagCardDetails>>(emptyMap())
     val tagCardDetails: StateFlow<Map<String, TagCardDetails>> = _tagCardDetails.asStateFlow()
 
+    // ---- device NFC usability (published by MainActivity from the NfcAdapter) ----
+
+    /**
+     * The phone's own NFC hardware state, published by [MainActivity]
+     * (on create/resume and on the radio's state-changed broadcast, so it
+     * goes live when the radio is toggled while the app is open):
+     * [nfcMissing] = no NFC hardware at all; [nfcDisabled] = hardware
+     * present but the radio off. The tag details page's save-to-card
+     * control greys out while either holds - a card write needs the
+     * phone's own radio - and the note next to it names the reason.
+     */
+    private val _nfcMissing = MutableStateFlow(false)
+    val nfcMissing: StateFlow<Boolean> = _nfcMissing.asStateFlow()
+    private val _nfcDisabled = MutableStateFlow(false)
+    val nfcDisabled: StateFlow<Boolean> = _nfcDisabled.asStateFlow()
+
+    /** Re-publishes the phone's NFC usability (the activity re-checks on every resume + state change). */
+    fun setNfcUsability(missing: Boolean, disabled: Boolean) {
+        _nfcMissing.value = missing
+        _nfcDisabled.value = disabled
+    }
+
     private val _capturedUid = MutableStateFlow<String?>(null)
     val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
 
     /**
-     * The captured tag's prefill: the payload it carried (name + mode +
-     * song list), with the name falling back to the card's REMEMBERED name
+     * The captured tag's prefill: the payload it carried (name + song
+     * list), with the name falling back to the card's REMEMBERED name
      * (the per-card memory) when the payload is missing or nameless - a
      * re-scanned card whose tag was deleted prefills its old name. Null
      * when neither the payload nor the memory offers anything.
@@ -351,10 +373,11 @@ class LumiViewModel(
     /**
      * Settles a tag read while a card-write scan is armed (the tag
      * details page's "Save to NFC card"): the read's card is written the
-     * target tag's data - the tag's name, the app's play mode, and the
-     * tag's ORDERED SONG LIST (by the songs' display names, "song not
+     * target tag's data - the tag's name and the tag's ORDERED SONG LIST
+     * (by the songs' display names, "song not
      * found" names among them - the names a re-registered tag restores
-     * name-for-name) - the card's own payload shape - through the existing
+     * name-for-name; the play mode is no longer part of the written
+     * payload) - the card's own payload shape - through the existing
      * write path, but ONLY when the card's NFC ID ([uid]) is the tag's own
      * uid: a mismatched card is reported and nothing is written to it.
      * Before any per-card verdict the payload's own size is checked
@@ -388,11 +411,12 @@ class LumiViewModel(
             return
         }
         viewModelScope.launch {
-            // The full payload: the tag's name + mode + ordered song list
-            // (the names the list shows, missing songs' snapshot names
-            // included - the restore source for a re-registered tag).
+            // The full payload: the tag's name + ordered song list (the
+            // names the list shows, missing songs' snapshot names
+            // included - the restore source for a re-registered tag). The
+            // play mode is no longer part of the written payload.
             val names = repository.songNamesForTag(target.id)
-            val payload = LumiTagData(name = target.name, mode = playMode.value, songs = names)
+            val payload = LumiTagData(name = target.name, songs = names)
             val messageBytes = LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(payload))
             if (messageBytes > LumiTagNdef.MAX_PAYLOAD_BYTES) {
                 event(
@@ -763,7 +787,7 @@ class LumiViewModel(
         viewModelScope.launch {
             // One NDEF session reads the payload.
             val data = withContext(Dispatchers.IO) {
-                tagInspector(tag, LumiTagData(name = "", mode = playMode.value)).data
+                tagInspector(tag, LumiTagData(name = "")).data
             }
             if (_capturedUid.value != uid) return@launch
             publishCapture(uid, data)
@@ -786,7 +810,7 @@ class LumiViewModel(
     private suspend fun publishCapture(uid: String, data: LumiTagData?) {
         val memory = repository.memoryForUid(uid)
         _capturedTagData.value = when {
-            data == null -> memory?.name?.takeIf { it.isNotBlank() }?.let { LumiTagData(it, playMode.value) }
+            data == null -> memory?.name?.takeIf { it.isNotBlank() }?.let { LumiTagData(it) }
             data.name.isBlank() && (memory?.name?.isNotBlank() == true) -> data.copy(name = memory.name)
             else -> data
         }

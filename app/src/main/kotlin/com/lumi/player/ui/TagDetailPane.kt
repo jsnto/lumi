@@ -200,31 +200,39 @@ internal fun TagDetailPane(
             // Save this tag's data to a physical NFC card: the button
             // arms the app's own scan (the foreground-dispatch read path)
             // for a card write - the next card read is written the tag's
-            // data (its name, the play mode, and the tag's ordered song
-            // list, the card's own payload shape) when it is the tag's OWN
+            // data (its name and the tag's ordered song list, the
+            // card's own payload shape) when it is the tag's OWN
             // card (its NFC ID matches the tag's) and is writable and can
             // hold it; a card with a different NFC ID, or one that isn't,
             // is reported and nothing is written.
             //
             // The button mirrors the write's own size check LIVE: the
-            // payload it arms (the tag's name, the app's current play
-            // mode, and the tag's ordered song list - the same payload
-            // [LumiViewModel.settleCardWrite] sizes against the app's
-            // write cap) is measured on every recomposition, and while
-            // it is over the cap NO card can take it - so the button is
-            // greyed out and the note says so: a write that cannot
-            // succeed cannot even be attempted. The settle-side pre-check
-            // stays as the backstop (the list can change after the button
-            // is rendered).
+            // payload it arms (the tag's name and the tag's ordered song
+            // list - the same payload [LumiViewModel.settleCardWrite]
+            // sizes against the app's write cap) is measured on every
+            // recomposition, and while it is over the cap NO card can
+            // take it - so the button is greyed out and the note says
+            // so: a write that cannot succeed cannot even be attempted.
+            // The settle-side pre-check stays as the backstop (the list
+            // can change after the button is rendered).
+            //
+            // The button is ALSO greyed out (with its own note) while the
+            // phone's own NFC is not usable - no NFC hardware, or the
+            // radio off: a card write goes through the phone's radio, so
+            // without it no write can succeed. The usability flags are
+            // published by MainActivity (re-checked on resume AND on the
+            // radio's state-changed broadcast), so re-enabling the radio
+            // while the app is open re-enables the button live - no
+            // restart or re-entry. The two conditions compose: the
+            // button is never tappable while either holds.
             SectionCard(title = "Save to NFC card") {
                 Text(
-                    "Writes this tag's data (its name, the play mode, and its song list) to the NFC card. Only this tag's own card is written - a card with a different NFC ID is not.",
+                    "Writes this tag's data (its name and its song list) to the NFC card. Only this tag's own card is written - a card with a different NFC ID is not.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                val playMode by viewModel.playMode.collectAsState()
                 val payloadBytes = LumiTagNdef.messageByteLength(
                     LumiTagNdef.toNdefMessage(
-                        LumiTagData(tag.name, playMode, linked.map { it.name }),
+                        LumiTagData(tag.name, linked.map { it.name }),
                     ),
                 )
                 val overCap = payloadBytes > LumiTagNdef.MAX_PAYLOAD_BYTES
@@ -234,9 +242,26 @@ internal fun TagDetailPane(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
+                // The phone's own NFC usability (published by MainActivity,
+                // live off the radio's state-changed broadcast): a card
+                // write needs the radio, so the control is unusable while
+                // the hardware is missing or the radio is off.
+                val nfcMissing by viewModel.nfcMissing.collectAsState()
+                val nfcDisabled by viewModel.nfcDisabled.collectAsState()
+                val nfcUsable = !nfcMissing && !nfcDisabled
+                if (!nfcUsable) {
+                    Text(
+                        if (nfcMissing) {
+                            "This device has no NFC, so it can't save to a card."
+                        } else {
+                            "Turn on NFC to save to card."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 FilledTonalButton(
                     onClick = { viewModel.startCardWrite(tag) },
-                    enabled = !overCap,
+                    enabled = !overCap && nfcUsable,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
