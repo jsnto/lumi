@@ -142,7 +142,7 @@ class RegistrationPrefillUiTest {
         compose.onNodeWithText("Name (optional)").assertIsDisplayed()
         viewModel.captureForTest(
             UID,
-            LumiTagData("Hallway", PlayMode.PROXIMITY, listOf("First song")),
+            LumiTagData("Hallway", listOf("First song"), PlayMode.PROXIMITY),
         )
         compose.waitForIdle()
         // The capture's prefill (the async DB merge) has to land before
@@ -180,7 +180,7 @@ class RegistrationPrefillUiTest {
         // preselected mode records it on the tag payload only - the app's
         // play mode must stay CONTINUOUS.
         val viewModel = openSettingsAndCapture(
-            data = LumiTagData("Porch", PlayMode.PROXIMITY),
+            data = LumiTagData("Porch", emptyList(), PlayMode.PROXIMITY),
         )
         compose.onNodeWithText("Porch").assertIsDisplayed()
         compose.onNodeWithText("Save and write to tag").assertDoesNotExist()
@@ -222,7 +222,7 @@ class RegistrationPrefillUiTest {
         // Pre-fill the field so the editable node can be selected by its
         // (merged-tree) text, then overwrite it with an oversized name.
         val viewModel = openSettingsAndCapture(
-            data = LumiTagData("Prefill", PlayMode.CONTINUOUS),
+            data = LumiTagData("Prefill", emptyList(), PlayMode.CONTINUOUS),
         )
         compose.onNodeWithText("Tag captured").assertIsDisplayed()
         compose.onNodeWithText("Prefill")
@@ -274,7 +274,7 @@ class RegistrationPrefillUiTest {
         compose.waitForIdle()
         viewModel.captureForTest(
             UID,
-            LumiTagData("Hallway", PlayMode.PROXIMITY, listOf("First song")),
+            LumiTagData("Hallway", listOf("First song"), PlayMode.PROXIMITY),
         )
         compose.waitForIdle()
         compose.onNodeWithText("Mine").assertIsDisplayed()
@@ -298,7 +298,7 @@ class RegistrationPrefillUiTest {
         }
         viewModel.captureForTest(
             UID,
-            LumiTagData("Porch", PlayMode.PROXIMITY, songs),
+            LumiTagData("Porch", songs, PlayMode.PROXIMITY),
         )
         compose.waitForIdle()
         // The capture's prefill + restore songs (the async DB merge) have
@@ -332,7 +332,7 @@ class RegistrationPrefillUiTest {
         // source.
         viewModel.captureForTest(
             UID,
-            LumiTagData("Porch", PlayMode.PROXIMITY, listOf("First song", "Gone song")),
+            LumiTagData("Porch", listOf("First song", "Gone song"), PlayMode.PROXIMITY),
         )
         compose.waitForIdle()
         idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
@@ -408,7 +408,7 @@ class RegistrationPrefillUiTest {
         val written = checkNotNull(
             LumiTagNdef.fromJson(
                 LumiTagNdef.toJson(
-                    LumiTagData("Porch", PlayMode.PROXIMITY, listOf(fullLabel)),
+                    LumiTagData("Porch", listOf(fullLabel), PlayMode.PROXIMITY),
                 ),
             ),
         )
@@ -486,10 +486,10 @@ class RegistrationPrefillUiTest {
         viewModel.tagInspector = { _, _ ->
             if (entered.incrementAndGet() == 1) {
                 gateA.await()
-                TagInspect(LumiTagData("Stale", PlayMode.PROXIMITY), false)
+                TagInspect(LumiTagData("Stale", emptyList(), PlayMode.PROXIMITY), false)
             } else {
                 gateB.await()
-                TagInspect(LumiTagData("Fresh", PlayMode.CONTINUOUS), false)
+                TagInspect(LumiTagData("Fresh", emptyList(), PlayMode.CONTINUOUS), false)
             }
         }
         viewModel.capture(UID_A, tagWithUid(UID_A))
@@ -511,7 +511,7 @@ class RegistrationPrefillUiTest {
         idleUntil({ viewModel.capturedTagData.value != null })
         assertEquals(
             "the active session's own read must publish",
-            LumiTagData("Fresh", PlayMode.CONTINUOUS),
+            LumiTagData("Fresh", emptyList(), PlayMode.CONTINUOUS),
             viewModel.capturedTagData.value,
         )
     }

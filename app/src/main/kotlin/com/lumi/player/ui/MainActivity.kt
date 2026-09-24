@@ -1,7 +1,10 @@
 package com.lumi.player.ui
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -127,6 +130,18 @@ class MainActivity : ComponentActivity() {
     private var nfcDisabled by mutableStateOf(false)
     private var showNfcPrompt by mutableStateOf(false)
 
+    // The NFC radio's state can change while the app is open (a
+    // quick-settings toggle, without the activity ever leaving the
+    // foreground): the state-changed broadcast re-syncs the usability
+    // flags (the prompt AND the tag page's save-to-card control, which
+    // observes them through the view model) so they go live without a
+    // restart or re-entry.
+    private val nfcStateChangedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshNfcState()
+        }
+    }
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -137,6 +152,19 @@ class MainActivity : ComponentActivity() {
             runBlocking { viewModel.repository.observeThemeMode().first() }
         }.getOrDefault(LumiThemeMode.FOLLOW_SYSTEM)
         nfc = NfcAdapter.getDefaultAdapter(this)
+
+        // The radio's state-changed broadcast (registered for the whole
+        // activity lifetime, released in onDestroy): the platform posts it
+        // when the user toggles the NFC radio, including while this app
+        // stays in the foreground (a quick-settings toggle). The project's
+        // stub SDK omits the legacy ACTION_STATE_CHANGED alias, so the
+        // filter uses the modern constant the platform broadcasts.
+        val nfcStateFilter = IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(nfcStateChangedReceiver, nfcStateFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(nfcStateChangedReceiver, nfcStateFilter)
+        }
 
         requestNotificationPermissionIfNeeded()
         refreshNfcState()
@@ -426,6 +454,11 @@ class MainActivity : ComponentActivity() {
         nfcMissing = nfc == null
         nfcDisabled = !nfcMissing && !nfc!!.isEnabled
         showNfcPrompt = nfcMissing || nfcDisabled
+        // Publish the usability for the UI below the activity (the tag
+        // details page's save-to-card control observes these through the
+        // view model): a card write needs the phone's own radio, so the
+        // control greys out - live - while the radio is unusable.
+        viewModel.setNfcUsability(nfcMissing, nfcDisabled)
     }
 
     /** Opens the system NFC settings, falling back to the settings home. */
@@ -820,6 +853,15 @@ class MainActivity : ComponentActivity() {
         stopPresencePoll()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(nfcStateChangedReceiver)
+        } catch (e: Exception) {
+            // Not registered (a crash before onCreate finished); nothing to clean up.
+        }
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

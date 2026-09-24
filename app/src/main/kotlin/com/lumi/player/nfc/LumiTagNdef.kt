@@ -10,17 +10,23 @@ import java.nio.charset.StandardCharsets
 
 /**
  * The per-tag record the app reads from and writes to NFC tags: the tag's
- * name, the preferred play mode, and the tag's ordered song list (by the
- * songs' display names - the same name-based identity the tag's song list
- * uses, so a written list restores onto a re-registered tag name-for-name).
+ * name and the tag's ordered song list (by the songs' display names - the
+ * same name-based identity the tag's song list uses, so a written list
+ * restores onto a re-registered tag name-for-name).
+ *
+ * [mode] is a LEGACY READ field only: cards written before the play mode
+ * left the payload carry a "mode" field, and a decode keeps it (an unknown
+ * or missing value settles to the default mode). The codec no longer
+ * WRITES it - the payload the save-to-card action writes carries name and
+ * songs only.
  *
  * Legacy payloads written before the song list was part of the record carry
  * no "songs" field; they decode with an empty list.
  */
 data class LumiTagData(
     val name: String,
-    val mode: PlayMode,
     val songs: List<String> = emptyList(),
+    val mode: PlayMode = PlayMode.CONTINUOUS,
 )
 
 /** The tag's lumi payload and whether the tag can hold the app payload. */
@@ -29,14 +35,17 @@ data class TagInspect(val data: LumiTagData?, val writable: Boolean)
 /**
  * NDEF codec for the app's own tag payload: a single NDEF record with the
  * custom MIME type [MIME_TYPE] whose payload is a small JSON object
- * (`{"name": …, "mode": …, "songs": […]}`).
+ * (`{"name": …, "songs": […]}`).
  *
- * Reading is lenient (a tag with no lumi record, a malformed payload, or an
- * unknown mode all degrade to "no record" / defaults; a payload without a
- * song list - the legacy shape - decodes with an empty list); writing is
- * strict (never write to a read-only tag or one whose NDEF area is known to
- * be too small for the new message - an area whose capacity the discovery
- * did not report is written anyway, and a too-small one fails the write).
+ * Reading is lenient (a tag with no lumi record or a malformed payload
+ * degrades to "no record"; a payload without a song list - the legacy
+ * shape - decodes with an empty list; and a legacy "mode" field - written
+ * before the mode left the payload - is kept into [LumiTagData.mode], an
+ * unknown value settling to the default mode). Writing never carries the
+ * play mode (the written payload is name + songs only) and is strict
+ * (never write to a read-only tag or one whose NDEF area is known to be too
+ * small for the new message - an area whose capacity the discovery did not
+ * report is written anyway, and a too-small one fails the write).
  *
  * API note: this compiles against the project's stub SDK (see AGENTS.md),
  * whose NFC surface is the classic one - [Ndef.get] instead of a
@@ -50,7 +59,7 @@ object LumiTagNdef {
     const val MAX_NAME_LENGTH = 50
     /**
      * Target maximum total NDEF payload size for a write - sized for the
-     * payload WITH the ordered song list (name + mode + song display names):
+     * payload WITH the ordered song list (name + song display names):
      * comfortably above a five-song list on the small NTAG215 (145 user
      * bytes), far below the large cards. The discovery-data gate is the
      * per-card check (a KNOWN-small area refuses up front); this is the
@@ -76,7 +85,10 @@ object LumiTagNdef {
     fun toJson(data: LumiTagData): String {
         val json = JSONObject()
         json.put("name", data.name.take(MAX_NAME_LENGTH))
-        json.put("mode", data.mode.storageValue)
+        // The play mode is no longer part of the written payload: the card
+        // carries the tag's name and song list only. Cards written before
+        // the mode left the format keep their legacy "mode" field -
+        // [fromJson] stays lenient about it on the read side.
         val songs = org.json.JSONArray()
         data.songs.forEach { songs.put(it.take(MAX_SONG_NAME_LENGTH)) }
         json.put("songs", songs)
@@ -85,17 +97,21 @@ object LumiTagNdef {
 
     fun fromJson(json: String): LumiTagData? = try {
         val obj = JSONObject(json)
-        if (!obj.has("name") || !obj.has("mode")) null else {
+        // A lumi record needs a name: "mode" is a legacy field (cards
+        // written before the mode left the payload) and "songs" a newer
+        // one, so neither is required for the record to be readable.
+        if (!obj.has("name")) null else {
             val songs = obj.optJSONArray("songs")?.let { arr ->
                 (0 until arr.length()).map { arr.getString(it).take(MAX_SONG_NAME_LENGTH) }
             } ?: emptyList()
             LumiTagData(
                 name = obj.getString("name").take(MAX_NAME_LENGTH),
-                // Unknown/missing mode values fall back to the default mode.
-                mode = PlayMode.fromStorage(obj.getString("mode")),
-                // Legacy payloads (pre-song-list) carry no "songs" field -
-                // they decode with an empty list, never as "no record".
                 songs = songs,
+                // The legacy "mode" field: cards written before the mode
+                // left the payload keep reading it (an unknown value falls
+                // back to the default mode); cards written without it
+                // decode with the default.
+                mode = PlayMode.fromStorage(obj.optString("mode", PlayMode.CONTINUOUS.storageValue)),
             )
         }
     } catch (e: Exception) {

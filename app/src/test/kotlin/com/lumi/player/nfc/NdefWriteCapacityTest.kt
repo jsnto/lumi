@@ -62,22 +62,22 @@ class NdefWriteCapacityTest {
     }
 
     @Test
-    fun aCardRoomyForNameAndModeButNotTheSongList_isRefused() {
+    fun aCardRoomyForNameButNotTheSongList_isRefused() {
         // The payload's size depends on the song list: an area that fits
-        // the name + mode but not the full payload (a card that would
-        // have taken the old-format write) is refused for the song-list
-        // write - a genuinely too-small card fails with the write's own
-        // refusal message.
+        // the name-only payload but not the full payload (a card that
+        // would have taken a write with no song list) is refused for the
+        // song-list write - a genuinely too-small card fails with the
+        // write's own refusal message.
         assertTrue(
-            "the song-list payload is larger than the name+mode payload",
+            "the song-list payload is larger than the name-only payload",
             neededWithSongs > needed,
         )
         assertFalse(
-            "an area that fits only the old payload is refused for the song list",
+            "an area that fits only the name-only payload is refused for the song list",
             LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = needed + 1), withSongs),
         )
         assertTrue(
-            "...and the same area takes the name+mode payload",
+            "...and the same area takes the name-only payload",
             LumiTagNdef.canWritePayload(forgeCard(maxNdefLength = needed + 1), data),
         )
     }
