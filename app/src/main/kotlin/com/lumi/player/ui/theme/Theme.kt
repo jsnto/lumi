@@ -55,6 +55,13 @@ private val LightColors = lightColorScheme(
     outlineVariant = Color(0xFFD4BFAF),
 )
 
+/**
+ * The dark scheme's background, shared by the palette and the window chrome
+ * (the status/nav bars and the launch background follow the same resolved
+ * mode as the Compose tree, so the chrome never diverges from the UI).
+ */
+val LumiDarkBackground: Color = Color(0xFF140F0A)
+
 private val DarkColors = darkColorScheme(
     primary = Color(0xFFFFA24D),
     onPrimary = Color(0xFF3A1502),
@@ -68,7 +75,7 @@ private val DarkColors = darkColorScheme(
     onTertiary = Color(0xFF2A1563),
     tertiaryContainer = Color(0xFF4F378B),
     onTertiaryContainer = Color(0xFFE8DEFF),
-    background = Color(0xFF140F0A),
+    background = LumiDarkBackground,
     onBackground = Color(0xFFF6ECDF),
     surface = Color(0xFF1C150F),
     onSurface = Color(0xFFF6ECDF),
@@ -142,16 +149,27 @@ private val LumiTypography = Typography().copy(
     ),
 )
 
+/**
+ * Resolves the appearance mode to the dark flag the UI (and the window
+ * chrome) renders: follow the system (the phone's own light/dark setting),
+ * or force light or dark. The single source of truth for the resolution -
+ * [LumiTheme] and the activity's window-chrome sync both use it, so the
+ * Compose tree and the window chrome can never disagree.
+ */
+@Composable
+fun resolvedDarkTheme(themeMode: LumiThemeMode = LumiThemeMode.FOLLOW_SYSTEM): Boolean =
+    when (themeMode) {
+        LumiThemeMode.FOLLOW_SYSTEM -> isSystemInDarkTheme()
+        LumiThemeMode.LIGHT -> false
+        LumiThemeMode.DARK -> true
+    }
+
 @Composable
 fun LumiTheme(
     themeMode: LumiThemeMode = LumiThemeMode.FOLLOW_SYSTEM,
     content: @Composable () -> Unit,
 ) {
-    val darkTheme = when (themeMode) {
-        LumiThemeMode.FOLLOW_SYSTEM -> isSystemInDarkTheme()
-        LumiThemeMode.LIGHT -> false
-        LumiThemeMode.DARK -> true
-    }
+    val darkTheme = resolvedDarkTheme(themeMode)
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         shapes = LumiShapes,

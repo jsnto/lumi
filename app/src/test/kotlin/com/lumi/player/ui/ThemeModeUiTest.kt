@@ -2,7 +2,9 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.os.Looper
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.ColorScheme
@@ -19,6 +21,9 @@ import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.ui.theme.LumiTheme
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
@@ -275,5 +280,54 @@ class ThemeModeUiTest {
             LumiThemeMode.FOLLOW_SYSTEM,
             viewModelOf(activity).themeMode.value,
         )
+    }
+
+    /**
+     * The window chrome follows the SAME resolved mode as the UI. Pinned
+     * through the mirror-observable surfaces: the window background
+     * (no near-white flash before the first dark frame) and the
+     * light-status-bar flag. The `window.statusBarColor` write is kept in
+     * production for the real device (the pruned test mirror's instrumented
+     * `PhoneWindow.setStatusBarColor` body is a no-op - probed: set + idle
+     * leaves the getter at 0 - so the band color itself is a device-side
+     * verification item).
+     */
+    @Test
+    fun darkChoiceAppliesTheDarkWindowChromeAndLightRestoresTheManifestChrome() {
+        val activity = openSettings()
+        // The manifest's fixed-light chrome, as captured on the first
+        // composition (before any chrome sync can run).
+        val originalVisibility = activity.window.decorView.systemUiVisibility
+        val originalBackground = activity.window.decorView.background
+
+        // Pick Dark: the window chrome follows the SAME resolved mode as
+        // the UI - the light status-bar icons off, and the dark window
+        // background (no near-white flash before the first dark frame).
+        compose.onNodeWithText("Appearance").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Dark").performClick()
+        awaitThemeMode(activity, LumiThemeMode.DARK)
+        compose.waitForIdle()
+        val darkBackground = activity.window.decorView.background
+        assertNotNull("the window background must be set in dark mode", darkBackground)
+        assertEquals(0xFF140F0A.toInt(), (darkBackground as ColorDrawable).color)
+        assertEquals(
+            "the light-status-bar icons must be off in dark mode",
+            0,
+            activity.window.decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR,
+        )
+
+        // Pick Light again: the manifest's original chrome comes back
+        // byte-identical (flag, and the original background drawable
+        // itself).
+        compose.onNodeWithText("Light").performClick()
+        awaitThemeMode(activity, LumiThemeMode.LIGHT)
+        compose.waitForIdle()
+        assertEquals(originalVisibility, activity.window.decorView.systemUiVisibility)
+        if (originalBackground != null) {
+            assertSame(originalBackground, activity.window.decorView.background)
+        } else {
+            assertNull(activity.window.decorView.background)
+        }
     }
 }

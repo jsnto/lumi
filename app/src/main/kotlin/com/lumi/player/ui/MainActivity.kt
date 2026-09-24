@@ -3,6 +3,8 @@ package com.lumi.player.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.util.Log
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -16,6 +18,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -23,8 +27,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -40,7 +47,9 @@ import com.lumi.player.nfc.PresenceReader
 import com.lumi.player.nfc.ReconnectingPresenceSession
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
+import com.lumi.player.ui.theme.LumiDarkBackground
 import com.lumi.player.ui.theme.LumiTheme
+import com.lumi.player.ui.theme.resolvedDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -150,6 +159,24 @@ class MainActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsState(
                 initial = viewModel.themeMode.value,
             )
+            val darkTheme = resolvedDarkTheme(themeMode)
+            // The window chrome (status bar, the light-status-bar icons,
+            // and the window background the manifest's fixed-light theme
+            // painted behind the first frame) follows the SAME resolved
+            // mode as the Compose tree, so the frame never diverges from
+            // the UI: dark mode takes the dark background on the status
+            // bar and clears the white flash at launch; light mode
+            // restores the captured manifest chrome byte-identical.
+            val originalChrome = remember {
+                OriginalWindowChrome(
+                    statusBarColor = window.statusBarColor,
+                    systemUiVisibility = window.decorView.systemUiVisibility,
+                    background = window.decorView.background,
+                )
+            }
+            LaunchedEffect(darkTheme) {
+                window.applyWindowChrome(darkTheme, originalChrome)
+            }
             LumiTheme(themeMode) {
                 LumiRoot(
                     viewModel = viewModel,
@@ -811,5 +838,48 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val PRESENCE_CHECK_MS = 1_000L
         private const val TAG = "LumiNfc"
+    }
+}
+
+/**
+ * The window chrome as the manifest's fixed-light theme created it (the
+ * status bar color, the light-status-bar flag, and the window background
+ * behind the first frame), captured on the first composition so the light
+ * mode can restore it byte-identical.
+ */
+private data class OriginalWindowChrome(
+    val statusBarColor: Int,
+    val systemUiVisibility: Int,
+    val background: Drawable?,
+)
+
+/**
+ * Applies the window chrome for the resolved dark flag: dark mode takes the
+ * dark background on the status bar, turns the light-status-bar icons off,
+ * and sets the window background to the dark color so the manifest's
+ * near-white background never flashes before the first dark frame; light
+ * mode restores the captured manifest chrome. The light-status-bar icons go
+ * through the decor view's [View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR] bit - the
+ * same underlying state the window insets controller reads on the real
+ * device (the pruned test mirror reduces `Window.getInsetsController()` to
+ * null, so the flag bit is the only mirror-safe surface, and it is the
+ * pre-`WindowInsetsController` API on API 26). The `statusBarColor` write is
+ * a no-op in the pruned test mirror (the instrumented `PhoneWindow` body
+ * never executes - probed: set + idle leaves the getter at 0) but runs the
+ * real AOSP body on the device, so the status bar band follows the mode
+ * there too.
+ */
+@Suppress("DEPRECATION")
+private fun Window.applyWindowChrome(darkTheme: Boolean, original: OriginalWindowChrome) {
+    if (darkTheme) {
+        val color = LumiDarkBackground.toArgb()
+        statusBarColor = color
+        decorView.systemUiVisibility =
+            decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+        decorView.background = ColorDrawable(color)
+    } else {
+        statusBarColor = original.statusBarColor
+        decorView.systemUiVisibility = original.systemUiVisibility
+        original.background?.let { decorView.background = it }
     }
 }
