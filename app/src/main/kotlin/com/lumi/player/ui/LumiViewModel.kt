@@ -797,10 +797,12 @@ class LumiViewModel(
      * or a fresh registration of a card whose payload carries songs), the
      * capture's restore song list (the payload's songs, else the remembered
      * ones) is linked onto the tag name-for-name, with each name resolving
-     * to the live content entry that plays it - a name the card payload's
-     * 50-char name cap wrote as a prefix of a longer stored label resolves
-     * to that label, and the link stores it in full - or staying a "song
-     * not found" row when no content carries the name.
+     * to the live content entry that plays it - a name of exactly the
+     * payload's 50-char clamp that no entry carries exactly resolves to
+     * the one longer stored label it was clamped from, and only when
+     * exactly one label starts with it (the link stores that label in
+     * full) - or staying a "song not found" row when nothing resolves
+     * (no exact match, or several labels share the clamped prefix).
      */
     fun confirmTagName(name: String, mode: PlayMode) {
         val uid = _capturedUid.value ?: return
