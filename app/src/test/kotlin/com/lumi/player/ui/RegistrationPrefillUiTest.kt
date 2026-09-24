@@ -15,6 +15,7 @@ import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagInspect
+import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -489,10 +490,10 @@ class RegistrationPrefillUiTest {
         viewModel.tagInspector = { _, _ ->
             if (entered.incrementAndGet() == 1) {
                 gateA.await()
-                TagInspect(LumiTagData("Stale"), false)
+                TagInspect(TagPayloadRead.Answered(LumiTagData("Stale")), false)
             } else {
                 gateB.await()
-                TagInspect(LumiTagData("Fresh"), false)
+                TagInspect(TagPayloadRead.Answered(LumiTagData("Fresh")), false)
             }
         }
         viewModel.capture(UID_A, tagWithUid(UID_A))
@@ -516,6 +517,85 @@ class RegistrationPrefillUiTest {
             "the active session's own read must publish",
             LumiTagData("Fresh"),
             viewModel.capturedTagData.value,
+        )
+    }
+
+    @Test
+    fun registrationScan_readsTheCardOnce_andTheUrlsComeFromThatRead() {
+        // The scan's one NDEF read per presentation: the capture's own
+        // read publishes the prefill AND the card's per-song urls - no
+        // second read races it for the tag's single connection slot.
+        val viewModel = openSettings()
+        val inspects = AtomicInteger(0)
+        viewModel.tagInspector = { _, _ ->
+            inspects.incrementAndGet()
+            TagInspect(
+                TagPayloadRead.Answered(
+                    LumiTagData(
+                        "Porch",
+                        listOf("Gone song"),
+                        mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                    ),
+                ),
+                false,
+            )
+        }
+        var urlReads = 0
+        viewModel.songPayloadReader = { _ ->
+            urlReads++
+            TagPayloadRead.Answered(null)
+        }
+
+        // Arm the unified scan and deliver the unknown card the way the
+        // foreground dispatch does (the scan settles on the read).
+        viewModel.startTagScan()
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+
+        idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
+        assertEquals("the prefill comes from the capture's own read", "Porch", viewModel.capturedTagData.value?.name)
+        assertEquals(
+            "the card's urls publish from that SAME read",
+            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            viewModel.tagSongUrls.value[UID],
+        )
+        assertEquals("the presentation's one NDEF read is the capture's", 1, inspects.get())
+        assertEquals("no separate url read runs alongside the capture", 0, urlReads)
+    }
+
+    @Test
+    fun registrationScan_aFailedCaptureReadKeepsTheLastKnownUrls() {
+        // A card whose urls a plain read already published, then a
+        // re-scan whose capture read could not connect (the read's
+        // outcome is UNKNOWN - never "no record"): the last known urls
+        // stay, and the prefill still falls back to the memory as before.
+        val viewModel = openSettings()
+        viewModel.songPayloadReader = { _ ->
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    "Porch",
+                    listOf("Gone song"),
+                    mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                ),
+            )
+        }
+        // The plain read (no scan armed) publishes the card's urls.
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+        idleUntil({ viewModel.tagSongUrls.value[UID]?.isEmpty() == false }, message = "the urls from the plain read")
+
+        // The re-scan: the capture's read fails (it could not connect).
+        val inspects = AtomicInteger(0)
+        viewModel.tagInspector = { _, _ ->
+            inspects.incrementAndGet()
+            TagInspect(TagPayloadRead.Failed, false)
+        }
+        viewModel.startTagScan()
+        viewModel.onTagDetected(UID, tagWithUid(UID))
+        idleUntil({ inspects.get() == 1 }, message = "the capture's read")
+        pumpMain(500)
+        assertEquals(
+            "a failed read keeps the last known urls",
+            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            viewModel.tagSongUrls.value[UID],
         )
     }
 

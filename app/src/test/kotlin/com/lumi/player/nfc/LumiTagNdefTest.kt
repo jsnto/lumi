@@ -2,6 +2,8 @@ package com.lumi.player.nfc
 
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
+import android.nfc.Tag
+import android.os.Bundle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -270,8 +272,64 @@ class LumiTagNdefTest {
 
     @Test
     fun tagAccessors_withoutAnNdefTag_areSafe() {
-        assertNull(LumiTagNdef.readFromTag(null))
+        // No tag is a "no record" read (not a failed one): the app's read
+        // path never presents a null tag, but the codec still answers.
+        assertEquals(TagPayloadRead.Answered(null), LumiTagNdef.readFromTag(null))
         assertFalse(LumiTagNdef.canWritePayload(null, data))
         assertFalse(LumiTagNdef.write(null, data))
+    }
+
+    // ---- the read seam's outcome: a failed read is not "no record" ----
+
+    @Test
+    fun readFromTag_aTagWithoutTheNdefTechAnswersNoRecord() {
+        // A positive discovery fact: the tag's tech list carries no NDEF
+        // tech, so the card CARRIES no lumi record. That is an answered
+        // read with a null payload - never the failed-read outcome.
+        val tag = forgeTag(ndef = false)
+        assertEquals(TagPayloadRead.Answered(null), LumiTagNdef.readFromTag(tag))
+    }
+
+    @Test
+    fun readFromTag_aReadThatCannotCompleteIsFailed_notNoRecord() {
+        // The single-connection-slot shape: the tag exposes the NDEF tech,
+        // but the read cannot complete (the connection is not established
+        // - on the device, another tech's session holds the tag's single
+        // connection slot, the presence poll's). The outcome is a FAILED
+        // read - the card's payload is unknown - never "the card carries
+        // no record" (that would clear urls the card still carries).
+        val tag = forgeTag()
+        assertEquals(TagPayloadRead.Failed, LumiTagNdef.readFromTag(tag))
+    }
+
+    /** Forges a presented tag the way the framework delivers it (the NDEF tech's extras included when [ndef]). */
+    private fun forgeTag(ndef: Boolean = true): Tag {
+        val ndefBundle = Bundle().apply {
+            putInt("ndefmaxlength", 151)
+            putInt("ndefcardstate", 2)
+            putInt("ndeftype", 2)
+        }
+        val nfcTagCls = Class.forName("android.nfc.INfcTag")
+        val ctor = Tag::class.java.getDeclaredConstructor(
+            ByteArray::class.java,
+            IntArray::class.java,
+            Array<Bundle>::class.java,
+            Int::class.javaPrimitiveType!!,
+            Long::class.javaPrimitiveType!!,
+            nfcTagCls,
+        )
+        ctor.isAccessible = true
+        val tagService = java.lang.reflect.Proxy.newProxyInstance(
+            nfcTagCls.classLoader,
+            arrayOf(nfcTagCls),
+        ) { _, _, _ -> null } as Any
+        return ctor.newInstance(
+            ByteArray(8) { it.toByte() },
+            if (ndef) intArrayOf(1, 6) else intArrayOf(1),
+            if (ndef) arrayOf(Bundle(), ndefBundle) else arrayOf(Bundle()),
+            0,
+            0L,
+            tagService,
+        ) as Tag
     }
 }

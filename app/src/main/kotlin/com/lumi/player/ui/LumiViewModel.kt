@@ -38,6 +38,7 @@ import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagCardDetails
 import com.lumi.player.nfc.TagInspect
+import com.lumi.player.nfc.TagPayloadRead
 import com.lumi.player.nfc.cardDetails
 import com.lumi.player.nfc.cardWriteGate
 import com.lumi.player.player.EntrySpec
@@ -143,11 +144,13 @@ class LumiViewModel(
     val tagCardDetails: StateFlow<Map<String, TagCardDetails>> = _tagCardDetails.asStateFlow()
 
     // The per-song download urls observed per presented tag uid (the card
-    // side's "secret option" - see [LumiTagData.songUrls]): a read updates
-    // the entry for THAT uid only, so a tag's page keeps its own urls no
-    // matter what is scanned afterwards. The map is the card payload's
-    // clamped-name → url map. Read-only app-side: the app's own card write
-    // never carries urls.
+    // side's "secret option" - see [LumiTagData.songUrls]): an answered
+    // read is the uid's source of truth (a card answered with no lumi
+    // record clears it), and a read that could not connect keeps the last
+    // known urls. The entry updates for THAT uid only, so a tag's page
+    // keeps its own urls no matter what is scanned afterwards. The map is
+    // the card payload's clamped-name → url map. Read-only app-side: the
+    // app's own card write never carries urls.
     private val _tagSongUrls = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
     val tagSongUrls: StateFlow<Map<String, Map<String, String>>> = _tagSongUrls.asStateFlow()
 
@@ -285,12 +288,14 @@ class LumiViewModel(
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (tag != null) inspectTagDetails(uid, tag)
-        if (tag != null) readTagSongUrls(uid, tag)
         // A card-write scan (the tag details page's "Save to NFC card")
         // is armed for a specific card write: the read's card is written
         // the target tag's data ONLY when the card's NFC ID is the tag's
         // own uid - a mismatched card is reported, nothing is written -
-        // and it never goes to registration or playback.
+        // and it never goes to registration or playback. The write path
+        // makes its OWN single NDEF connection (the physical write) - no
+        // payload read runs alongside it, so the write's connect never
+        // hits a second client on the tag's single connection slot.
         val cardWrite = _cardWriteTarget.value
         if (_scanActive.value && cardWrite != null) {
             settleCardWrite(cardWrite, uid, tag)
@@ -300,6 +305,10 @@ class LumiViewModel(
             settleTagScan(uid, tag)
             return
         }
+        // The plain read's own NDEF read: the card's per-song download
+        // urls publish from it (a read that could not connect keeps the
+        // last known urls).
+        if (tag != null) readTagSongUrls(uid, tag)
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
@@ -361,6 +370,9 @@ class LumiViewModel(
             val existing = repository.tagByUid(uid)
             val assignEntry = _scanAssignEntry.value
             if (existing != null) {
+                // The registered card's read is this presentation's only
+                // NDEF read: its urls publish from it.
+                if (tag != null) readTagSongUrls(uid, tag)
                 if (assignEntry != null) {
                     // The song profile's scan-to-assign: link the song
                     // to the scanned tag (the picker's own mechanism -
@@ -402,15 +414,28 @@ class LumiViewModel(
     /**
      * Best-effort read of the presented card's per-song download urls (the
      * card side's "secret option"): the read's payload publishes its
-     * clamped-name → url map for that uid. It is off the playback path's
-     * critical path (the playback read never waits on it), and a read that
-     * answers nothing publishes an empty map - a re-scan refreshes the
-     * record, including clearing urls the card no longer carries.
+     * clamped-name → url map for that uid (see [publishSongUrls]). It is
+     * off the playback path's critical path (the playback read never waits
+     * on it). A re-scan refreshes the record - including clearing urls the
+     * card no longer carries - but a read that could not connect says
+     * nothing about the card's payload, so it keeps the last known urls
+     * instead of clearing them.
      */
     private fun readTagSongUrls(uid: String, tag: Tag) {
         viewModelScope.launch {
-            val data = withContext(Dispatchers.IO) { songPayloadReader(tag) }
-            _tagSongUrls.value = _tagSongUrls.value + (uid to (data?.songUrls ?: emptyMap()))
+            publishSongUrls(uid, withContext(Dispatchers.IO) { songPayloadReader(tag) })
+        }
+    }
+
+    /**
+     * Publishes [read]'s urls for [uid]: an answered read is the card's
+     * current payload (a card answered with no lumi record clears the
+     * uid's urls), and a failed read publishes nothing (the last known
+     * urls stay).
+     */
+    private fun publishSongUrls(uid: String, read: TagPayloadRead) {
+        if (read is TagPayloadRead.Answered) {
+            _tagSongUrls.value = _tagSongUrls.value + (uid to (read.data?.songUrls ?: emptyMap()))
         }
     }
 
@@ -829,12 +854,22 @@ class LumiViewModel(
             return
         }
         viewModelScope.launch {
-            // One NDEF session reads the payload.
-            val data = withContext(Dispatchers.IO) {
-                tagInspector(tag, LumiTagData(name = "")).data
+            // One NDEF session reads the payload - this presentation's
+            // only NDEF read: the card's urls publish from its own result,
+            // so no second read races it for the tag's single connection
+            // slot.
+            val inspected = withContext(Dispatchers.IO) {
+                tagInspector(tag, LumiTagData(name = ""))
             }
             if (_capturedUid.value != uid) return@launch
-            publishCapture(uid, data)
+            when (val read = inspected.read) {
+                is TagPayloadRead.Answered -> {
+                    publishCapture(uid, read.data)
+                    publishSongUrls(uid, read)
+                }
+
+                is TagPayloadRead.Failed -> publishCapture(uid, null)
+            }
         }
     }
 
@@ -875,9 +910,11 @@ class LumiViewModel(
 
     /**
      * Test seam: the card's lumi payload read for the per-song download
-     * urls (a presentation's best-effort read), replaced in unit tests.
+     * urls (a presentation's best-effort read; an answered read is the
+     * card's payload, a failed read keeps the last known urls), replaced
+     * in unit tests.
      */
-    internal var songPayloadReader: suspend (Tag?) -> LumiTagData? = { tag ->
+    internal var songPayloadReader: suspend (Tag?) -> TagPayloadRead = { tag ->
         LumiTagNdef.readFromTag(tag)
     }
 

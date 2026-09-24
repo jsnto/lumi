@@ -43,8 +43,25 @@ data class LumiTagData(
     val songUrls: Map<String, String> = emptyMap(),
 )
 
-/** The tag's lumi payload and whether the tag can hold the app payload. */
-data class TagInspect(val data: LumiTagData?, val writable: Boolean)
+/**
+ * The outcome of reading the tag's lumi payload: [Answered] when the NDEF
+ * session answered - [data] is the card's payload, or null when the card
+ * carries no lumi record (a wiped or foreign card, or one with no NDEF
+ * tech at all) - and [Failed] when the read could not connect or the read
+ * itself threw: the card's payload is then UNKNOWN (it may still carry a
+ * record), so a failed read must never be treated as "the card carries no
+ * record".
+ */
+sealed interface TagPayloadRead {
+    /** The card was read: [data] is its lumi payload (null when it carries none). */
+    data class Answered(val data: LumiTagData?) : TagPayloadRead
+
+    /** The read could not connect or the read threw: the card's payload is unknown. */
+    data object Failed : TagPayloadRead
+}
+
+/** The tag's lumi payload read and whether the tag can hold the app payload. */
+data class TagInspect(val read: TagPayloadRead, val writable: Boolean)
 
 /**
  * NDEF codec for the app's own tag payload: a single NDEF record with the
@@ -241,9 +258,34 @@ object LumiTagNdef {
         return capacity == 0 || capacity >= messageByteLength(toNdefMessage(data))
     }
 
-    /** The app's payload currently on the tag, if the tag is NDEF readable. */
-    fun readFromTag(tag: Tag?): LumiTagData? =
-        connectedNdef(tag) { ndef -> fromNdefMessage(ndef.getNdefMessage()) }
+    /**
+     * The app's payload read from the tag, with the read's own outcome: a
+     * tag with no NDEF tech CARRIES no lumi record (a positive discovery
+     * fact - [TagPayloadRead.Answered] with a null payload), while a read
+     * that could not connect - or whose read threw - is
+     * [TagPayloadRead.Failed]: the card's payload is then unknown, never
+     * "empty".
+     */
+    fun readFromTag(tag: Tag?): TagPayloadRead {
+        if (tag == null) return TagPayloadRead.Answered(null)
+        val ndef = try {
+            Ndef.get(tag)
+        } catch (e: Exception) {
+            return TagPayloadRead.Failed
+        } ?: return TagPayloadRead.Answered(null)
+        return try {
+            ndef.connect()
+            TagPayloadRead.Answered(fromNdefMessage(ndef.getNdefMessage()))
+        } catch (e: Exception) {
+            TagPayloadRead.Failed
+        } finally {
+            try {
+                ndef.close()
+            } catch (e: Exception) {
+                // Tag is already gone; nothing to clean up.
+            }
+        }
+    }
 
     /**
      * Whether [tag] is NDEF formatted, writable, and whose NDEF area can
@@ -260,11 +302,27 @@ object LumiTagNdef {
      * whether the tag can hold the app payload (falling back to [fallback]
      * when the tag carries no readable lumi record).
      */
-    fun inspect(tag: Tag?, fallback: LumiTagData): TagInspect =
-        connectedNdef(tag) { ndef ->
+    fun inspect(tag: Tag?, fallback: LumiTagData): TagInspect {
+        if (tag == null) return TagInspect(TagPayloadRead.Answered(null), false)
+        val ndef = try {
+            Ndef.get(tag)
+        } catch (e: Exception) {
+            return TagInspect(TagPayloadRead.Failed, false)
+        } ?: return TagInspect(TagPayloadRead.Answered(null), false)
+        return try {
+            ndef.connect()
             val data = fromNdefMessage(ndef.getNdefMessage())
-            TagInspect(data, ndef.fits(data ?: fallback))
-        } ?: TagInspect(null, false)
+            TagInspect(TagPayloadRead.Answered(data), ndef.fits(data ?: fallback))
+        } catch (e: Exception) {
+            TagInspect(TagPayloadRead.Failed, false)
+        } finally {
+            try {
+                ndef.close()
+            } catch (e: Exception) {
+                // Tag is already gone; nothing to clean up.
+            }
+        }
+    }
 
     /**
      * Writes [data] to [tag], replacing whatever was there. Returns false

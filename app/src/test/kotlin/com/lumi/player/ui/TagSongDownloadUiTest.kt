@@ -14,6 +14,7 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.SongDownloadResult
 import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -190,13 +191,15 @@ class TagSongDownloadUiTest {
         // and the gone song (and none for the quiet one): the icon must
         // surface only for the out-of-content, valid-url song.
         viewModel.songPayloadReader = { _ ->
-            LumiTagData(
-                name = "Porch",
-                songs = listOf("First song", "Gone song", "Quiet song"),
-                songUrls = mapOf(
-                    "First song" to "https://cdn.example.com/first.mp3",
-                    "Gone song" to "https://cdn.example.com/gone.mp3",
-                ),
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    name = "Porch",
+                    songs = listOf("First song", "Gone song", "Quiet song"),
+                    songUrls = mapOf(
+                        "First song" to "https://cdn.example.com/first.mp3",
+                        "Gone song" to "https://cdn.example.com/gone.mp3",
+                    ),
+                )
             )
         }
         // Drive the read the way the NFC stack's foreground dispatch does:
@@ -218,14 +221,55 @@ class TagSongDownloadUiTest {
         // The invalid-url shape is refused too: a second read whose url is
         // not a song download url (an ftp link) keeps the icon hidden.
         viewModel.songPayloadReader = { _ ->
-            LumiTagData(
-                name = "Porch",
-                songs = listOf("First song", "Gone song", "Quiet song"),
-                songUrls = mapOf("Gone song" to "ftp://cdn.example.com/gone.mp3"),
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    name = "Porch",
+                    songs = listOf("First song", "Gone song", "Quiet song"),
+                    songUrls = mapOf("Gone song" to "ftp://cdn.example.com/gone.mp3"),
+                )
             )
         }
         sendTag(controller, TAG_UID)
         idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == mapOf("Gone song" to "ftp://cdn.example.com/gone.mp3") })
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Download Gone song").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFailedReReadKeepsThePublishedUrls_andAWipedCardClearsThem() {
+        // The read's own outcome drives the map: a re-presentation whose
+        // read could not connect (the presence poll holds the tag's single
+        // connection slot) keeps the published urls - no icon loss on the
+        // re-tap - while a card that answers with no lumi record (its
+        // record wiped) clears them.
+        seedTag()
+        val controller = openTagPage("Porch")
+        val activity = controller.get()
+        val viewModel = mainViewModel(activity)
+        val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
+
+        viewModel.songPayloadReader = { _ ->
+            TagPayloadRead.Answered(LumiTagData("Porch", listOf("Gone song"), urls))
+        }
+        sendTag(controller, TAG_UID)
+        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls })
+        waitForText("Gone song")
+        compose.onNodeWithContentDescription("Download Gone song").assertExists()
+
+        // The re-tap whose read could not connect: the map keeps the urls,
+        // the icon survives.
+        viewModel.songPayloadReader = { _ -> TagPayloadRead.Failed }
+        sendTag(controller, TAG_UID)
+        Thread.sleep(500)
+        ShadowLooper.idleMainLooper()
+        compose.waitForIdle()
+        assertEquals("a failed re-read keeps the last known urls", urls, viewModel.tagSongUrls.value[TAG_UID])
+        compose.onNodeWithContentDescription("Download Gone song").assertExists()
+
+        // The card answers with no lumi record (wiped): the map clears.
+        viewModel.songPayloadReader = { _ -> TagPayloadRead.Answered(null) }
+        sendTag(controller, TAG_UID)
+        idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == true })
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Download Gone song").assertDoesNotExist()
     }
@@ -242,10 +286,12 @@ class TagSongDownloadUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { events += it } }
 
         viewModel.songPayloadReader = { _ ->
-            LumiTagData(
-                name = "Porch",
-                songs = listOf("Gone song"),
-                songUrls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    name = "Porch",
+                    songs = listOf("Gone song"),
+                    songUrls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                )
             )
         }
         // The downloader seam: a controlled in-flight progress held by an
@@ -307,10 +353,12 @@ class TagSongDownloadUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { events += it } }
 
         viewModel.songPayloadReader = { _ ->
-            LumiTagData(
-                name = "Porch",
-                songs = listOf("Gone song"),
-                songUrls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+            TagPayloadRead.Answered(
+                LumiTagData(
+                    name = "Porch",
+                    songs = listOf("Gone song"),
+                    songUrls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
+                )
             )
         }
         var succeedNext = false
