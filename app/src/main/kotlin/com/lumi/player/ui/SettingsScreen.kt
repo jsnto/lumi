@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.lumi.player.data.AutoLockDelay
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
@@ -39,6 +40,7 @@ private enum class SettingsPane {
     PlayMode,
     Tags,
     Content,
+    System,
     TagDetail,
     FolderDetail,
     EntryDetail,
@@ -48,8 +50,10 @@ private enum class SettingsPane {
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
  * screen is a list of buttons, one per setting (play mode, NFC tags, content,
- * keep screen on, appearance); clicking a row navigates into that setting's own
- * configuration screen.
+ * system); clicking a row navigates into that setting's own configuration
+ * screen. The System page groups the device/display settings - keep screen
+ * on, auto-lock after idle, and appearance (the last a row into its own
+ * sub-screen, a child of the System page).
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
  * child of the NFC tags pane and the folder detail page is a child of the
@@ -92,9 +96,15 @@ fun SettingsScreen(
     // The content list's title sort direction (the content pane's sort
     // control; ascending by default).
     val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.ASCENDING)
-    // The app's appearance mode (the settings menu's "Appearance" row; the
+    // The app's appearance mode (the System page's "Appearance" row; the
     // theme follows it app-wide, effective immediately on change).
     val themeMode by viewModel.themeMode.collectAsState(LumiThemeMode.FOLLOW_SYSTEM)
+    // The auto-lock idle delay (the System page's "Auto-lock after idle"
+    // choice; off by default).
+    val autoLockDelay by viewModel.autoLockDelay.collectAsState(AutoLockDelay.OFF)
+    // Whether the app's screen-lock device admin is active (the System
+    // page's enable prompt).
+    val deviceAdminActive by viewModel.deviceAdminActive.collectAsState(false)
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
     val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
@@ -197,17 +207,29 @@ fun SettingsScreen(
         if (uri != null) viewModel.addFolderEntry(uri)
     }
 
+    // The device-admin enable launcher (the System page's "Enable screen
+    // lock" action): launches the platform's own consent screen for the
+    // app's screen-lock admin. The result is fed back to the view model,
+    // which re-checks the admin's real state with the platform.
+    val deviceAdminLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        viewModel.onDeviceAdminResult(result.resultCode)
+    }
+
     // System back must unwind the settings screen itself (one level at a
     // time) before the host can pop settings away entirely: the tag detail
     // page unwinds to the NFC tags list it lives under, the folder detail
-    // page to the content pane it lives under, the song's profile to the
-    // pane it was opened from (the opener recorded when the row was
-    // tapped), and every other sub-screen to the menu; only when the menu
-    // is showing is the default back handler allowed through.
+    // page to the content pane it lives under, the appearance page to the
+    // System page it lives under, the song's profile to the pane it was
+    // opened from (the opener recorded when the row was tapped), and every
+    // other sub-screen to the menu; only when the menu is showing is the
+    // default back handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
+            SettingsPane.Appearance -> SettingsPane.System
             SettingsPane.EntryDetail -> {
                 val opener = entryDetailOpener
                 entryDetailOpener = null
@@ -221,18 +243,27 @@ fun SettingsScreen(
         SettingsPane.Menu -> SettingsMenuPane(
             scrollState = menuScroll,
             playMode = playMode,
-            keepScreenOn = keepScreenOn,
-            onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
             nowPlayingLabel = playState.currentLabel,
             isPlaying = playState.isPlaying,
             tags = tags,
             entries = entries,
-            themeMode = themeMode,
             onPlayMode = { pane = SettingsPane.PlayMode },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
-            onAppearance = { pane = SettingsPane.Appearance },
+            onSystem = { pane = SettingsPane.System },
             onBack = onBack,
+        )
+        SettingsPane.System -> SystemPane(
+            viewModel = viewModel,
+            keepScreenOn = keepScreenOn,
+            onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
+            autoLockDelay = autoLockDelay,
+            onAutoLockDelayChange = { viewModel.setAutoLockDelay(it) },
+            deviceAdminActive = deviceAdminActive,
+            onEnableDeviceAdmin = { deviceAdminLauncher.launch(viewModel.deviceAdminIntent()) },
+            themeMode = themeMode,
+            onAppearance = { pane = SettingsPane.Appearance },
+            onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.PlayMode -> PlayModePane(
             viewModel = viewModel,
@@ -242,7 +273,7 @@ fun SettingsScreen(
         SettingsPane.Appearance -> AppearancePane(
             viewModel = viewModel,
             themeMode = themeMode,
-            onBack = { pane = SettingsPane.Menu },
+            onBack = { pane = SettingsPane.System },
         )
         SettingsPane.Tags -> TagsPane(
             viewModel = viewModel,

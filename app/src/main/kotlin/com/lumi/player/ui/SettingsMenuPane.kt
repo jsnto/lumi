@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,49 +25,43 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.EntryEntity
-import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 
 /**
  * The settings menu: one clickable row per setting plus an app-version
  * footer. Clicking a row navigates into that setting's configuration screen.
- * The now-playing strip (D-06) tops the list while an entry is loaded.
+ * The now-playing strip (D-06) tops the list while an entry is loaded. The
+ * device/display settings (keep screen on, auto-lock after idle,
+ * appearance) live in the System page, not on the menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsMenuPane(
     scrollState: ScrollState,
     playMode: PlayMode,
-    keepScreenOn: Boolean,
-    onKeepScreenOnChange: (Boolean) -> Unit,
     nowPlayingLabel: String?,
     isPlaying: Boolean,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
-    themeMode: LumiThemeMode,
     onPlayMode: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
-    onAppearance: () -> Unit,
+    onSystem: () -> Unit,
     onBack: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -129,117 +121,18 @@ internal fun SettingsMenuPane(
                 subtitle = if (entries.isEmpty()) "No songs yet" else "${entries.size} songs",
                 onClick = onContent,
             )
-            KeepScreenOnRow(
-                checked = keepScreenOn,
-                onCheckedChange = onKeepScreenOnChange,
-            )
             MenuRow(
-                icon = Icons.Filled.Palette,
-                chipBackground = scheme.tertiaryContainer,
-                chipContent = scheme.onTertiaryContainer,
-                title = "Appearance",
-                subtitle = when (themeMode) {
-                    LumiThemeMode.FOLLOW_SYSTEM -> "Follow system"
-                    LumiThemeMode.LIGHT -> "Light"
-                    LumiThemeMode.DARK -> "Dark"
-                },
-                onClick = onAppearance,
+                icon = Icons.Filled.Lock,
+                chipBackground = scheme.secondaryContainer,
+                chipContent = scheme.onSecondaryContainer,
+                title = "System",
+                subtitle = "Display and screen lock settings",
+                onClick = onSystem,
             )
             Text(
                 text = "lumi v${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/**
- * A settings button: a tonal icon chip, title, subtitle, chevron — a quiet
- * color-coding of the app's jobs (D-03): play = peach, tags = teal,
- * content = violet. 56+ dp min height, 48 dp targets (D-08).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MenuRow(
-    icon: ImageVector,
-    chipBackground: Color,
-    chipContent: Color,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 64.dp)
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconChip(
-                icon = icon,
-                background = chipBackground,
-                content = chipContent,
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-            }
-            Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
-        }
-    }
-}
-
-/**
- * The keep-screen-on toggle: a checkbox row instead of the menu's chevron
- * rows, because the setting is a single on/off choice with no configuration
- * sub-screen.
- */
-@Composable
-private fun KeepScreenOnRow(
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Row(
-            Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconChip(
-                icon = Icons.Filled.BrightnessHigh,
-                background = scheme.primaryContainer,
-                content = scheme.onPrimaryContainer,
-                size = 36.dp,
-                iconSize = 18.dp,
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Keep screen on", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Keep the display on while the app is open.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-            }
-            Checkbox(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                modifier = Modifier.testTag("keep-screen-on"),
             )
         }
     }

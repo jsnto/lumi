@@ -488,6 +488,26 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: auto-lock after idle ----
+
+    /**
+     * How many minutes of idle (no active playback) count before the
+     * phone's screen is locked. Unset or invalid stored values fall back to
+     * off (0) - the default: the screen is never locked automatically.
+     */
+    fun observeAutoLockDelay(): Flow<AutoLockDelay> =
+        dao.observeSettings().map { rows ->
+            autoLockDelayFromStored(
+                rows.firstOrNull { it.key == SettingsEntity.AUTO_LOCK_MINUTES }?.value,
+            )
+        }
+
+    suspend fun setAutoLockDelay(delay: AutoLockDelay) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.AUTO_LOCK_MINUTES, delay.storedValue()),
+        )
+    }
+
     // ---- settings: keep screen on ----
 
     /**

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -227,6 +228,54 @@ internal fun SettingRow(
             }
         }
         trailing?.invoke()
+    }
+}
+
+/**
+ * A settings button: a tonal icon chip, title, subtitle, chevron — a quiet
+ * color-coding of the app's jobs (D-03): play = peach, tags = teal,
+ * content = violet. 56+ dp min height, 48 dp targets (D-08). Shared by the
+ * main settings menu and the System page's rows.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun MenuRow(
+    icon: ImageVector,
+    chipBackground: Color,
+    chipContent: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconChip(
+                icon = icon,
+                background = chipBackground,
+                content = chipContent,
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+        }
     }
 }
 

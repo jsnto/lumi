@@ -142,5 +142,11 @@ data class SettingsEntity(
 
         /** "system"/"light"/"dark": the app's appearance mode; unset follows the system. */
         const val THEME_MODE = "theme_mode"
+
+        /**
+         * Minutes of idle (no active playback) after which the phone's
+         * screen is locked; "0" (off) by default.
+         */
+        const val AUTO_LOCK_MINUTES = "auto_lock_minutes"
     }
 }

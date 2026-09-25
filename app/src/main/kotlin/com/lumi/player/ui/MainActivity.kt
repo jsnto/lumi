@@ -170,12 +170,15 @@ class MainActivity : ComponentActivity() {
         refreshNfcState()
 
         // The keep-screen-on setting can change while the app is open (the
-        // settings checkbox), so apply/clear the window flag on every change
-        // while the activity is started; onResume/onPause keep the flag in
-        // sync with the foreground for the setting's current value.
+        // System page's checkbox), so apply/clear the window flag on every
+        // change of its EFFECTIVE value while the activity is started: the
+        // user's choice AND the auto-lock not having claimed the screen (the
+        // lock wins over keep-screen-on until music plays again). onResume
+        // /onPause keep the flag in sync with the foreground for the
+        // setting's current effective value.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.keepScreenOn.collectLatest { on ->
+                viewModel.keepScreenOnEffective.collectLatest { on ->
                     if (on) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     } else {
@@ -832,12 +835,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Keep the screen on for the activity's lifetime when the user
-        // enabled the keep-screen-on setting (cleared in onPause); otherwise
-        // the screen follows the system timeout while the app is open.
-        if (viewModel.keepScreenOn.value) {
+        // Keep the screen on for the activity's lifetime when the effective
+        // keep-screen-on value is on - the user's setting AND the auto-lock
+        // not having claimed the idle screen (the lock wins; cleared in
+        // onPause); otherwise the screen follows the system timeout while
+        // the app is open.
+        if (viewModel.keepScreenOnEffective.value) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+        // The auto-lock's foreground gate (see [LumiViewModel.runAutoLockTick]):
+        // the screen is locked only while the app is in the foreground.
+        viewModel.appInForeground = true
         nfcConfigured = true
         reconfigureNfc()
         refreshNfcState()
@@ -851,6 +859,10 @@ class MainActivity : ComponentActivity() {
         }
         presenceHandler.removeCallbacks(presenceWatcher)
         stopPresencePoll()
+        // The app leaves the foreground: the auto-lock must not lock the
+        // screen while the user is in another app (an elapsed stretch is
+        // held until the app is back).
+        viewModel.appInForeground = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
     }
