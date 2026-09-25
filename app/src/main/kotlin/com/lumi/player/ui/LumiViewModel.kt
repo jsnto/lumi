@@ -52,7 +52,6 @@ import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
-import com.lumi.player.player.PlayerUiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -732,6 +731,16 @@ class LumiViewModel(
 
     internal var clock: () -> Long = System::currentTimeMillis
 
+    /**
+     * Whether the host activity is in the foreground right now
+     * ([MainActivity] keeps it in sync from onResume / onPause): the
+     * auto-lock may lock the screen only while the app is in the
+     * foreground - an idle stretch that elapses while the user is in
+     * another app is held, not fired, and fires on the first foreground
+     * tick.
+     */
+    internal var appInForeground: Boolean = false
+
     /** The app's own screen-lock device admin (the auto-lock's consent target). */
     val deviceAdminComponent: ComponentName =
         ComponentName(context.packageName, LumiDeviceAdminReceiver::class.java.name)
@@ -782,7 +791,10 @@ class LumiViewModel(
     // keep-screen-on - see [performAutoLock]). The loop runs for the view
     // model's lifetime (the app's process), so the idle time is measured
     // while the app sits open and idle, foreground or background; only a
-    // process death loses the running stretch. This init block runs AFTER
+    // process death loses the running stretch - but the lock itself is
+    // applied only while the activity is in the foreground (the tick holds
+    // an elapsed stretch while the app is backgrounded - see
+    // [runAutoLockTick]). This init block runs AFTER
     // the [autoLockDelay] property and the test seams above (property
     // initializers and init blocks run in source order), so the collectors
     // cannot NPE on a not-yet-initialized property.
@@ -794,7 +806,7 @@ class LumiViewModel(
         }
         viewModelScope.launch {
             PlayerStateHolder.state.collect { state ->
-                onPlaybackForAutoLock(state)
+                onPlaybackStatusForAutoLock(state.isPlaying)
             }
         }
         viewModelScope.launch {
@@ -811,10 +823,6 @@ class LumiViewModel(
      * active playback resets the idle stretch and releases the keep-screen-
      * on suppression; an inactive state starts (or keeps) the stretch.
      */
-    fun onPlaybackForAutoLock(state: PlayerUiState) {
-        onPlaybackStatusForAutoLock(state.isPlaying)
-    }
-
     private fun onPlaybackStatusForAutoLock(isPlaying: Boolean) {
         val now = clock()
         autoLockTimer.onPlaybackStatus(isPlaying, now)
@@ -824,15 +832,21 @@ class LumiViewModel(
     /**
      * One idle check: the production loop calls this every
      * [AUTO_LOCK_TICK_MS]; tests drive it with a faked clock. Returns true
-     * when the idle timeout fired on this tick.
+     * when the idle timeout fired on this tick. The lock is applied only
+     * while the activity is in the foreground: while it is not, an elapsed
+     * stretch is HELD - the tick reports nothing and the stretch stays
+     * un-fired - so it fires on the first tick once the app is back in the
+     * foreground, never mid-way through the user's time in another app.
      */
-    internal fun runAutoLockTick(): Boolean =
-        if (autoLockTimer.tick(clock())) {
+    internal fun runAutoLockTick(): Boolean {
+        if (!appInForeground) return false
+        return if (autoLockTimer.tick(clock())) {
             performAutoLock()
             true
         } else {
             false
         }
+    }
 
     /** The idle timeout fired: lock the screen - or not, when the admin is
      * not active (the app keeps working, the setting stays visible). */

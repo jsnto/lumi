@@ -43,7 +43,9 @@ import java.util.concurrent.TimeUnit
  * persistence (the app's settings-table pattern), the back navigation's
  * one-level unwind, the idle timer end-to-end (a fake clock drives it
  * through the view model's tick seam), the lock winning over
- * keep-screen-on, and the admin-not-granted state (the setting stays
+ * keep-screen-on, the foreground gate (a backgrounded app holds the
+ * elapsed stretch - no lock - and it fires on the return to the
+ * foreground), and the admin-not-granted state (the setting stays
  * visible and prompts to enable; the app keeps working).
  *
  * The actual screen lock goes through [LumiViewModel.lockDevice] (a test
@@ -93,6 +95,15 @@ class AutoLockUiTest {
             .getDeclaredField("viewModel")
             .also { it.isAccessible = true }
         return field.get(activity) as LumiViewModel
+    }
+
+    // onResume/onPause are protected on Activity, so drive the real
+    // MainActivity overrides directly (running their full body) without the
+    // framework lifecycle plumbing.
+    private fun drive(activity: MainActivity, method: String) {
+        val m = MainActivity::class.java.getDeclaredMethod(method)
+        m.isAccessible = true
+        m.invoke(activity)
     }
 
     /** Pumps the main looper until [condition] holds or the deadline lapses. */
@@ -421,6 +432,57 @@ class AutoLockUiTest {
         fakeNow += 5 * 60_000L
         assertFalse("a fired stretch must not re-fire without a playback cycle", vm.runAutoLockTick())
         assertEquals("the lock fires exactly once per idle stretch", 1, lockCalls)
+        // Leave the composition idle (see the note in the keep-screen-on
+        // test above): the re-anchor's player-state writes left a
+        // recomposition unprocessed, and tearing the activity down with
+        // pending recomposer work poisons the next test's Compose idling.
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun aBackgroundedAppDoesNotLockAndTheHeldStretchFiresOnReturn() {
+        val activity = openSettings()
+        val vm = viewModelOf(activity)
+        var lockCalls = 0
+        vm.isDeviceAdminActive = { true }
+        vm.lockDevice = { lockCalls++ }
+        var fakeNow = 1_000_000L
+        vm.clock = { fakeNow }
+
+        vm.setAutoLockDelay(AutoLockDelay.FIVE_MINUTES)
+        await(
+            { vm.autoLockDelay.value == AutoLockDelay.FIVE_MINUTES },
+            { "the auto-lock choice must become 5 minutes" },
+        )
+        reanchorIdleStretch(vm)
+
+        // The idle time elapses while the user is in another app: the app
+        // goes to the background...
+        fakeNow += 5 * 60_000L
+        drive(activity, "onPause")
+
+        // ...and the elapsed stretch is HELD, not fired: the timeout does
+        // not report, nothing locks, and the stretch stays un-fired...
+        assertFalse(
+            "a backgrounded app must not fire the idle timeout",
+            vm.runAutoLockTick(),
+        )
+        assertEquals(
+            "nothing may be locked while the app is backgrounded",
+            0,
+            lockCalls,
+        )
+
+        // ...so when the app comes back to the foreground the pending
+        // timeout fires on the first tick - and only there.
+        drive(activity, "onResume")
+        assertTrue(
+            "the held stretch must fire once the app is back in the foreground",
+            vm.runAutoLockTick(),
+        )
+        assertEquals("the lock must have been applied", 1, lockCalls)
+        assertFalse("a further tick in the same stretch must not re-fire", vm.runAutoLockTick())
+        assertEquals("still exactly one lock", 1, lockCalls)
         // Leave the composition idle (see the note in the keep-screen-on
         // test above): the re-anchor's player-state writes left a
         // recomposition unprocessed, and tearing the activity down with

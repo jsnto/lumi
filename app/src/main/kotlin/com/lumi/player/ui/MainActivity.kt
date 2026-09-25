@@ -843,6 +843,9 @@ class MainActivity : ComponentActivity() {
         if (viewModel.keepScreenOnEffective.value) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+        // The auto-lock's foreground gate (see [LumiViewModel.runAutoLockTick]):
+        // the screen is locked only while the app is in the foreground.
+        viewModel.appInForeground = true
         nfcConfigured = true
         reconfigureNfc()
         refreshNfcState()
@@ -856,6 +859,10 @@ class MainActivity : ComponentActivity() {
         }
         presenceHandler.removeCallbacks(presenceWatcher)
         stopPresencePoll()
+        // The app leaves the foreground: the auto-lock must not lock the
+        // screen while the user is in another app (an elapsed stretch is
+        // held until the app is back).
+        viewModel.appInForeground = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
     }
