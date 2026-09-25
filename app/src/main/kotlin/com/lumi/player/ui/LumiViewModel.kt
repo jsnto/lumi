@@ -1,5 +1,7 @@
 package com.lumi.player.ui
 
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
@@ -13,6 +15,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
+import com.lumi.player.data.AutoLockDelay
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.ContentSortDirection
@@ -33,6 +36,8 @@ import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
 import com.lumi.player.data.folderDocIdOf
 import com.lumi.player.data.rescanNewSongs
+import com.lumi.player.data.AutoLockTimer
+import com.lumi.player.device.LumiDeviceAdminReceiver
 import com.lumi.player.nfc.CardWriteGate
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
@@ -47,10 +52,12 @@ import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
+import com.lumi.player.player.PlayerUiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +91,15 @@ class LumiViewModel(
     /** Tag read/lost decisions for the active mode. */
     @Volatile
     private var policy: PlaybackPolicy = PlaybackPolicy(playMode.value)
+
+    /**
+     * The auto-lock idle timer's decision logic (pure; the clock is fed in
+     * through [clock]). It lives here so the idle stretch outlives a
+     * settings pane leaving and coming back: it is fed from the shared
+     * player state (every playback change resets or arms it) and ticked by
+     * the loop in the init block.
+     */
+    private val autoLockTimer = AutoLockTimer()
 
     // ---- observed data for the UI ----
 
@@ -274,6 +290,13 @@ class LumiViewModel(
         // no longer be read degrades to its songs appearing in the
         // individual content list (its rows keep no marker).
         viewModelScope.launch { backfillFolderEntries() }
+
+        // NOTE: the auto-lock engine's collectors (the stored delay, the
+        // shared player state, and the tick loop) are launched from an
+        // init block further down, right after the [autoLockDelay]
+        // property they read: property initializers and init blocks run
+        // in source order, so a collector launched here would NPE on the
+        // not-yet-initialized [autoLockDelay].
     }
 
     // ---- NFC events from the activity ----
@@ -670,6 +693,205 @@ class LumiViewModel(
         viewModelScope.launch { repository.setThemeMode(mode) }
     }
 
+    // ---- settings: auto-lock after idle ----
+
+    /**
+     * How many minutes of idle - no song actively playing (stopped or
+     * paused both count as idle) - count before the phone's screen is
+     * locked, so a phone left with the app open does not drain its battery
+     * doing nothing. Off by default: the screen is never locked
+     * automatically. The choice persists in the database like the other
+     * settings.
+     */
+    val autoLockDelay: StateFlow<AutoLockDelay> =
+        repository.observeAutoLockDelay()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, AutoLockDelay.OFF)
+
+    fun setAutoLockDelay(delay: AutoLockDelay) {
+        viewModelScope.launch { repository.setAutoLockDelay(delay) }
+        // The running stretch follows the new choice immediately: the
+        // timer re-arms (or disarms) against the current playback state.
+        applyAutoLockDelayToTimer(delay)
+    }
+
+    // Test seams (declared before the admin-state flow below, whose
+    // initializer reads the first one):
+    // the device-admin state check (the real one asks the platform's
+    // DevicePolicyManager), the actual screen lock (the real one is
+    // DevicePolicyManager.lockNow, only valid while the admin is active),
+    // and the wall clock the idle timer reads.
+    internal var isDeviceAdminActive: (ComponentName) -> Boolean = { admin ->
+        (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager)
+            .isAdminActive(admin)
+    }
+
+    internal var lockDevice: () -> Unit = {
+        (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager)
+            .lockNow()
+    }
+
+    internal var clock: () -> Long = System::currentTimeMillis
+
+    /** The app's own screen-lock device admin (the auto-lock's consent target). */
+    val deviceAdminComponent: ComponentName =
+        ComponentName(context.packageName, LumiDeviceAdminReceiver::class.java.name)
+
+    /**
+     * Whether the app's screen-lock device admin is active right now. The
+     * lock can only happen while it is active; the setting stays visible
+     * and usable either way (the System page prompts to enable it when it
+     * is not, and the app keeps working without the admin).
+     */
+    private val _deviceAdminActive =
+        MutableStateFlow(isDeviceAdminActive(deviceAdminComponent))
+    val deviceAdminActive: StateFlow<Boolean> = _deviceAdminActive.asStateFlow()
+
+    /**
+     * The auto-lock's claim on the screen (the lock wins over keep
+     * screen-on): set when the idle timeout fires and the lock is
+     * applied, cleared when music plays again - until then the app's own
+     * keep-screen-on flag must not keep the (locked) screen awake.
+     * Declared BEFORE the engine's init block: its player-state collector
+     * is delivered inline on the main thread during construction (the
+     * scope's Main.immediate), so a construction that starts while music
+     * is already playing writes this flow before the property's own
+     * initializer would have run - a not-yet-initialized flow is a
+     * cold-start-during-playback crash.
+     */
+    private val _autoLockKeepScreenSuppressed = MutableStateFlow(false)
+    val autoLockKeepScreenSuppressed: StateFlow<Boolean> =
+        _autoLockKeepScreenSuppressed.asStateFlow()
+
+    /**
+     * Whether the window should carry FLAG_KEEP_SCREEN_ON right now: the
+     * user's keep-screen-on choice AND the auto-lock not having claimed the
+     * screen (the lock wins over keep-screen-on until music plays again).
+     */
+    val keepScreenOnEffective: StateFlow<Boolean> =
+        keepScreenOn.combine(autoLockKeepScreenSuppressed) { on, suppressed ->
+            on && !suppressed
+        }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // The auto-lock engine (the System setting's "Auto-lock after idle"),
+    // driven from the shared player state so it is unit-testable and
+    // survives the settings screens' navigation: the stored delay is
+    // applied to the timer whenever it lands (or changes), every playback
+    // change resets/arms the idle stretch, and a loop ticks the timer
+    // until the stretch's idle time elapses (the lock then wins over
+    // keep-screen-on - see [performAutoLock]). The loop runs for the view
+    // model's lifetime (the app's process), so the idle time is measured
+    // while the app sits open and idle, foreground or background; only a
+    // process death loses the running stretch. This init block runs AFTER
+    // the [autoLockDelay] property and the test seams above (property
+    // initializers and init blocks run in source order), so the collectors
+    // cannot NPE on a not-yet-initialized property.
+    init {
+        viewModelScope.launch {
+            autoLockDelay.collect { delay ->
+                applyAutoLockDelayToTimer(delay)
+            }
+        }
+        viewModelScope.launch {
+            PlayerStateHolder.state.collect { state ->
+                onPlaybackForAutoLock(state)
+            }
+        }
+        viewModelScope.launch {
+            while (true) {
+                delay(AUTO_LOCK_TICK_MS)
+                runAutoLockTick()
+            }
+        }
+    }
+
+    /**
+     * Feeds the auto-lock timer with a playback state change (the engine's
+     * own collector of the shared player state forwards every change): an
+     * active playback resets the idle stretch and releases the keep-screen-
+     * on suppression; an inactive state starts (or keeps) the stretch.
+     */
+    fun onPlaybackForAutoLock(state: PlayerUiState) {
+        onPlaybackStatusForAutoLock(state.isPlaying)
+    }
+
+    private fun onPlaybackStatusForAutoLock(isPlaying: Boolean) {
+        val now = clock()
+        autoLockTimer.onPlaybackStatus(isPlaying, now)
+        if (isPlaying) _autoLockKeepScreenSuppressed.value = false
+    }
+
+    /**
+     * One idle check: the production loop calls this every
+     * [AUTO_LOCK_TICK_MS]; tests drive it with a faked clock. Returns true
+     * when the idle timeout fired on this tick.
+     */
+    internal fun runAutoLockTick(): Boolean =
+        if (autoLockTimer.tick(clock())) {
+            performAutoLock()
+            true
+        } else {
+            false
+        }
+
+    /** The idle timeout fired: lock the screen - or not, when the admin is
+     * not active (the app keeps working, the setting stays visible). */
+    private fun performAutoLock() {
+        val adminActive = isDeviceAdminActive(deviceAdminComponent)
+        _deviceAdminActive.value = adminActive
+        if (adminActive) {
+            lockDevice()
+            // The lock wins over keep-screen-on: the screen is being locked
+            // now, so the app's own keep-screen-on flag must not keep it
+            // awake (and must not be re-applied while the stretch lasts).
+            _autoLockKeepScreenSuppressed.value = true
+            Log.i(TAG, "Auto-lock: the idle timeout fired and the screen was locked")
+        } else {
+            Log.w(
+                TAG,
+                "Auto-lock: the idle timeout fired but the screen-lock permission " +
+                    "(device admin) is not active - the screen stays unlocked",
+            )
+        }
+    }
+
+    private fun applyAutoLockDelayToTimer(delay: AutoLockDelay) {
+        val now = clock()
+        autoLockTimer.setDelay(delay.minutes * 60_000L, now)
+        autoLockTimer.onPlaybackStatus(PlayerStateHolder.state.value.isPlaying, now)
+    }
+
+    /**
+     * Re-checks the screen-lock admin's real state with the platform:
+     * called when the System page opens (a revocation can happen behind the
+     * app's back) and after the enable flow's result comes back.
+     */
+    fun refreshDeviceAdminState() {
+        _deviceAdminActive.value = isDeviceAdminActive(deviceAdminComponent)
+    }
+
+    /**
+     * The platform's device-admin enable intent: launching it opens the
+     * phone's own consent screen - the app is being granted the ability to
+     * lock the screen, so the explanation states exactly that. The result
+     * is fed back through [onDeviceAdminResult].
+     */
+    fun deviceAdminIntent(): Intent =
+        Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, deviceAdminComponent)
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "lumi is asking for permission to lock the phone's screen after " +
+                    "music has stopped playing for the time you choose in the System setting.",
+            )
+        }
+
+    /** The device-admin enable flow's result: the platform's real state is
+     * the authority, so re-check it (a cancel and a grant both land here). */
+    fun onDeviceAdminResult(resultCode: Int) {
+        refreshDeviceAdminState()
+    }
+
     // ---- content: manual playback (the play buttons) ----
 
     /**
@@ -783,6 +1005,9 @@ class LumiViewModel(
     private companion object {
         /** How long a song's metadata read may take before it gives up. */
         const val METADATA_READ_TIMEOUT_MS = 5_000L
+
+        /** How often the auto-lock idle timer is checked. */
+        const val AUTO_LOCK_TICK_MS = 1_000L
     }
 
     // ---- settings: tags ----

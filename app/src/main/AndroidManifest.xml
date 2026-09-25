@@ -52,5 +52,25 @@
             android:name=".player.PlayerService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- The "Auto-lock after idle" setting's device admin: a normal app
+             cannot lock the screen (DEVICE_POWER is signature|privileged),
+             so the platform's consent + activation screen runs against this
+             receiver, and the lock goes through DevicePolicyManager.lockNow
+             while the admin is active. -->
+        <receiver
+            android:name=".device.LumiDeviceAdminReceiver"
+            android:description="@string/device_admin_description"
+            android:label="@string/device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

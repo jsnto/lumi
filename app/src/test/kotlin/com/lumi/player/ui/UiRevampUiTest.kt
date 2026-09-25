@@ -235,11 +235,13 @@ class UiRevampUiTest {
         )
     }
 
-    // ---------- settings menu: keep-screen-on row (icon chip, D-03) ----------
+    // ---------- system page: keep-screen-on row (moved from the menu; icon chip, D-03) ----------
 
     @Test
-    fun settingsMenuKeepScreenOnRowRendersWithItsCheckbox() {
+    fun systemPageKeepScreenOnRowRendersWithItsCheckbox() {
         openSettings()
+        compose.onNodeWithText("System").performClick()
+        compose.waitForIdle()
 
         compose.onNodeWithText("Keep screen on").assertIsDisplayed()
         compose.onNodeWithText("Keep the display on while the app is open.").assertExists()

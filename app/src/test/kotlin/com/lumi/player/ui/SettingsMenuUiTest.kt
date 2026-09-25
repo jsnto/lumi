@@ -25,9 +25,11 @@ import org.robolectric.shadows.ShadowLooper
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
  * is a list of buttons, one per setting (play mode, NFC tags, content,
- * keep screen on - in that order); clicking a row navigates into that
+ * system - in that order); clicking a row navigates into that
  * setting's own configuration screen, and the back arrow / system back
- * unwind it back to the menu (from the menu, to the player screen). The NFC
+ * unwind it back to the menu (from the menu, to the player screen). The
+ * device/display settings (keep screen on, auto-lock after idle,
+ * appearance) live in the System page, not on the menu. The NFC
  * tags pane rows offer no row-level delete - deleting a tag happens from the
  * tag detail page's danger zone.
  */
@@ -70,21 +72,25 @@ class SettingsMenuUiTest {
         // Every setting is a button on the settings screen itself. The
         // "Tag to content" entry is gone: linking songs to a tag happens
         // from the tag detail page's add-song action, not from the menu.
+        // The keep-screen-on row and the appearance row are gone from the
+        // menu too: they moved into the System page.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
-        compose.onNodeWithText("Keep screen on").assertExists()
+        compose.onNodeWithText("System").assertExists()
+        compose.onNodeWithText("Keep screen on").assertDoesNotExist()
+        compose.onNodeWithText("Appearance").assertDoesNotExist()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
 
-        // The menu's order reads top to bottom: play mode, NFC tags, content,
-        // keep screen on.
+        // The menu's order reads top to bottom: play mode, NFC tags,
+        // content, system.
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
-        val keepTop = compose.onNodeWithText("Keep screen on").fetchSemanticsNode().boundsInRoot.top
+        val systemTop = compose.onNodeWithText("System").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, NFC tags, content, keep screen on - in that order",
-            playModeTop < nfcTop && nfcTop < contentTop && contentTop < keepTop,
+            "the menu lists play mode, NFC tags, content, system - in that order",
+            playModeTop < nfcTop && nfcTop < contentTop && contentTop < systemTop,
         )
 
         // The menu only lists the settings - none of the configuration
@@ -144,6 +150,18 @@ class SettingsMenuUiTest {
         systemBack(activity)
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithContentDescription("Add content").assertDoesNotExist()
+
+        // System: the device/display settings - the keep-screen-on row
+        // (moved here from the menu), the auto-lock-after-idle ladder, and
+        // the appearance row (moved here from the menu).
+        compose.onNodeWithText("System").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Keep screen on").assertExists()
+        compose.onNodeWithText("Auto-lock after idle").assertExists()
+        compose.onNodeWithText("Appearance").assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("System").assertExists()
+        compose.onNodeWithText("Keep screen on").assertDoesNotExist()
     }
 
     @Test

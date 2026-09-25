@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The app's device-admin policy description (the "lumi screen lock"
+    admin): exactly one policy - force-lock - the screen lock the
+    "Auto-lock after idle" setting asks the phone to grant.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>
