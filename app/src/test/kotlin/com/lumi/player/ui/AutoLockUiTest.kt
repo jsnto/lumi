@@ -440,6 +440,68 @@ class AutoLockUiTest {
     }
 
     @Test
+    fun aColdLaunchWhileMusicIsPlayingSurvivesAndTheStretchArmsFromThePause() {
+        // The crash-class input: the shared player state is ALREADY PLAYING
+        // when the app is constructed. The engine's player-state collector
+        // then delivers its first emission INLINE during construction on
+        // the main thread (the scope is Main.immediate), so every flow the
+        // first emission can write must be initialised by the time the
+        // engine's init block runs - a wrong declaration order throws an
+        // uninitialised-property error and kills the cold launch.
+        PlayerStateHolder.update {
+            it.copy(status = PlaybackStatus.PLAYING, currentLabel = "Lumi test tone")
+        }
+
+        // The cold launch survives the inline first emission: the app
+        // composes and the settings menu is on screen.
+        val activity = openSettings()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        val vm = viewModelOf(activity)
+        var lockCalls = 0
+        vm.isDeviceAdminActive = { true }
+        vm.lockDevice = { lockCalls++ }
+        var fakeNow = 1_000_000L
+        vm.clock = { fakeNow }
+
+        // The engine is alive and consistent: while the song plays, the
+        // lock has not claimed the screen, so keep screen on applies as
+        // configured.
+        vm.setKeepScreenOn(true)
+        await(
+            { vm.keepScreenOnEffective.value },
+            { "keep-screen-on must take effect while the song plays" },
+        )
+        assertTrue(
+            "the flag must be set while the song plays",
+            keepScreenOnFlag(activity),
+        )
+
+        // The auto-lock is armed at 5 minutes and the song's PAUSE starts
+        // the idle stretch at the fake clock - the very transition the
+        // cold-launched engine saw (no re-anchoring cycle is needed).
+        vm.setAutoLockDelay(AutoLockDelay.FIVE_MINUTES)
+        await(
+            { vm.autoLockDelay.value == AutoLockDelay.FIVE_MINUTES },
+            { "the auto-lock choice must become 5 minutes" },
+        )
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
+        ShadowLooper.idleMainLooper()
+
+        // The stretch fired at the configured idle time, exactly once.
+        fakeNow += 5 * 60_000L
+        assertTrue(
+            "the cold-launched engine must arm the stretch from the pause and fire it",
+            vm.runAutoLockTick(),
+        )
+        assertEquals("the lock must have been applied", 1, lockCalls)
+        // Leave the composition idle (see the note in the keep-screen-on
+        // test above): the player-state writes left a recomposition
+        // unprocessed, and tearing the activity down with pending
+        // recomposer work poisons the next test's Compose idling.
+        compose.waitForIdle()
+    }
+
+    @Test
     fun aBackgroundedAppDoesNotLockAndTheHeldStretchFiresOnReturn() {
         val activity = openSettings()
         val vm = viewModelOf(activity)
