@@ -142,23 +142,28 @@ the video/URL actions later does not require reworking storage.
 
 ## Building
 
+The Android project lives under `android/`; run the Gradle wrapper from inside
+that directory (the Gradle client resolves the project from the current working
+directory, not the wrapper's location):
+
 ```sh
+cd android
 ./gradlew assembleDebug     # build the app
 ./gradlew testDebugUnitTest # unit tests
 ./gradlew lintDebug         # lint
 ```
 
-The first build needs the Android SDK; set `sdk.dir` in `local.properties`
+The first build needs the Android SDK; set `sdk.dir` in `android/local.properties`
 or `ANDROID_HOME`.
 
 ### Building the APK with Docker (no Android SDK on the host)
 
-The repo ships a `Dockerfile` with a pinned toolchain (JDK 17, Android
+The repo ships an `android/Dockerfile` with a pinned toolchain (JDK 17, Android
 platform 35, build-tools 35.0.0; Gradle 8.13 via the wrapper) and a wrapper
 script. All it needs on the host is a Docker daemon:
 
 ```sh
-./scripts/build-apk-docker.sh   # -> dist/lumi-app-debug.apk
+./android/scripts/build-apk-docker.sh   # -> dist/lumi-app-debug.apk
 ```
 
 Overrides: `LUMI_DOCKER_IMAGE=<image>` (default `lumi-apk-builder:1`),

@@ -10,4 +10,4 @@ no_ci: true
 # the agent-driven test step re-derives the command each run and has timed
 # out authoring extra Robolectric coverage from scratch.
 commands:
-  test: 'sh -c "JAVA_HOME=/home/jasonto/.lumi-dev/jdk ANDROID_HOME=/home/jasonto/.lumi-dev/android-sdk ./gradlew testDebugUnitTest"'
+  test: 'sh -c "cd android && JAVA_HOME=/home/jasonto/.lumi-dev/jdk ANDROID_HOME=/home/jasonto/.lumi-dev/android-sdk ./gradlew testDebugUnitTest"'

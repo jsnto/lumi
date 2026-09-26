@@ -7,6 +7,6 @@ captures/
 .externalNativeBuild
 .cxx
 build/
-app/build/
+android/app/build/
 .kotlin/
 dist/

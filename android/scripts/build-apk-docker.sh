@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the lumi debug APK inside Docker - no Android SDK or JDK on the host.
 #
-#   Usage:     ./scripts/build-apk-docker.sh
+#   Usage:     ./android/scripts/build-apk-docker.sh   (from the repo root)
 #   Output:    dist/lumi-app-debug.apk
 #   Overrides: LUMI_DOCKER_IMAGE=<image>   (default lumi-apk-builder:1)
 #              OUT_DIR=<dir>               (default dist)
@@ -10,7 +10,9 @@
 # Gradle distribution via the wrapper; subsequent runs reuse the named
 # gradle-cache volume for a fast incremental build.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# The script lives in <repo root>/android/scripts/; build from the repo root
+# (the Docker context), with the Dockerfile referenced under android/.
+cd "$(dirname "$0")/../.."
 
 IMAGE="${LUMI_DOCKER_IMAGE:-lumi-apk-builder:1}"
 VOLUME="${LUMI_GRADLE_VOLUME:-lumi-gradle-cache}"
@@ -27,7 +29,7 @@ mkdir -p "$OUT_DIR"
 docker volume create "$VOLUME" >/dev/null
 
 echo ">> Building Docker image $IMAGE (toolchain: JDK 17, Android SDK 35, build-tools 35.0.0)..."
-docker build -t "$IMAGE" .
+docker build -t "$IMAGE" -f android/Dockerfile .
 
 cid="$(docker create -v "$VOLUME":/home/gradle/.gradle "$IMAGE")"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
@@ -40,5 +42,5 @@ if [ "$code" != "0" ]; then
   exit "$code"
 fi
 
-docker cp "$cid:/src/app/build/outputs/apk/debug/app-debug.apk" "$OUT_DIR/$APK_NAME"
+docker cp "$cid:/src/android/app/build/outputs/apk/debug/app-debug.apk" "$OUT_DIR/$APK_NAME"
 echo ">> Done. APK: $(pwd)/$OUT_DIR/$APK_NAME"

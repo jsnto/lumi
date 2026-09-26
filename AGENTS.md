@@ -6,8 +6,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Build / test
 
-- `./gradlew assembleDebug` (build), `./gradlew testDebugUnitTest` (unit tests), `./gradlew lintDebug` (lint). All three are green as of v1.
-- No system Java/Android SDK: the toolchain lives in `~/.lumi-dev` — export `JAVA_HOME=~/.lumi-dev/jdk` (JDK 17) and the SDK is at `~/.lumi-dev/android-sdk` (platform 35, build-tools 35.0.0); `local.properties` already points `sdk.dir` there.
+- Repo layout: the Android app and all its build tooling live under `android/` (the Gradle project root is `android/`; the source root is `android/app/src/main/kotlin`, so module-relative paths such as `ui/MainActivity.kt` used below are relative to that source root). The repo root holds the docs (README.md, AGENTS.md, CLAUDE.md) and the `dist/` APK output folder, so a sibling `ios/` folder can live alongside `android/`.
+- `./gradlew assembleDebug` (build), `./gradlew testDebugUnitTest` (unit tests), `./gradlew lintDebug` (lint) — run from inside `android/` (the Gradle client resolves the project from the current working directory, not the wrapper's location; `./android/gradlew` from the repo root finds no settings file). All three are green as of v1.
+- No system Java/Android SDK: the toolchain lives in `~/.lumi-dev` — export `JAVA_HOME=~/.lumi-dev/jdk` (JDK 17) and the SDK is at `~/.lumi-dev/android-sdk` (platform 35, build-tools 35.0.0); `android/local.properties` already points `sdk.dir` there.
+- Docker build (no Android SDK/JDK on the host): `./android/scripts/build-apk-docker.sh` builds the debug APK with the repo root as the Docker context (`android/Dockerfile`) and writes `dist/lumi-app-debug.apk`.
 
 ## Sharp edges
 

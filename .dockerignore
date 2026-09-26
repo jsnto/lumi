@@ -2,8 +2,8 @@
 local.properties
 .git
 dist
-app/build
-app/.cxx
+android/app/build
+android/app/.cxx
 .gradle
 build
 .kotlin
