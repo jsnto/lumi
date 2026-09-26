@@ -1,9 +1,12 @@
 # lumi
 
 lumi is a children's music player in the spirit of Toonies and Yoto: an
-Android app that reads NFC tags and plays the music linked to them. Music
-lives on the phone (picked with the standard file picker); there is no
-server or account — everything is stored locally on the device.
+app that reads NFC tags and plays the music linked to them. Music lives on
+the phone (picked with the standard file picker); there is no server or
+account — everything is stored locally on the device. The Android app
+(`android/`) is the original; the iOS/iPhone app (`ios/`) ports its core
+features to CoreNFC + AVFoundation + SwiftUI and builds its .ipa through
+Docker (see the Building section and the ios/ README).
 
 ## How it works
 
@@ -113,6 +116,16 @@ the video/URL actions later does not require reworking storage.
   with a connectable read session (Mifare Ultralight, NfcA, or IsoDep)
   additionally get a continuous-read fast path that confirms removal in
   ~0.4 s (see `MainActivity`, `MifarePresencePoller`, `GenericPresencePoller`)
+- iOS: Swift (SwiftPM) — a pure `LumiCore` layer (the ported logic: the NDEF
+  payload codec, the play-mode policy, the position memory, the content
+  sort, the folder walk, the JSON store) + a `LumiApp` target (SwiftUI +
+  AVFoundation + CoreNFC, iOS-only) + `LumiCoreTests` (the
+  observable-behavior pins). The NFC payload on the card is byte-compatible
+  with the Android app (an `application/x-lumi` MIME NDEF record), so tags
+  written by either app work in both; see the ios/ README for the
+  platform-forced differences (NFC is foreground-only on iOS, folder access
+  is security-scoped bookmarks, the persistence is a JSON file, and the
+  screen-lock/theme Android features have no iOS equivalent).
 
 ## Permissions
 
@@ -171,6 +184,38 @@ Overrides: `LUMI_DOCKER_IMAGE=<image>` (default `lumi-apk-builder:1`),
 (~500 MB) into the image and the Gradle distribution via the wrapper;
 subsequent builds reuse the named `lumi-gradle-cache` volume for a fast
 incremental build. The host needs no Android SDK or JDK at all.
+
+### Building the iOS app with Docker (no Xcode on the host)
+
+The iOS project lives under `ios/`; the IPA build needs **only a Docker
+daemon** on the build host plus one input Docker cannot provide: the
+**iOS Swift SDK** directory (a swift-sdk-generator output over the
+`iphoneos` platform files — the platform files are Apple's, so they must
+be produced on a Mac; see the ios/ README for the walkthrough). With the
+SDK in place (default `ios/sdk`):
+
+```sh
+./ios/scripts/build-ipa-docker.sh   # -> dist/lumi-ios.ipa
+```
+
+Overrides: `LUMI_IOS_SDK_DIR=<dir>` (default `ios/sdk`),
+`LUMI_DOCKER_IMAGE=<image>` (default `lumi-ipa-builder:1`), `OUT_DIR=<dir>`
+(default `dist`). The image (pinned `swift:6.4.0-jammy`) builds the
+arm64-apple-ios release executable and assembles the structurally valid
+`Payload/Lumi.app` .ipa, then the script verifies the structure (the
+arm64 Mach-O binary, the Info.plist with the background-audio mode and
+the NFC usage declared). The result is unsigned: a sideload tool
+(AltStore, Sideloadly, …) re-signs it with your own Apple ID at install
+time — the app's code and Info.plist are untouched by the re-signing.
+
+On a host with a Swift toolchain (macOS or Linux), the pure core layer
+builds and its tests run without any iOS SDK:
+
+```sh
+cd ios
+swift build   # builds LumiCore (the app target is excluded)
+swift test    # the observable-behavior pins
+```
 
 ## Testing NFC without a device
 
