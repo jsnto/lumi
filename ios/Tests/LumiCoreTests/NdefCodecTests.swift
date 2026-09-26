@@ -103,27 +103,42 @@ import Testing
 @Test func ndefMessageBytesRoundTrip() {
     let data = LumiTagData(name: "Round trip", songs: ["One", "Two"])
     let bytes = NdefCodec.toNdefMessageBytes(data)
-    // The header byte is the Android writer's shape for a record with a
-    // type: the short record (SNF set) - MB|ME|SNF|TNF-4 (TNF_MIME_MEDIA),
-    // 8-bit payload length, then the type field (the NDEF grammar: the
-    // type field exists only in the short form).
+    // The header byte is the Android writer's shape: the short record
+    // (SNF set) - MB|ME|SNF|TNF-4 (TNF_MIME_MEDIA) - the 1-byte type
+    // length first, then the 8-bit payload length (the AOSP writer's
+    // field order).
     #expect(bytes.first == 0xD4)
+    #expect(bytes[1] == Array(NdefCodec.mimeType.utf8).count)
+    #expect(bytes[2] == NdefCodec.toJson(data).utf8.count)
     let decoded = NdefCodec.fromNdefMessageBytes(bytes)
     #expect(decoded?.name == data.name)
     #expect(decoded?.songs == data.songs)
     #expect(NdefCodec.messageByteLength(data) == bytes.count)
 }
 
-@Test func fromNdefMessageBytesParsesTheShortRecordForm() {
-    // The SNF (short-record) form of the same message: an 8-bit payload
-    // length with the type field after the length byte (a tag written in
-    // that shape must decode identically).
+@Test func ndefMessageBytesMatchTheAOSPShortFormByteForByte() {
+    // The golden on-tag shape: a fixed input must encode to the exact
+    // byte sequence Android's NdefRecord writer emits - header, type
+    // length, payload length, the type field, the JSON payload.
+    let type = Array(NdefCodec.mimeType.utf8)
+    let json = "{\"name\":\"Beach\",\"songs\":[]}"
+    let payload = Array(json.utf8)
+    var expected: [UInt8] = [0xD4, UInt8(type.count), UInt8(payload.count)]
+    expected.append(contentsOf: type)
+    expected.append(contentsOf: payload)
+    #expect(NdefCodec.toNdefMessageBytes(LumiTagData(name: "Beach")) == expected)
+}
+
+@Test func fromNdefMessageBytesParsesTheAOSPShortRecordForm() {
+    // Bytes in the AOSP short-record order (type length before the
+    // 8-bit payload length) - the shape the Android app writes - must
+    // decode to the payload.
     let type = Array(NdefCodec.mimeType.utf8)
     let payload = Array(Data("{\"name\":\"Short\",\"songs\":[\"A\"]}".utf8))
     var bytes: [UInt8] = [
         0xD4, // MB | ME | SNF | TNF 4
-        UInt8(payload.count),
         UInt8(type.count),
+        UInt8(payload.count),
     ]
     bytes.append(contentsOf: type)
     bytes.append(contentsOf: payload)
@@ -132,23 +147,52 @@ import Testing
     #expect(decoded?.songs == ["A"])
 }
 
-@Test func ndefMessageBytesOverTheShortFormCapDegradesToTheTypelessLongForm() {
-    // A payload over the short form's 255-byte cap (only a large
-    // unknown-capacity card can take one) is written as the long form
-    // WITHOUT the type field - the grammar's constraint. A type-less
-    // record matches no reader's type check (parity with the Android
-    // reader), so the read degrades to "no record" - the same way the
-    // Android app's own such write would behave.
+@Test func ndefMessageBytesAtTheShortFormCapUseTheLongForm() {
+    // A payload of 256 bytes or more (only a large card can take one)
+    // is written as the long form: 32-bit payload length and the type
+    // field still present (the AOSP writer's long-form shape) - and it
+    // reads back through the same grammar. The name is clamped to 50
+    // chars, so the size comes from the song list (eight 30-char names
+    // put the JSON over the 256-byte short-form cap).
     let data = LumiTagData(
-        name: "T",
-        songs: (0..<60).map { String(repeating: "song-name-\($0) ", count: 5) },
+        name: "L",
+        songs: Array(repeating: String(repeating: "s", count: 30), count: 8),
     )
     let json = NdefCodec.toJson(data)
-    #expect(json.utf8.count > 255) // the scenario: over the short-form cap
-    let bytes = NdefCodec.toNdefMessageBytes(data)
-    // The long form: no SNF bit set, 24-bit payload length, no type.
-    #expect(bytes.first == 0xC4)
-    #expect(NdefCodec.fromNdefMessageBytes(bytes) == nil)
+    #expect(json.utf8.count >= 256) // the scenario: over the short-form cap
+    let type = Array(NdefCodec.mimeType.utf8)
+    let len = json.utf8.count
+    var expected: [UInt8] = [
+        0xC4, // MB | ME | TNF 4 (no SNF, no IL)
+        UInt8(type.count),
+        UInt8((len >> 24) & 0xFF),
+        UInt8((len >> 16) & 0xFF),
+        UInt8((len >> 8) & 0xFF),
+        UInt8(len & 0xFF),
+    ]
+    expected.append(contentsOf: type)
+    expected.append(contentsOf: Array(json.utf8))
+    #expect(NdefCodec.toNdefMessageBytes(data) == expected)
+    #expect(NdefCodec.fromNdefMessageBytes(expected)?.name == data.name)
+}
+
+@Test func fromNdefMessageBytesWalksToTheLumiRecordAmongOtherRecords() {
+    // A card carrying other NDEF records before the app's record (the
+    // AOSP multi-record shape: the first record's ME bit is clear, the
+    // second's MB bit is clear): the walk skips to the lumi record.
+    let type = Array(NdefCodec.mimeType.utf8)
+    let payload = Array(Data("{\"name\":\"Walk\",\"songs\":[\"A\", \"B\"]}".utf8))
+    var bytes: [UInt8] = []
+    // A foreign well-known text record: MB set, ME clear, SNF set,
+    // TNF 1, type "T", payload "x".
+    bytes.append(contentsOf: [0x80 | 0x10 | 0x01, 1, 1, 0x54, 0x78])
+    // The app's record: MB clear, ME set, SNF set, TNF 4.
+    bytes.append(contentsOf: [0x40 | 0x10 | 0x04, UInt8(type.count), UInt8(payload.count)])
+    bytes.append(contentsOf: type)
+    bytes.append(contentsOf: payload)
+    let decoded = NdefCodec.fromNdefMessageBytes(bytes)
+    #expect(decoded?.name == "Walk")
+    #expect(decoded?.songs == ["A", "B"])
 }
 
 @Test func fromNdefMessageBytesRejectsGarbage() {

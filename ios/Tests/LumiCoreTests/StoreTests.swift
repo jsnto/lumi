@@ -173,6 +173,29 @@ private func makeStore() -> Store {
     #expect(store.individualEntries.map { $0.label } == [])
 }
 
+@Test func removeFolderUnmarksStampedRowsThatSurviveTheWalk() {
+    // A row stamped with the folder's marker whose file left the tree
+    // (surviving the payload match) must be UNMARKED by the removal - it
+    // degrades into the individual content list (visible, not lost) -
+    // and a stamped row of ANOTHER folder's payload match is untouched.
+    let store = makeStore()
+    let folder = store.rememberFolder(uri: "/Music/Album", bookmark: Data([1]), label: "Album")
+    let other = store.rememberFolder(uri: "/Music/Other", bookmark: Data([2]), label: "Other")
+    let gone = store.addEntry(label: "Left the tree", payload: "/Music/Album/gone.mp3", folderId: folder.id)
+    let walked = store.addEntry(label: "Walked", payload: "/Music/Album/walked.mp3", folderId: folder.id)
+    let otherWalked = store.addEntry(label: "Other walked", payload: "/Music/Other/w.mp3", folderId: other.id)
+
+    store.removeFolder(folder: folder, importedPayloads: ["/Music/Album/walked.mp3"])
+
+    // The walked row is deleted; the stamped survivor is unmarked...
+    #expect(store.entryByPayload("/Music/Album/walked.mp3") == nil)
+    #expect(store.entryById(gone.id)?.folderId == nil)
+    // ...and into the individual list it is.
+    #expect(store.individualEntries.map { $0.label } == ["Left the tree"])
+    // The other folder's stamped row is untouched.
+    #expect(store.entryById(otherWalked.id)?.folderId == other.id)
+}
+
 @Test func markEntriesFromFolderIsForwardOnly() {
     let store = makeStore()
     let folder = store.rememberFolder(uri: "/Music/Album", bookmark: Data([1]), label: "Album")

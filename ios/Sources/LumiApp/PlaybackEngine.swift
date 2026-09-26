@@ -81,6 +81,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private var readyPollTimer: Timer?
     private var positionSaveTimer: Timer?
     private var periodicObserver: Any?
+    /// The current item's end-of-track observer (a natural end of a song
+    /// advances to the next one - the list LOOPS, the Android app's
+    /// queue-advance on a completed track).
+    private var trackEndObserver: Any?
     private var lastPositionSaveMs: TimeInterval = 0
     private var audioConfigured = false
 
@@ -205,6 +209,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         positionSaveTimer = nil
         readyPollTimer?.invalidate()
         readyPollTimer = nil
+        if let trackEndObserver { NotificationCenter.default.removeObserver(trackEndObserver) }
+        trackEndObserver = nil
         player.removeAllItems()
         currentItem = nil
         queue = []
@@ -215,6 +221,17 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             s.activeTagUid = nil
         }
         delegate?.playbackEngineDidStop()
+    }
+
+    /// The current item's natural end: the song finished, so the list
+    /// advances to the next entry (looping) - without this, a finished
+    /// track sits at its end with the state still "playing" and the
+    /// per-tag position memory never finalizes (the Android app's queue
+    /// walks forward on a completed track).
+    @objc private func trackDidPlayToEndTime() {
+        guard wantsPlay else { return } // a late notice after a stop: ignore
+        consecutiveErrors = 0
+        advance()
     }
 
     /// ACTION_NEXT: move to the next entry, looping the list.
@@ -249,6 +266,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         let item = AVPlayerItem(url: url)
         currentItem = item
         player.replaceCurrentItem(with: item)
+        if let trackEndObserver { NotificationCenter.default.removeObserver(trackEndObserver) }
+        trackEndObserver = NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(trackDidPlayToEndTime),
+            name: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+        )
         // The playback intent decides the first play: a start or resume
         // plays, a paused session loading (an error-driven advance) does
         // NOT - the bad-file loop fix, ported (the Android service's
@@ -370,6 +394,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     deinit {
         if let periodicObserver { player.removeTimeObserver(periodicObserver) }
+        if let trackEndObserver { NotificationCenter.default.removeObserver(trackEndObserver) }
         readyPollTimer?.invalidate()
         positionSaveTimer?.invalidate()
         player.removeAllItems()

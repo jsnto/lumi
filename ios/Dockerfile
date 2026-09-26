@@ -25,26 +25,27 @@
 ARG SWIFT_VERSION=6.4.0
 FROM swift:${SWIFT_VERSION}-jammy
 
-# The app target is included only for the iOS build (the package manifest
-# gates it on this env var; plain host builds test the core layer).
-ENV LUMI_BUILD_APP=1
-
 WORKDIR /src
 COPY ios/ ./ios/
 
 # Build-time sanity check: the manifest compiles and the pure core layer
 # builds on the Linux base (a broken package fails here, before the SDK
-# build). The iOS-only app target is the entrypoint's job.
+# build). The iOS-only app target is the entrypoint's job: the manifest
+# gates it on LUMI_BUILD_APP, so the sanity build runs WITHOUT the var
+# (the app target is excluded) and the entrypoint's own build sets it.
 RUN swift build --package-path ios -c release
 
 # The entrypoint (ios/scripts/build-ipa-docker.sh runs the container and
 # copies /out/lumi-ios.ipa out): verify the mounted SDK, build the arm64
-# release for the iOS platform, and assemble the .app + the .ipa
+# release for the iOS platform WITH the app target (LUMI_BUILD_APP=1 -
+# exported here, in the entrypoint's shell, so the build-time sanity step
+# above never sees it), and assemble the .app + the .ipa
 # (Payload/Lumi.app with the binary + Info.plist - the structurally
 # valid shape the App Store / sideload tools expect).
 CMD ["bash", "-c", "set -eux; \
     test -d /ios-sdk; \
     test -f /ios-sdk/swiftSDK.json; \
+    export LUMI_BUILD_APP=1; \
     swift build --package-path ios -c release --arch arm64 --swift-sdk /ios-sdk; \
     mkdir -p /out/Payload/Lumi.app; \
     install -m 0755 .build/release/LumiApp /out/Payload/Lumi.app/Lumi; \

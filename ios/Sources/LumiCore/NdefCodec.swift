@@ -159,55 +159,47 @@ public enum NdefCodec {
         return nil
     }
 
-    // MARK: - NDEF message bytes
+    // MARK: - NDEF message bytes (the AOSP on-tag grammar)
 
     /// Builds the full NDEF message for [data] as raw bytes: a single
-    /// record (TNF byte 4 - Android's Ndef.TNF_MIME_MEDIA, which
-    /// NdefRecord.createMime writes for a MIME media type) carrying the
-    /// JSON payload. The app layer rebuilds CoreNFC's NDEFMessage from
-    /// the record's type + payload before writing (its TNF case may emit
-    /// a different byte; the readers - including the Android app - match
-    /// on the record's type field, `application/x-lumi`, not the TNF,
-    /// so the payloads interoperate).
-    ///
-    /// The on-tag shape follows the NDEF grammar the Android writer
-    /// (NdefWriter + NdefRecord.createMime) emits: the type field is
-    /// present ONLY in the short-record form (SNF set, 8-bit payload
-    /// length, the 1-byte type length + the type after the length
-    /// bytes). The app's payloads fit the short form on every real card
-    /// (a NTAG215's user area is 145 bytes, far below 255). For the
-    /// 256-512-byte payloads that only a large unknown-capacity card can
-    /// take, the record degrades to the long form (24-bit payload length)
-    /// WITHOUT the type field - the spec-forbidden alternative (a type in
-    /// the long form) would be misparsed by the spec-conformant readers -
-    /// and a type-less record matches no reader's type check, exactly the
-    /// way the Android app's own such write would behave.
-    /// The empty identifier omits the IL bit + its length byte, as
-    /// Android's NdefMessageWriter does.
+    /// record (TNF byte 4 - Android's Ndef.TNF_MIME_MEDIA) carrying the
+    /// JSON payload, in the exact byte shape Android's NdefRecord
+    /// writer emits (verified against the AOSP bytecode): the 1-byte
+    /// type length comes FIRST, then the payload length - 8-bit when the
+    /// payload is under 256 bytes (the short form, SNF set) and 32-bit
+    /// otherwise - then the type and the payload. The type field is
+    /// present in BOTH forms; the empty identifier omits the IL bit +
+    /// its length byte (Android sets IL only for TNF 0 or a non-empty
+    /// id), so the app's on-tag record is
+    /// `D4 12 <len8> "application/x-lumi" <json>` (short) or
+    /// `C4 12 <len32> "application/x-lumi" <json>` (long). These bytes
+    /// are what the app layer writes to the card (a low-level raw write)
+    /// and parses back (a low-level raw read), so a card written here
+    /// reads on the Android app and vice versa, byte for byte.
     public static func toNdefMessageBytes(_ data: LumiTagData) -> [UInt8] {
         let type = Array(mimeType.utf8)
         let payload = Array(toJson(data).utf8)
         var record: [UInt8]
-        if payload.count <= 255 {
-            // The short record (SNF set): the type field is present - the
-            // shape the Android writer emits for a record with a type.
+        if payload.count < 256 {
+            // The short record (SNF set): 8-bit payload length.
             record = [
                 0xD4, // MB | ME | SNF | TNF 4 (MIME media type)
-                UInt8(payload.count),
                 UInt8(type.count),
+                UInt8(payload.count),
             ]
-            record.append(contentsOf: type)
         } else {
-            // The long record: no type field (the grammar's constraint);
-            // readers match on the type, so this degrades like the
-            // Android app's own such write.
+            // The long record: 32-bit payload length, the type field
+            // still present (the AOSP writer's long-form shape).
             record = [
                 0xC4, // MB | ME | TNF 4 (MIME media type); no SNF, no IL
+                UInt8(type.count),
+                UInt8((payload.count >> 24) & 0xFF),
                 UInt8((payload.count >> 16) & 0xFF),
                 UInt8((payload.count >> 8) & 0xFF),
                 UInt8(payload.count & 0xFF),
             ]
         }
+        record.append(contentsOf: type)
         record.append(contentsOf: payload)
         return record
     }
@@ -215,37 +207,36 @@ public enum NdefCodec {
     /// Parses raw NDEF message bytes (the shape a tag read delivers) and
     /// returns the app's payload when any record carries it; nil otherwise
     /// (a tag with no lumi record or a malformed payload degrades to "no
-    /// record" - the lenient read). Handles both the long form (24-bit
-    /// payload length) and the short form (SNF set: 8-bit payload length,
-    /// the type field follows the length byte), and the optional id-length
-    /// byte (IL bit) - the NDEF header grammar, the shape Android's Ndef
-    /// parser applies.
+    /// record" - the lenient read). Walks records in the AOSP grammar -
+    /// the 1-byte type length first, the payload length 8-bit (SNF set)
+    /// or 32-bit, the id length when IL is set, then the type, the id and
+    /// the payload - so bytes the Android app writes on a card decode
+    /// here unchanged, and a truncated record ends the walk.
     public static func fromNdefMessageBytes(_ bytes: [UInt8]) -> LumiTagData? {
         var offset = 0
         while offset < bytes.count {
             let headerByte = bytes[offset]
             offset += 1
-            let snf = headerByte & 0x10 != 0 // short record: 8-bit length, type field present
+            let snf = headerByte & 0x10 != 0 // short record: 8-bit payload length
             let il = headerByte & 0x08 != 0  // id length byte present
+            // The type length comes first, in both forms (the AOSP
+            // writer/reader order).
+            guard offset < bytes.count else { break } // malformed: truncated type-length
+            let typeLength = Int(bytes[offset])
+            offset += 1
             let payloadLength: Int
             if snf {
                 guard offset < bytes.count else { break } // malformed: truncated length
                 payloadLength = Int(bytes[offset])
                 offset += 1
             } else {
-                guard offset + 2 < bytes.count else { break } // malformed: truncated length
-                payloadLength = Int(bytes[offset]) << 16 | Int(bytes[offset + 1]) << 8 | Int(bytes[offset + 2])
-                offset += 3
-            }
-            // The type field exists only in the short form: its 1-byte
-            // length follows the payload-length bytes.
-            let typeLength: Int
-            if snf {
-                guard offset < bytes.count else { break } // malformed: truncated type-length
-                typeLength = Int(bytes[offset])
-                offset += 1
-            } else {
-                typeLength = 0
+                guard offset + 3 < bytes.count else { break } // malformed: truncated length
+                payloadLength =
+                    Int(bytes[offset]) << 24
+                    | Int(bytes[offset + 1]) << 16
+                    | Int(bytes[offset + 2]) << 8
+                    | Int(bytes[offset + 3])
+                offset += 4
             }
             let idLength: Int
             if il {
@@ -255,13 +246,10 @@ public enum NdefCodec {
             } else {
                 idLength = 0
             }
-            guard offset + typeLength + idLength <= bytes.count else { break } // truncated fields
+            guard offset + typeLength + idLength + payloadLength <= bytes.count else { break } // truncated record
             let typeStart = offset
             let payloadStart = typeStart + typeLength + idLength
             let payloadEnd = payloadStart + payloadLength
-            // The whole record must fit in the buffer; a truncated record is
-            // malformed and ends the walk.
-            guard payloadEnd <= bytes.count else { break }
             offset = payloadEnd
             let type = Array(bytes[typeStart..<(typeStart + typeLength)])
             let payload = Array(bytes[payloadStart..<payloadEnd])

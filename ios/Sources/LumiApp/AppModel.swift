@@ -19,6 +19,10 @@
 
 import Combine
 import Foundation
+import os
+
+/// The app's own log (store load/save failures must not fail silently).
+private let storeLog = Logger(subsystem: "com.lumi.player", category: "store")
 
 @MainActor
 public final class AppModel: ObservableObject {
@@ -56,10 +60,16 @@ public final class AppModel: ObservableObject {
     }
 
     @Published public var capture: CaptureState? = nil
-    /// The unified scan's armed state (the scan-in-progress dialog).
+    /// The unified scan's armed state (the scan-in-progress dialog) - set
+    /// for EVERY armed scan, the card-write scan among them (the Android
+    /// startCardWrite arms the same scan flag the dialog is driven by).
     @Published public private(set) var scanActive: Bool = false
     /// The tag whose card the armed card-write scan writes (nil = none).
     @Published public private(set) var cardWriteTargetId: Int? = nil
+    /// A registered tag an armed scan just resolved (the Android
+    /// pendingTagProfile route): the tags pane opens its detail page and
+    /// consumes this.
+    @Published public var scannedTagId: Int? = nil
     /// The entry a pending scan-to-assign will link (the profile's
     /// "Scan a tag to assign": a registered read links it and stays on
     /// the profile; an unknown read registers first, then links on save).
@@ -109,7 +119,11 @@ public final class AppModel: ObservableObject {
     }
 
     /// The default store: the JSON document persisted in Application
-    /// Support (the iOS counterpart of the Room database file).
+    /// Support (the iOS counterpart of the Room database file). A corrupt
+    /// document is logged, KEPT (moved aside under a timestamped name -
+    /// starting empty and overwriting it would lose the whole library),
+    /// and the app starts fresh; a write that fails keeps the old file
+    /// (the atomic write) and logs.
     public static func makeFileStore() -> Store {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -118,13 +132,31 @@ public final class AppModel: ObservableObject {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("store.json")
         var doc = StoreDoc()
-        if let data = try? Data(contentsOf: file),
-           let loaded = try? JSONDecoder().decode(StoreDoc.self, from: data) {
-            doc = loaded
+        if let data = try? Data(contentsOf: file) {
+            do {
+                doc = try JSONDecoder().decode(StoreDoc.self, from: data)
+            } catch {
+                storeLog.error("store file is corrupt - starting empty and keeping it: \(error)")
+                let stamp = Int(Date().timeIntervalSince1970)
+                let corrupt = dir.appendingPathComponent("store.json.corrupt-\(stamp)")
+                do {
+                    try fm.moveItem(at: file, to: corrupt)
+                } catch {
+                    storeLog.error("could not keep the corrupt store file aside: \(error)")
+                }
+            }
         }
         return Store(doc: doc) { document in
-            guard let data = try? JSONEncoder().encode(document) else { return }
-            try? data.write(to: file, options: .atomic)
+            do {
+                let data = try JSONEncoder().encode(document)
+                try data.write(to: file, options: .atomic)
+            } catch {
+                // The atomic write keeps the old file on failure: the
+                // change is lost from disk (the in-memory store keeps
+                // working and a later mutation retries), never the
+                // earlier document.
+                storeLog.error("failed to save the store file - the change is not persisted: \(error)")
+            }
         }
     }
 
@@ -208,7 +240,7 @@ public final class AppModel: ObservableObject {
             policy.onPlaybackStopped()
             nfc.seedWatchedTag(uid: nil)
         }
-        let specs = audio.map { EntrySpec(type: "audio", label: $0.label, payload: $0.playUrl()) }
+        let specs = audio.map { EntrySpec(type: "audio", label: $0.label, payload: self.playUrl(for: $0)) }
         var startIndex = 0
         var startSeekMs: Int64 = 0
         if let uid {
@@ -276,6 +308,7 @@ public final class AppModel: ObservableObject {
     public func startTagScan() {
         capture = nil
         scanAssignEntryId = nil
+        scannedTagId = nil
         scanActive = true
         nfc.armTagScan()
     }
@@ -283,6 +316,7 @@ public final class AppModel: ObservableObject {
     public func stopTagScan() {
         scanActive = false
         scanAssignEntryId = nil
+        cardWriteTargetId = nil // the single cancel disarms every armed scan (the Android cancelTagScan)
         nfc.disarmScan()
     }
 
@@ -296,15 +330,21 @@ public final class AppModel: ObservableObject {
         nfc.armTagScan()
     }
 
-    /// The tag page's "Save to NFC card" (the Android startCardWrite).
-    /// The payload is refused up front when it is over the app's write
-    /// cap - a permanent size fact, never a retry-able write failure.
+    /// The tag page's "Save to NFC card" (the Android startCardWrite):
+    /// the armed state rides the SAME unified-scan flag the dialog is
+    /// driven by, so the scan-in-progress dialog (with the card-write's
+    /// own copy) appears for the card write too. The payload is refused
+    /// up front when it is over the app's write cap - a permanent size
+    /// fact, never a retry-able write failure.
     public func startCardWrite(_ tag: Tag) -> Bool {
         let data = LumiTagData(name: tag.name, songs: store.songNamesForTag(tag.id))
         guard NdefCodec.messageByteLength(data) <= NdefCodec.maxPayloadBytes, isNfcSupported else {
             return false
         }
+        capture = nil
+        scanAssignEntryId = nil
         cardWriteTargetId = tag.id
+        scanActive = true
         nfc.armCardWrite(target: tag)
         return true
     }
@@ -331,13 +371,17 @@ public final class AppModel: ObservableObject {
         }
         // The empty-tag restore (the Android confirmTagName's restore
         // step): distinct names, by name, with the live-entry provenance.
+        // The link stores the entry's FULL label - a clamped card name
+        // that resolves to a longer stored label links it in full (the
+        // Android insertLinkByName's entry?.label ?: songName), never the
+        // clamped form (which would never match its entry by name).
         if store.entriesForTag(tag.id).isEmpty && !capture.restoreSongs.isEmpty {
             var seen = Set<String>()
             for songName in capture.restoreSongs {
                 let trimmed = songName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
                 let entry = store.entryByLabel(trimmed)
-                store.insertLinkByName(tagId: tag.id, songName: trimmed, entryId: entry?.id)
+                store.insertLinkByName(tagId: tag.id, songName: entry?.label ?? trimmed, entryId: entry?.id)
             }
         }
         // The per-card memory: the last saved name + song list for this
@@ -580,7 +624,7 @@ public final class AppModel: ObservableObject {
     public func selectEntry(_ entry: Entry) {
         selectedEntryId = entry.id
         entryMetadata = nil
-        let url = URL(fileURLWithPath: entry.playUrl())
+        let url = URL(fileURLWithPath: playUrl(for: entry))
         Task {
             let metadata = await MetadataReader.read(url: url)
             // A stale read (a newer entry selected meanwhile) is dropped.
@@ -614,6 +658,40 @@ public final class AppModel: ObservableObject {
     /// and the lock guarding that set.
     nonisolated(unsafe) fileprivate static let accessPathLock = NSLock()
     nonisolated(unsafe) fileprivate static var accessedPaths: Set<String> = []
+
+    /// The url to PLAY for [entry], with the security scope asserted for
+    /// the session: a row's OWN bookmark (individually added files) or,
+    /// for a folder-imported row (no row bookmark), the OWNING FOLDER's
+    /// bookmark - the folder's grant covers its whole tree, and
+    /// asserting it is what makes the row's file path readable at all
+    /// (the picker's own grant is released long after the pick; without
+    /// the assertion every play of a folder song fails and the bad-file
+    /// walk burns the whole list). The scope is asserted at most once per
+    /// path per process and held for the session, like the Android app's
+    /// held read grant.
+    public func playUrl(for entry: Entry) -> String {
+        if let bookmark = entry.bookmark, !bookmark.isEmpty {
+            AppModel.assertAccess(path: entry.payload, bookmark: bookmark)
+        } else if let folderId = entry.folderId,
+                  let folder = store.folderById(folderId),
+                  !folder.bookmark.isEmpty
+        {
+            AppModel.assertAccess(path: folder.uri, bookmark: folder.bookmark)
+        }
+        return entry.payload
+    }
+
+    /// Asserts the security scope for [path] via [bookmark] at most once
+    /// per path per process (the scope is then held for the session).
+    nonisolated private static func assertAccess(path: String, bookmark: Data) {
+        accessPathLock.lock()
+        let first = !accessedPaths.contains(path)
+        if first { accessedPaths.insert(path) }
+        accessPathLock.unlock()
+        if first {
+            _ = FolderAccess.resolve(bookmark)
+        }
+    }
 
     /// The content pane's Folders section (sorted by label through the
     /// shared content sort).
@@ -649,26 +727,6 @@ extension Entry {
         guard let dot = last.lastIndex(of: ".") else { return false }
         let ext = last[last.index(after: dot)...]
         return supportedAudioExtensions.contains(ext.lowercased())
-    }
-
-    /// The url to PLAY: the stored payload (a file path), with the
-    /// security-scoped access asserted when the row carries its own
-    /// bookmark (individually added files). The scope is asserted at most
-    /// once per path per process (the scope is held for the session, like
-    /// the Android app's held read grant). Folder-imported rows carry no
-    /// row bookmark: the folder's bookmark governs.
-    public func playUrl() -> String {
-        if let bookmark, !bookmark.isEmpty {
-            let path = payload
-            AppModel.accessPathLock.lock()
-            let first = !AppModel.accessedPaths.contains(path)
-            if first { AppModel.accessedPaths.insert(path) }
-            AppModel.accessPathLock.unlock()
-            if first {
-                _ = FolderAccess.resolve(bookmark)
-            }
-        }
-        return payload
     }
 }
 
@@ -716,7 +774,10 @@ private extension AppModel {
                 scanAssignEntryId = nil
                 selectedEntryId = entry.id
             } else {
-                selectedTagId = tag.id
+                // The scan resolved a registered tag: open its detail
+                // page (the Android pendingTagProfile -> tag detail page
+                // route, consumed in the tags pane).
+                scannedTagId = tag.id
                 uiEvent("Found \(tag.name).")
             }
         case let .unknownTag(uid, payload, memory):
@@ -724,9 +785,9 @@ private extension AppModel {
             // per-card memory's name (the Android capture prefill).
             var prefill = ""
             var songs: [String] = []
-            if case let .answered(data) = payload, let data {
-                prefill = data.name
-                songs = data.songs
+            if let payload {
+                prefill = payload.name
+                songs = payload.songs
             }
             if prefill.isEmpty { prefill = memory?.name ?? "" }
             if songs.isEmpty { songs = memory?.songs ?? [] }

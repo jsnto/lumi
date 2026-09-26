@@ -20,6 +20,7 @@ import UniformTypeIdentifiers
 
 struct ContentPane: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var nav: NavState
     @State private var addingFiles = false
     @State private var addingFolders = false
     @State private var deletingEntry: Entry? = nil
@@ -27,15 +28,9 @@ struct ContentPane: View {
     var body: some View {
         ScrollView {
             // The sort control (the Android content pane's ContentSortRow).
-            HStack(spacing: 8) {
-                Text("Sort by title")
-                    .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
-                Spacer()
-                sortChip("A-Z", ascending: true)
-                sortChip("Z-A", ascending: false)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+            ContentSortRow()
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
 
             // Folders first.
             SectionCard(title: "Folders", addLabel: "Add folder", onAdd: { addingFolders = true }) {
@@ -47,14 +42,15 @@ struct ContentPane: View {
                 } else {
                     LumiCard {
                         ForEach(model.sortedFolders) { folder in
-                            NavigationLink(value: Route.folderDetail(folder.id)) {
-                                MenuRowView(
-                                    title: folder.label,
-                                    subtitle: "\(model.store.entriesForFolder(folder.id).count) song(s)",
-                                    systemImage: "folder",
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            // The row's OWN tap pushes the folder's page
+                            // (a NavigationLink wrapper would swallow it -
+                            // the menu rows' observed bug).
+                            MenuRowView(
+                                title: folder.label,
+                                subtitle: "\(model.store.entriesForFolder(folder.id).count) song(s)",
+                                systemImage: "folder",
+                                onTap: { nav.path.append(Route.folderDetail(folder.id)) },
+                            )
                             if folder.id != model.sortedFolders.last?.id { Divider() }
                         }
                     }
@@ -139,86 +135,118 @@ struct ContentPane: View {
             if let event = model.uiEvent { EventBanner(message: event) }
         }
     }
-
-    private func sortChip(_ label: String, ascending: Bool) -> some View {
-        let direction: ContentSortDirection = ascending ? .ascending : .descending
-        let selected = model.contentSort == direction
-        return Button {
-            model.setContentSort(direction)
-        } label: {
-            Text(label)
-                .font(.footnote).fontWeight(.semibold)
-                .foregroundStyle(selected ? LumiPalette.onPrimaryContainer : LumiPalette.onSurfaceVariant)
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Capsule().fill(selected ? LumiPalette.primaryContainer : LumiPalette.surfaceContainerHigh))
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 // MARK: - the folder detail page
 
-/// A folder page row: either a subfolder (the show/hide toggle - the
-/// Android page's tree subfolder row) or a song (body opens the profile,
-/// trailing play/pause). The rows carry the tree's indent; the v1 iOS
-/// page keeps the show/hide state pane-local (the Android page holds it
-// at the screen's top level so it survives navigation - a documented
-/// v1 simplification).
+/// One added folder, opened by tapping its row in the content pane. The
+/// page shows the folder's details (label + the picked uri), its
+/// imported songs as the picked folder's OWN TREE - the subfolders lead
+/// at every level (each carrying its own nested levels), the songs
+/// follow, each row carries the tree's left connector lines, each
+/// subfolder row toggles the rows nested under it (show/hide), every
+/// song row opens the song's profile with its own play/pause button -
+/// a rescan on the Songs section's title row, and the danger zone.
+///
+/// The tree's per-level order is the shared content sort (the content
+/// pane's own control, applied at each depth). The show/hide state is
+/// held at the SCREEN level (NavState.collapsedFolders - the Android
+/// page's top-level collapse state) so it survives navigation: a per-
+/// pane @State would reset on every round trip.
 struct FolderDetailPane: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var nav: NavState
     let folderId: Int
-    @State private var hidden: Set<String> = [] // subfolder paths (collapsed)
     @State private var confirmingRemoval = false
 
     private var folder: Folder? { model.store.folderById(folderId) }
 
-    /// The page's tree: the folder's imported songs grouped by their
-    /// subfolder path (the payload's components under the folder's path),
-    /// with the root's own songs at the top (the Android folder page's
-    /// tree, reduced to one level of grouping - the v1 shape).
-    private struct TreeLine: Identifiable {
-        let id: String
-        let isFolder: Bool
-        let label: String
-        var entry: Entry? = nil
+    /// The page's tree: the folder's imported songs arranged as the
+    /// picked folder's own structure (a song's payload is the file's
+    /// full path; the segments below the folder's path are the song's
+    /// subfolder path), every level in the shared sort's order.
+    private var level: FolderTreeLevel? {
+        guard let folder else { return nil }
+        return folderTreeStructure(rootPath: folder.uri, entries: model.folderSongs(folder))
+            .sortedTree(direction: model.contentSort)
     }
 
-    private var lines: [TreeLine] {
-        guard let folder else { return [] }
-        let root = folder.uri.hasSuffix("/") ? String(folder.uri.dropLast()) : folder.uri
-        func rel(_ payload: String) -> String? {
-            guard payload.hasPrefix(root + "/") else { return nil }
-            return String(payload.dropFirst(root.count + 1))
+    /// The screen-level collapse keys for this folder (the subfolder
+    /// paths from the picked root that are currently hidden).
+    private var collapsed: Set<String> { nav.collapsedFolders[folderId] ?? [] }
+
+    private func toggleCollapsed(_ key: String) {
+        var keys = nav.collapsedFolders[folderId] ?? []
+        if keys.contains(key) {
+            keys.remove(key)
+        } else {
+            keys.insert(key)
         }
-        var lines: [TreeLine] = []
-        var subfolders: [String: [Entry]] = [:]
-        for entry in model.folderSongs(folder) {
-            guard let relPath = rel(entry.payload) else {
-                lines.append(TreeLine(id: "e:\(entry.id)", isFolder: false, label: entry.label, entry: entry))
-                continue
-            }
-            let parts = relPath.split(separator: "/")
-            if parts.count > 1 {
-                let dir = parts.dropLast().joined(separator: "/")
-                subfolders[dir, default: []].append(entry)
-            } else {
-                lines.append(TreeLine(id: "e:\(entry.id)", isFolder: false, label: entry.label, entry: entry))
-            }
-        }
-        for dir in subfolders.keys.sorted() {
-            let key = dir
-            lines.append(TreeLine(id: "d:\(key)", isFolder: true, label: (dir as NSString).lastPathComponent))
-            if !hidden.contains(key) {
-                for entry in subfolders[dir]! {
-                    lines.append(TreeLine(id: "e:\(entry.id)", isFolder: false, label: entry.label, entry: entry))
+        nav.collapsedFolders[folderId] = keys
+    }
+
+    /// One rendered tree row: a subfolder (the show/hide toggle, its
+    /// collapse key the path from the picked root) or a song (the body
+    /// opens the profile, the play/pause button the separate region).
+    private struct TreeRenderRow: Identifiable {
+        let id: String
+        let depth: Int
+        let hasVisibleBranch: Bool
+        let isLast: Bool
+        let isFolder: Bool
+        let label: String
+        let key: String?
+        let isCollapsed: Bool
+        let entry: Entry?
+    }
+
+    /// The rows the tree renders, in render order (subfolders first,
+    /// then the songs, at every depth - the sorted level's order):
+    /// the count-driven last row carries no bottom spacing, so no
+    /// connector line dangles past the tree.
+    private var renderRows: [TreeRenderRow] {
+        guard let level else { return [] }
+        var rows: [TreeRenderRow] = []
+        var remaining = level.visibleRowCount(collapsed: collapsed)
+        func walk(_ level: FolderTreeLevel, depth: Int, prefix: String) {
+            for node in level.folders {
+                let key = prefix.isEmpty ? node.displayName : prefix + "/" + node.displayName
+                let isCollapsed = collapsed.contains(key)
+                let hasVisibleBranch = !isCollapsed
+                    && (!node.children.folders.isEmpty || !node.children.songs.isEmpty)
+                rows.append(TreeRenderRow(
+                    id: "d:\(key)",
+                    depth: depth,
+                    hasVisibleBranch: hasVisibleBranch,
+                    isLast: remaining == 1,
+                    isFolder: true,
+                    label: node.displayName,
+                    key: key,
+                    isCollapsed: isCollapsed,
+                    entry: nil,
+                ))
+                remaining -= 1
+                if !isCollapsed {
+                    walk(node.children, depth: depth + 1, prefix: key)
                 }
             }
+            for entry in level.songs {
+                rows.append(TreeRenderRow(
+                    id: "e:\(entry.id)",
+                    depth: depth,
+                    hasVisibleBranch: false,
+                    isLast: remaining == 1,
+                    isFolder: false,
+                    label: entry.label,
+                    key: nil,
+                    isCollapsed: false,
+                    entry: entry,
+                ))
+                remaining -= 1
+            }
         }
-        // The root's own songs first, then the subfolders (the Android
-        // page's row order: subfolder rows first then the level's songs,
-        // reduced here to the single-level v1 shape).
-        return lines
+        walk(level, depth: 0, prefix: "")
+        return rows
     }
 
     var body: some View {
@@ -238,48 +266,72 @@ struct FolderDetailPane: View {
                 }
             }
 
-            // The imported songs (the tree rows).
+            // The sort control: the content pane's own title sort,
+            // applied per level of the tree (the Android page's own
+            // caption).
+            ContentSortRow(caption: "Applies to the folders and the songs at each level below.")
+                .padding(.horizontal, 12)
+
+            // The imported songs (the tree rows). The rescan action sits
+            // on the section's title row (re-walks the tree for new
+            // songs).
             SectionCard(
                 title: "Songs",
                 trailingLabel: "Rescan",
                 onTrailing: { if let folder { model.rescanFolder(folder) } },
             ) {
                 LumiCard {
-                    if let folder, lines.isEmpty {
+                    if let folder, renderRows.isEmpty {
                         Text("This folder has no songs.")
                             .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
                     } else {
-                        ForEach(lines) { line in
-                            if line.isFolder {
-                                Button {
-                                    toggle(line.id.dropFirst(2))
-                                } label: {
-                                    HStack {
-                                        Image(systemName: hidden.contains(line.id.dropFirst(2)) ? "chevron.right" : "chevron.down")
-                                            .font(.footnote).foregroundStyle(LumiPalette.primary)
-                                        Image(systemName: "folder")
-                                            .foregroundStyle(LumiPalette.primary)
-                                        Text(line.label).font(.subheadline).foregroundStyle(LumiPalette.onSurface)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.vertical, 6)
-                            } else if let entry = line.entry {
-                                HStack(spacing: 10) {
-                                    NavigationLink(value: Route.entryDetail(entry.id)) {
-                                        Text(entry.label)
-                                            .font(.subheadline).foregroundStyle(LumiPalette.onSurface)
-                                            .lineLimit(1)
+                        // The tree's rows under a SINGLE non-spaced stack:
+                        // the rows' own 12 pt bottom spacing is the only
+                        // inter-row spacing, so it cannot sit between the
+                        // rows and break the connector rails (each row
+                        // draws its rails only inside its own frame).
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(renderRows) { row in
+                                TreeRowFrame(
+                                    depth: row.depth,
+                                    hasVisibleBranch: row.hasVisibleBranch,
+                                    isLast: row.isLast,
+                                ) {
+                                    if row.isFolder, let key = row.key {
+                                        Button {
+                                            toggleCollapsed(key)
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                Image(
+                                                    systemName: row.isCollapsed ? "chevron.right" : "chevron.down",
+                                                )
+                                                .font(.footnote).foregroundStyle(LumiPalette.primary)
+                                                Image(systemName: "folder")
+                                                    .foregroundStyle(LumiPalette.primary)
+                                                Text(row.label).font(.subheadline).foregroundStyle(LumiPalette.onSurface)
+                                            }
                                             .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel(row.isCollapsed ? "Show \(row.label)" : "Hide \(row.label)")
+                                    } else if let entry = row.entry {
+                                        HStack(spacing: 10) {
+                                            NavigationLink(value: Route.entryDetail(entry.id)) {
+                                                Text(entry.label)
+                                                    .font(.subheadline).foregroundStyle(LumiPalette.onSurface)
+                                                    .lineLimit(1)
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                            Spacer()
+                                            SongPlayButton(
+                                                entry: entry,
+                                                isCurrent: entry.label == model.engine.currentLabel && model.engine.status != .idle,
+                                            )
+                                        }
                                     }
-                                    .buttonStyle(.plain)
-                                    Spacer()
-                                    SongPlayButton(entry: entry, isCurrent: entry.label == model.engine.currentLabel && model.engine.status != .idle)
                                 }
-                                .padding(.vertical, 6)
                             }
-                            if line.id != lines.last?.id { Divider() }
                         }
                     }
                 }
@@ -329,14 +381,6 @@ struct FolderDetailPane: View {
         }
         .overlay(alignment: .bottom) {
             if let event = model.uiEvent { EventBanner(message: event) }
-        }
-    }
-
-    private func toggle(_ path: Substring) {
-        if hidden.contains(String(path)) {
-            hidden.remove(String(path))
-        } else {
-            hidden.insert(String(path))
         }
     }
 }

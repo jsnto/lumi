@@ -54,6 +54,7 @@ struct LumiApp: App {
 /// NavigationStack's own pop).
 struct RootView: View {
     @StateObject private var nav = NavState()
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         NavigationStack(path: $nav.path) {
@@ -63,6 +64,51 @@ struct RootView: View {
                 }
         }
         .environmentObject(nav)
+        // The unified scan's in-progress dialog (the Android
+        // SettingsScreen's scan AlertDialog, at the SCREEN level so it
+        // overlays any pane - the card-write scan is armed from the tag
+        // page, the scan-to-assign from the song profile): the title and
+        // the copy branch on what the scan is for (the Android
+        // SettingsScreen's own branches).
+        .alert(
+            model.cardWriteTargetId != nil ? "Scan a card" : "Scan a tag",
+            isPresented: Binding(get: { model.scanActive }, set: { if !$0 { model.stopTagScan() } }),
+        ) {
+            Button("Cancel", role: .cancel) { model.stopTagScan() }
+        } message: {
+            Text(scanDialogMessage)
+        }
+        // The tag naming dialog (the Android capture -> naming-dialog
+        // flow, at the screen level too): a scan that settled on an
+        // unknown tag published the capture with its prefill.
+        .sheet(isPresented: Binding(get: { model.capture != nil }, set: { if !$0 { model.discardCapture() } })) {
+            if let capture = model.capture {
+                NamingDialog(capture: capture)
+            }
+        }
+        // A registered tag the unified scan just resolved (the Android
+        // pendingTagProfile -> tag detail page route, consumed here at
+        // the screen level so the navigation works no matter which pane
+        // armed the scan): open its page.
+        .onChange(of: model.scannedTagId) { newValue in
+            guard let newValue else { return }
+            model.scannedTagId = nil
+            nav.path.append(Route.tagDetail(newValue))
+        }
+    }
+
+    /// The scan dialog's copy (the Android SettingsScreen's branches,
+    /// in the Android's own priority order): the scan-to-assign names
+    /// the song it will link, the card-write asks for the tag's own
+    /// card, and the plain scan asks for any tag.
+    private var scanDialogMessage: String {
+        if let entryId = model.scanAssignEntryId, let entry = model.store.entryById(entryId) {
+            return "Hold the back of the phone against any NFC tag to add “\(entry.label)” to it."
+        }
+        if model.cardWriteTargetId != nil {
+            return "Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written."
+        }
+        return "Hold the back of the phone against any NFC tag…"
     }
 
     @ViewBuilder

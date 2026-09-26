@@ -19,7 +19,7 @@ import SwiftUI
 
 struct TagsPane: View {
     @EnvironmentObject private var model: AppModel
-    @State private var namingShown = false
+    @EnvironmentObject private var nav: NavState
 
     var body: some View {
         ScrollView {
@@ -51,14 +51,15 @@ struct TagsPane: View {
                 } else {
                     LumiCard {
                         ForEach(model.tags) { tag in
-                            NavigationLink(value: Route.tagDetail(tag.id)) {
-                                MenuRowView(
-                                    title: tag.name,
-                                    subtitle: "ID: \(tag.uid)",
-                                    systemImage: "nfc",
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            // The row's OWN tap pushes the tag's page (a
+                            // NavigationLink wrapper would swallow it -
+                            // the menu rows' observed bug).
+                            MenuRowView(
+                                title: tag.name,
+                                subtitle: "ID: \(tag.uid)",
+                                systemImage: "nfc",
+                                onTap: { nav.path.append(Route.tagDetail(tag.id)) },
+                            )
                             if tag.id != model.tags.last?.id { Divider() }
                         }
                     }
@@ -67,30 +68,6 @@ struct TagsPane: View {
         }
         .background(LumiPalette.background)
         .navigationTitle("NFC tags")
-        .alert(
-            "Scanning for a tag",
-            isPresented: Binding(get: { model.scanActive && model.capture == nil },
-                                 set: { if !$0 { model.stopTagScan() } }),
-        ) {
-            Button("Cancel", role: .cancel) { model.stopTagScan() }
-        } message: {
-            Text("Hold the back of the phone against any NFC tag...")
-        }
-        .sheet(isPresented: $namingShown) {
-            if let capture = model.capture {
-                NamingDialog(capture: capture)
-            }
-        }
-        .onChange(of: model.capture) { newValue in
-            // The controller settled a scan on an unknown tag: hand the
-            // prefill to the naming dialog (the Android capture ->
-            // naming-dialog flow).
-            if let newValue { namingShown = true }
-        }
-        .onAppear {
-            guard model.capture != nil else { return }
-            namingShown = true
-        }
         .overlay(alignment: .bottom) {
             if let event = model.uiEvent { EventBanner(message: event) }
         }
@@ -159,80 +136,99 @@ struct TagDetailPane: View {
     private var tag: Tag? { model.store.tagById(tagId) }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 4) {
-                // The tag details card (the Android page's 'Tag details'
-                // section: name + the hardware-derived read-only UID).
-                SectionCard(title: "Tag details", trailingLabel: "Edit", onTrailing: beginRename) {
-                    LumiCard {
-                        if let tag {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(tag.name).font(.title2).bold().foregroundStyle(LumiPalette.onSurface)
-                                Text("ID: \(tag.uid)")
-                                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
-                            }
-                        } else {
-                            Text("This tag was removed.")
-                                .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
-                        }
-                    }
-                }
-
-                // The song list: added order, drag-reorderable, per-song
-                // play/pause + remove.
-                SectionCard(title: "Songs", addLabel: "+", onAdd: { addingSong = true }) {
-                    if let tag, !model.tagRows(tag).isEmpty {
-                        LumiCard {
-                            ForEach(model.tagRows(tag)) { row in
-                                TagSongRowView(
-                                    row: row,
-                                    isCurrent: row.entry.map { $0.label == model.engine.currentLabel && model.engine.status != .idle } ?? false,
-                                    onRemove: { removingLink = row },
-                                )
-                                if row.linkId != model.tagRows(tag).last?.linkId { Divider() }
-                            }
-                            .onMove(perform: moveSongs)
+        // A List (not a ScrollView + cards): the song rows' drag
+        // reorder (.onMove) is only reachable inside a List - a ForEach
+        // in a ScrollView compiles, but the move capability is inert
+        // there and the list's reorder was unreachable (the observed
+        // bug). The other sections keep the card chrome (a LumiCard in
+        // a clear list row).
+        List {
+            // The tag details (the Android page's 'Tag details' section:
+            // name + the hardware-derived read-only UID, the Edit action
+            // on the section's title row).
+            Section {
+                LumiCard {
+                    if let tag {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(tag.name).font(.title2).bold().foregroundStyle(LumiPalette.onSurface)
+                            Text("ID: \(tag.uid)")
+                                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
                         }
                     } else {
-                        LumiCard {
-                            Text("This tag plays nothing yet. Add a song or scan the tag to restore its list.")
-                                .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
-                        }
+                        Text("This tag was removed.")
+                            .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
                     }
                 }
-
-                // The "Save to NFC card" section (the Android page's
-                // card-write action with its live gates).
-                if let tag {
-                    SectionCard(title: "Save to NFC card") {
-                        LumiCard {
-                            cardWriteButton(for: tag)
-                        }
-                    }
-                }
-
-                // The danger zone.
-                SectionCard(title: "Delete tag") {
-                    LumiCard(fill: LumiPalette.errorContainer.opacity(0.4)) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Deleting removes the tag and its song links. The songs stay in the content list.")
-                                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
-                            Button(role: .destructive) {
-                                confirmingDelete = true
-                            } label: {
-                                Text("Delete tag")
-                                    .font(.subheadline).fontWeight(.semibold)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16).padding(.vertical, 8)
-                                    .background(Capsule().fill(LumiPalette.error))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
+            } header: {
+                ListSectionHeader("Tag details", trailingLabel: "Edit", onTrailing: beginRename)
             }
-            .padding(.vertical, 8)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
+
+            // The song list: added order, drag-reorderable (.onMove),
+            // per-song play/pause + remove.
+            Section {
+                if let tag, !model.tagRows(tag).isEmpty {
+                    ForEach(model.tagRows(tag)) { row in
+                        TagSongRowView(
+                            row: row,
+                            isCurrent: row.entry.map { $0.label == model.engine.currentLabel && model.engine.status != .idle } ?? false,
+                            onRemove: { removingLink = row },
+                        )
+                    }
+                    .onMove(perform: moveSongs)
+                } else {
+                    LumiCard {
+                        Text("This tag plays nothing yet. Add a song or scan the tag to restore its list.")
+                            .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
+                    }
+                }
+            } header: {
+                ListSectionHeader("Songs", addLabel: "Add song", onAdd: { addingSong = true })
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
+
+            // The "Save to NFC card" section (the Android page's
+            // card-write action with its live gates).
+            if let tag {
+                Section {
+                    LumiCard {
+                        cardWriteButton(for: tag)
+                    }
+                } header: {
+                    ListSectionHeader("Save to NFC card")
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
+
+            // The danger zone.
+            Section {
+                LumiCard(fill: LumiPalette.errorContainer.opacity(0.4)) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Deleting removes the tag and its song links. The songs stay in the content list.")
+                            .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+                        Button(role: .destructive) {
+                            confirmingDelete = true
+                        } label: {
+                            Text("Delete tag")
+                                .font(.subheadline).fontWeight(.semibold)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                .background(Capsule().fill(LumiPalette.error))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } header: {
+                ListSectionHeader("Delete tag")
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .background(LumiPalette.background)
         .navigationTitle(tag?.name ?? "Tag")
         .sheet(isPresented: $editingName) {
@@ -417,13 +413,15 @@ struct RenameDialog: View {
     }
 }
 
-/// The in-app content picker (the Android page's AddSongPickerDialog):
-/// the app's content in the folder-detail page's tree layout - the
-/// individual songs at the top level, the added folders as folder rows
-/// carrying their imported structure - where the user CHECKS the songs to
-/// add and saves the selection at once with the Save button (dimmed while
-/// nothing is checked). A song the tag already plays is flagged and
-/// non-checkable.
+/// The in-app content picker (the Android page's AddSongPickerDialog,
+/// reduced to a FLAT checkable list on iOS): the added folders' songs
+/// first (in the folders' render order), the individual songs after -
+/// duplicate labels offered once (the first stored copy) - where the
+/// user CHECKS the songs to add and saves the selection at once with the
+/// Save button (dimmed while nothing is checked). A song the tag already
+/// plays is flagged and non-checkable. The commit order is the list's
+/// render order (folders first, individual last) - NOT the order the
+/// rows were checked, the Android picker's own commit-order rule.
 struct AddSongPicker: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss

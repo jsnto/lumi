@@ -52,6 +52,8 @@ ios/
     PlaybackPosition.swift the per-tag position memory (decideRestore, LRU 3)
     ContentSort.swift      the title sort (A-Z / Z-A)
     PlayMode.swift         the play-mode parse (stored values)
+    FolderTree.swift       the picked folder's tree (structure, per-level
+                           sort, the visible-row count for the collapse)
     FolderScan.swift       the folder walk (pre-order, audio extensions,
                            rescan diff, the self-listing-folder guard)
   Sources/LumiApp/         the iOS-only app (SwiftUI + AVFoundation + CoreNFC)
@@ -136,15 +138,20 @@ iOS forces to be different:
   foregrounded, and the absence window keeps counting while backgrounded
   (the pause then lands on the return). Audio itself is unaffected —
   background audio playback is full.
-- **The presence read is a continuous NDEF scan.** The Android app's
-  fast path re-reads the tag's tech session (Mifare/NfcA/IsoDep) every
-  300 ms; iOS has no equivalent of a connected tech session, so the
-  presence monitor polls the reader session's own tag-detection
-  cadence (a 300 ms heartbeat re-arming a read against the same tag,
-  with the same 100 ms retry + two-strike debounce + absence window).
-  The debounce semantics — not the RF mechanism — are what the tests
-  pin, and the user-visible behavior (pause ~window after removal,
-  ~0.4 s when the tag answers) matches.
+- **The presence read is a low-level NDEF read on the held tag.** The
+  Android app's fast path re-reads the tag's tech session (Mifare/NfcA/
+  IsoDep) every 300 ms; iOS has no equivalent of a connected tech
+  session, so the presence monitor runs the connected tag's own low-
+  level NDEF read (`NFCNDEFTag.read` - the same call the write path's
+  read side uses) on a 300 ms heartbeat, with the same 100 ms retry +
+  two-strike debounce + absence window. The debounce semantics - not
+  the RF mechanism - are what the tests pin, and the user-visible
+  behavior (pause ~window after removal, ~0.4 s when the tag answers)
+  matches. A failed read first tries a fresh session (a held-still tag
+  whose RF session dropped re-detects and reads again - no strike), and
+  the re-detected tag's read is a presence read only: it never
+  re-dispatches the payload, so a probe-originated re-read cannot undo
+  a user pause/stop or settle an armed scan.
 - **No screen lock / device-admin auto-lock / themes.** Those are
   Android platform features (the device-admin lock, the window-chrome
   themes) with no iOS equivalent; the iOS app keeps the play-mode / NFC
@@ -173,15 +180,19 @@ iOS forces to be different:
 - The iOS-only layer (SwiftUI/AVFoundation/CoreNFC) compiles only in
   the Docker build against the iOS SDK; on a host without an iOS SDK
   it is verified by parse-check plus the core tests.
-- Folder-tree display is one level of grouping (subfolders group their
-  songs; the Android app's recursive connector-line tree is flattened).
-- The card-write's NDEF record TNF byte is CoreNFC's `mediaAudio` case
-  (the closest to the MIME-media shape; the byte is not verifiable off
-  the device). It does not affect interoperability: readers — including
-  the Android app — match the record by its type field
-  (`application/x-lumi`), never the TNF. The on-tag grammar mirrors the
-  Android writer's: the type field exists only in the short-record form
-  (payload ≤ 255 bytes — every real card's user area is under that), and
-  a 256-512-byte payload (large unknown-capacity cards only) degrades to
-  the typeless long form, unreadable by type-match readers — the same
-  way the Android app's own such write behaves.
+- The on-card NDEF grammar is the Android app's byte for byte,
+  written and read through the tag's OWN low-level NDEF read/write
+  (`NFCNDEFTag.read`/`.write` with raw bytes) - not CoreNFC's
+  high-level message APIs, which neither emit nor parse that shape.
+  The record is the AOSP `NdefRecord` short form (`0xD4` header, the
+  17-byte MIME type `application/x-lumi`, 8-bit payload length) while
+  the payload is under 256 bytes, and the long form (the `0xC4`
+  header, 32-bit payload length) from 256 bytes up to the app's 512-
+  byte cap - the long form KEEPS the type field (the typeless
+  long-form degradation the Android app emits for such payloads is
+  unreadable by type-matching readers and is not replicated here; the
+  cap makes it unreachable in practice). The record carries no ID
+  field and its TNF byte is 4 (MIME media), matching the Android
+  writer; readers - including the Android app - match the record by
+  its type field, never the TNF, so the byte-exact grammar is the
+  interop contract, pinned by the codec's golden byte tests.

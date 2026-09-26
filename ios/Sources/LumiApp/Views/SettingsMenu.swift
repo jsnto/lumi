@@ -8,50 +8,49 @@ import SwiftUI
 
 struct SettingsMenuPane: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var nav: NavState
 
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
+                // The menu rows: the tap is the row's OWN action (the app
+                // pushes the destination through the shared nav state).
+                // A NavigationLink wrapper here is the observed bug: the
+                // link installs its programmatic destination into the
+                // stack and swallows the row tap, so the row reads as
+                // unresponsive.
                 LumiCard {
-                    NavigationLink(value: Route.playMode) {
-                        MenuRowView(
-                            title: "Play mode",
-                            subtitle: model.playMode == .continuous
-                                ? "Keeps playing when a tag leaves"
-                                : "Pauses when a tag leaves",
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    MenuRowView(
+                        title: "Play mode",
+                        subtitle: model.playMode == .continuous
+                            ? "Keeps playing when a tag leaves"
+                            : "Pauses when a tag leaves",
+                        onTap: { nav.path.append(Route.playMode) },
+                    )
                 }
 
                 LumiCard {
-                    NavigationLink(value: Route.tags) {
-                        MenuRowView(
-                            title: "NFC tags",
-                            subtitle: model.tags.isEmpty ? "No tags yet" : "\(model.tags.count) tag(s)",
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    MenuRowView(
+                        title: "NFC tags",
+                        subtitle: model.tags.isEmpty ? "No tags yet" : "\(model.tags.count) tag(s)",
+                        onTap: { nav.path.append(Route.tags) },
+                    )
                 }
 
                 LumiCard {
-                    NavigationLink(value: Route.content) {
-                        MenuRowView(
-                            title: "Content",
-                            subtitle: "\(model.store.individualEntries.count) song(s), \(model.folders.count) folder(s)",
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    MenuRowView(
+                        title: "Content",
+                        subtitle: "\(model.store.individualEntries.count) song(s), \(model.folders.count) folder(s)",
+                        onTap: { nav.path.append(Route.content) },
+                    )
                 }
 
                 LumiCard {
-                    NavigationLink(value: Route.system) {
-                        MenuRowView(
-                            title: "System",
-                            subtitle: "Tag re-read wait: \(model.nfcRereadSeconds) s",
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    MenuRowView(
+                        title: "System",
+                        subtitle: "Tag re-read wait: \(model.nfcRereadSeconds) s",
+                        onTap: { nav.path.append(Route.system) },
+                    )
                 }
 
                 Text("lumi iOS - a port of the Android lumi player. See the ios/ README for the platform differences.")

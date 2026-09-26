@@ -11,14 +11,22 @@
 //   returns to the foreground a held tag is re-detected and (reading
 //   overrides pause) resumes the paused list - the observable behavior is
 //   preserved for the in-foreground hold.
-// - The Android fast path reads a low-level page of the tag every 300 ms on
-//   a held session; the iOS equivalent is the NDEF reader session's own
-//   read (readNDEFMessages), run on the same 300 ms heartbeat. A failed
-//   read first tries a FRESH session (re-detect through pollForTags - the
-//   port of the fresh-session reconnect that disambiguates a cold-but-
-//   present tag from a removed one); only a read that ALSO fails on the
-//   fresh session counts as a strike, and TWO strikes (100 ms between)
-//   confirm the removal - the Android two-strike debounce, ported.
+// - The reads and the card write go through the connected tag's OWN low-
+//   level NDEF read/write (NFCNDEFTag.read/write) - not the session's
+//   high-level readNDEFMessages: the app's on-card shape is the AOSP
+//   NdefRecord grammar byte for byte (see NdefCodec), which the high-
+//   level API neither writes nor parses. The Android fast path reads a
+//   low-level page of the tag every 300 ms on a held session; the iOS
+//   equivalent is that raw read, run on the same 300 ms heartbeat. A
+//   failed read first tries a FRESH session (re-detect through
+//   pollForTags - the port of the fresh-session reconnect that
+//   disambiguates a cold-but-present tag from a removed one): the
+//   re-detected tag's read is a PRESENCE read only (it refreshes the
+//   presence record on success and confirms the removal on failure - it
+//   never re-dispatches the payload, so a probe-originated re-read cannot
+//   undo a user pause/stop or settle an armed scan), and TWO strikes
+//   (100 ms between) confirm the removal - the Android two-strike
+//   debounce, ported.
 // - The absence-timeout fallback (the "tag re-read wait" window, default
 //   15 s) runs too: an active tag with no presence refresh (no successful
 //   read, no detection) longer than the window is removed - the port of
@@ -34,23 +42,16 @@
 import CoreNFC
 import Foundation
 
-/// A detected tag's read outcome (the iOS counterpart of the Android
-/// TagPayloadRead): Answered when the NDEF read answered (payload nil when
-/// the card carries no lumi record), Failed when the read could not
-/// complete (the card's payload is then UNKNOWN - it must never be read as
-/// "no record").
-public enum TagPayloadRead: Equatable {
-    case answered(LumiTagData?)
-    case failed
-}
-
 /// What an armed scan settles to.
 public enum ScanOutcome: Equatable {
     /// A registered tag was read: open its detail page.
     case registeredTag(Tag)
     /// An unknown tag was read: enter the registration flow (the prefill
-    /// and restore songs travel with it).
-    case unknownTag(uid: String, payload: TagPayloadRead, memory: TagMemoryRecord?)
+    /// and restore songs travel with it). The payload is the read's
+    /// answer (nil when the card carries no lumi record) - a read that
+    /// could not complete never settles the scan at all, so "failed" is
+    /// not a settle's payload (it must never be read as "no record").
+    case unknownTag(uid: String, payload: LumiTagData?, memory: TagMemoryRecord?)
     /// The card-write scan wrote (or refused) the target tag's data.
     case cardWrite(message: String)
 }
@@ -102,9 +103,17 @@ public final class NfcController: NSObject, ObservableObject {
     /// The two-strike debounce state (a strike retries once after
     /// retryDelayMs; two strikes confirm the removal).
     private var strikeRetryScheduled = false
+    /// The uid a failed probe's fresh-session re-detect is recovering:
+    /// that tag's re-detect read is a presence read only (no dispatch),
+    /// so a probe-originated re-read never re-presents the tag.
+    private var probeRecoveryUid: String?
     /// Set when the session is invalidated for app backgrounding (as
-    /// opposed to a tag removal): no loss event fires for it.
+    /// opposed to a tag removal): no loss event fires for it, and the
+    /// session is NOT re-armed (the scene phase re-arms it on return).
     private var invalidatedForBackground = false
+    /// The last re-arm after an unexpected invalidation: a persistent
+    /// error must not spin a re-arm loop.
+    private var lastRearm = Date.distantPast
 
     // MARK: - scan mode (the Android scan flag on the single read path)
 
@@ -166,6 +175,10 @@ public final class NfcController: NSObject, ObservableObject {
         connectedUid = nil
         didBecomeActive = false
         stopHeartbeat()
+        // The debounce state dies with the session: a pending strike
+        // retry must not confirm a removal across the teardown.
+        strikeRetryScheduled = false
+        probeRecoveryUid = nil
         isListening = false
     }
 
@@ -230,7 +243,7 @@ public final class NfcController: NSObject, ObservableObject {
             // The fast path: a REAL read on the held session - succeeds
             // only while the tag is physically in the field AND its RF
             // session is alive (the Android page-0 read's contract).
-            probeRead(session, tag)
+            probeRead(tag)
         } else {
             // No held tag: ask the system to look.
             session.pollForTags()
@@ -254,10 +267,12 @@ public final class NfcController: NSObject, ObservableObject {
     // MARK: - probe + two-strike debounce (the ReconnectingPresenceSession
     // port)
 
-    private func probeRead(_ session: NFCNDEFReaderSession, _ tag: NFCNDEFTag) {
-        session.readNDEFMessages(from: tag) { [weak self] error in
+    private func probeRead(_ tag: NFCNDEFTag) {
+        tag.read { [weak self] data, error in
             guard let self else { return }
-            if error == nil {
+            if error == nil, data != nil {
+                // The read answered: the tag is in the field and its
+                // session is alive - the presence record refreshes.
                 self.strikeRetryScheduled = false
                 self.refreshPresence()
             } else {
@@ -266,7 +281,8 @@ public final class NfcController: NSObject, ObservableObject {
                 // before counting the strike (the Android wrapper's
                 // reconnect): a held-still tag whose RF session dropped
                 // re-detects and reads again - no strike; a gone tag
-                // fails the fresh read too - a strike.
+                // never re-detects - the pending retry confirms the
+                // removal.
                 self.tryFreshSessionOrStrike()
             }
         }
@@ -274,12 +290,8 @@ public final class NfcController: NSObject, ObservableObject {
 
     private func tryFreshSessionOrStrike() {
         // Re-detect: the fresh-session attempt. The stale connected tag's
-        // session is dropped; pollForTags looks again. A held-still tag
-        // whose RF session dropped re-detects, re-connects and reads
-        // again (didDetect -> read -> handleNdefRead -> refreshPresence
-        // cancels the pending retry: the tag is present). A gone tag fails
-        // the fresh read too - the pending retry then counts the second
-        // strike and confirms the removal.
+        // session is dropped; pollForTags looks again.
+        probeRecoveryUid = connectedUid
         connectedTag = nil
         connectedUid = nil
         session?.pollForTags()
@@ -294,19 +306,15 @@ public final class NfcController: NSObject, ObservableObject {
 
     private func strikeRetry() {
         strikeRetryScheduled = false
-        guard let session else { return }
-        if let tag = connectedTag {
-            session.readNDEFMessages(from: tag) { [weak self] error in
-                guard let self else { return }
-                if error == nil {
-                    self.refreshPresence()
-                } else {
-                    self.confirmRemoval() // two strikes: removed
-                }
-            }
-        } else {
-            // No tag at all on the retry: the removal stands (the tag
-            // left between the probe and the retry).
+        // The recovery tag's own read (run at its re-detect's connect)
+        // has already settled its fate - present (presence refreshed) or
+        // gone (the removal confirmed). Only a probed tag that never
+        // re-detected (or a different tag holding the slot meanwhile) is
+        // confirmed removed here - and only while it is STILL the watched
+        // tag (a different tag made active in the meantime owns the
+        // presence record now, and its loss must not fire).
+        if let recovery = probeRecoveryUid, connectedUid != recovery, watchedUid == recovery {
+            probeRecoveryUid = nil
             confirmRemoval()
         }
     }
@@ -324,14 +332,26 @@ public final class NfcController: NSObject, ObservableObject {
 
     // MARK: - reading a tag (the single read path)
 
-    /// The read's settle: parse the lumi payload from the NDEF messages and
-    /// route it - to the armed scan's settle when one is armed, to the
-    /// always-listening playback read otherwise.
-    private func handleNdefRead(_ messages: [NDEFMessage], from tag: NFCNDEFTag) {
-        let uid = Self.uidString(from: tag.identifier)
-        let payload = NfcController.lumiPayload(from: messages)
-
+    /// The read's settle: parse the lumi payload from the raw NDEF bytes
+    /// (the AOSP on-tag grammar - NdefCodec) and route it - to the armed
+    /// scan's settle when one is armed, to the always-listening playback
+    /// read otherwise. A read that could not complete (a [readError])
+    /// never dispatches OR settles: the payload is unknown (an armed
+    /// scan stays armed for the next read - the Android scan's own
+    /// settle-on-the-next-read behavior - and the always-listening read
+    /// just reports nothing), and the heartbeat's probes keep owning the
+    /// tag's presence.
+    private func handleRead(data: Data?, readError: Error?, uid: String, tag: NFCNDEFTag) {
+        guard readError == nil else { return }
+        let payload: LumiTagData?
+        if let data {
+            payload = NdefCodec.fromNdefMessageBytes([UInt8](data))
+        } else {
+            payload = nil
+        }
         if case let .cardWrite(target) = scanMode {
+            // The card-write scan: the read's outcome does not gate the
+            // write (the write is its own raw write below).
             scanMode = .none
             settleCardWrite(target: target, uid: uid, tag: tag)
             return
@@ -348,7 +368,7 @@ public final class NfcController: NSObject, ObservableObject {
         eventListener?.nfcControllerDidDetect(uid: uid, payload: payload)
     }
 
-    private func settleTagScan(uid: String, payload: TagPayloadRead) {
+    private func settleTagScan(uid: String, payload: LumiTagData?) {
         let existing = tagByUid(uid)
         if let existing {
             eventListener?.nfcControllerDidSettleScan(.registeredTag(existing))
@@ -389,36 +409,19 @@ public final class NfcController: NSObject, ObservableObject {
             )
             return
         }
-        guard let session else {
-            eventListener?.nfcControllerDidSettleScan(
-                .cardWrite(message: "Couldn't write to that card - keep it on the phone and try again."),
-            )
-            return
-        }
-        let json = NdefCodec.toJson(data)
-        // The MIME media type record. CoreNFC's NDEFType cases map to the
-        // record's TNF byte; the exact byte this case emits is not
-        // verifiable off the device, and it does not matter for
-        // interoperability: readers (including the Android app) match the
-        // record by its TYPE field (`application/x-lumi`), never the TNF.
-        // `.mediaAudio` is the closest case to the MIME-media shape.
-        let record = NDEFRecord(
-            type: Data(NdefCodec.mimeType.utf8),
-            payload: Data(json.utf8),
-            tnf: .mediaAudio,
-            identifier: Data(),
-        )
-        session.writeNDEFMessages([NDEFMessage(records: [record])], to: tag) { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if error == nil {
-                    self.onCardWriteLanded(target: target, data: data)
-                    self.eventListener?.nfcControllerDidSettleScan(.cardWrite(message: "Saved to the card."))
-                } else {
-                    self.eventListener?.nfcControllerDidSettleScan(
-                        .cardWrite(message: "Couldn't write to that card - keep it on the phone and try again."),
-                    )
-                }
+        // The physical write: the app's own AOSP-grammar bytes through the
+        // tag's low-level write (the high-level writeNDEFMessages would
+        // re-encode the record in CoreNFC's own shape - not the shape the
+        // Android app reads).
+        tag.write(Data(NdefCodec.toNdefMessageBytes(data))) { [weak self] error in
+            guard let self else { return }
+            if error == nil {
+                self.onCardWriteLanded(target: target, data: data)
+                self.eventListener?.nfcControllerDidSettleScan(.cardWrite(message: "Saved to the card."))
+            } else {
+                self.eventListener?.nfcControllerDidSettleScan(
+                    .cardWrite(message: "Couldn't write to that card - keep it on the phone and try again."),
+                )
             }
         }
     }
@@ -435,22 +438,6 @@ public final class NfcController: NSObject, ObservableObject {
     /// uppercase hex string (the Android tag uid's shape).
     public static func uidString(from identifier: Data) -> String {
         identifier.map { String(format: "%02X", $0) }.joined()
-    }
-
-    /// The app's payload among [messages]' records, if any record carries
-    /// it (the lenient read - a card with no lumi record yields
-    /// answered(nil)).
-    public static func lumiPayload(from messages: [NDEFMessage]) -> TagPayloadRead {
-        let typeBytes = Data(NdefCodec.mimeType.utf8)
-        for message in messages {
-            for record in message.records {
-                if record.type == typeBytes {
-                    let json = String(decoding: record.payload, as: UTF8.self)
-                    return .answered(NdefCodec.fromJson(json))
-                }
-            }
-        }
-        return .answered(nil)
     }
 }
 
@@ -470,11 +457,22 @@ extension NfcController: NFCNDEFReaderSessionDelegate {
     }
 
     public func readerSession(_ session: NFCNDEFReaderSession, didInvalidate reason: NFCNDEFReaderSession.InvalidationReason) {
-        let wasBackground = reason == .invalidationRequest || reason == .readError
+        let backgrounded = invalidatedForBackground
         teardownSession()
-        // A session invalidation is NOT a tag removal: the Android app
-        // tears the poll down on pause the same way and fires no loss.
-        _ = wasBackground
+        guard !backgrounded else { return }
+        // An invalidation that is NOT the app's own backgrounding tear-
+        // down re-arms the session (the Android app re-configures its
+        // always-listening dispatch on every resume): without the re-arm
+        // a dead session stops reading until the next background/foreground
+        // cycle, and the absence window then removes a tag that is still
+        // held. The re-arm is off the invalidate callback's own stack and
+        // rate-limited, so a persistent error cannot spin a re-arm loop.
+        let now = Date()
+        guard now.timeIntervalSince(lastRearm) >= 2 else { return }
+        lastRearm = now
+        DispatchQueue.main.async { [weak self] in
+            self?.startListening()
+        }
     }
 
     public func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [NFCNDEFTag]) {
@@ -492,19 +490,30 @@ extension NfcController: NFCNDEFReaderSessionDelegate {
             self.connectedTag = tag
             self.connectedUid = uid
             self.refreshPresence()
-            // The single read: handleNdefRead routes it to the armed scan's
-            // settle (when one is armed) or the always-listening playback
-            // read (the model decides start / switch / resume through the
-            // shared policy - a re-read of the paused active tag resumes
-            // it, "reading overrides pause").
-            session.readNDEFMessages(from: tag) { _ in
-                // The messages arrive through didReadNDEFMessages.
+            // A probe-triggered re-detect of the tag still being watched
+            // is a presence recovery, not a new presentation: its read
+            // refreshes the presence on success (the cold-but-present
+            // case - no strike) and confirms the removal on failure (the
+            // second strike), and it NEVER re-dispatches the payload (a
+            // probe-originated re-read must not undo a user pause/stop or
+            // settle an armed scan). A re-detect after the removal is
+            // already confirmed - or of any tag the probe did not target
+            // - settles the read normally.
+            let recovery = self.probeRecoveryUid == uid && self.watchedUid != nil
+            if self.probeRecoveryUid == uid { self.probeRecoveryUid = nil }
+            tag.read { [weak self] data, error in
+                guard let self else { return }
+                if recovery {
+                    if error == nil, data != nil {
+                        self.refreshPresence()
+                    } else {
+                        self.confirmRemoval()
+                    }
+                } else {
+                    self.handleRead(data: data, readError: error, uid: uid, tag: tag)
+                }
             }
         }
-    }
-
-    public func readerSession(_ session: NFCNDEFReaderSession, didReadNDEFMessages messages: [NDEFMessage], from tag: NFCNDEFTag) {
-        handleNdefRead(messages, from: tag)
     }
 
     public func readerSession(_ session: NFCNDEFReaderSession, didEncounter error: NFCError) {

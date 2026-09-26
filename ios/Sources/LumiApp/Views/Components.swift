@@ -179,4 +179,211 @@ struct SongPlayButton: View {
 /// fallback pops programmatically through it.
 final class NavState: ObservableObject {
     @Published var path: [Route] = []
+    /// The folder tree's subfolder collapse keys, per folder id - held
+    /// HERE (the screen level, the Android folder page's top-level
+    /// collapse state) so the show/hide state SURVIVES navigation: a
+    /// per-pane @State would reset on every round trip. A subfolder's
+    /// key is its PATH from the picked root (sibling names are distinct,
+    /// so the path names one node).
+    @Published var collapsedFolders: [Int: Set<String>] = [:]
+}
+
+/// A section header for List-based panes (the pane equivalent of the
+/// SectionCard's title row): the title left, an optional trailing action
+/// (the section's "Edit" pill or "+" circle) right.
+public struct ListSectionHeader: View {
+    let title: String
+    var addLabel: String? = nil
+    var onAdd: (() -> Void)? = nil
+    var trailingLabel: String? = nil
+    var onTrailing: (() -> Void)? = nil
+
+    public init(
+        _ title: String,
+        addLabel: String? = nil,
+        onAdd: (() -> Void)? = nil,
+        trailingLabel: String? = nil,
+        onTrailing: (() -> Void)? = nil,
+    ) {
+        self.title = title
+        self.addLabel = addLabel
+        self.onAdd = onAdd
+        self.trailingLabel = trailingLabel
+        self.onTrailing = onTrailing
+    }
+
+    public var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundStyle(LumiPalette.onSurface)
+            Spacer()
+            if let trailingLabel, let onTrailing {
+                Button(action: onTrailing) {
+                    Text(trailingLabel)
+                        .font(.subheadline).fontWeight(.semibold)
+                        .foregroundStyle(LumiPalette.onPrimaryContainer)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Capsule().fill(LumiPalette.primaryContainer))
+                }
+                .buttonStyle(.plain)
+            }
+            if let addLabel, let onAdd {
+                Button(action: onAdd) {
+                    Image(systemName: "plus")
+                        .font(.subheadline).fontWeight(.bold)
+                        .foregroundStyle(LumiPalette.onPrimaryContainer)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(LumiPalette.primaryContainer))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(addLabel)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The content sort control (the Android app's ContentSortRow): the
+/// "Sort by title" label + the A-Z / Z-A chips. The pick persists
+/// through the shared content sort setting.
+public struct ContentSortRow: View {
+    @EnvironmentObject private var model: AppModel
+    /// An optional caption under the chips (the folder page's own copy).
+    var caption: String? = nil
+
+    public init(caption: String? = nil) {
+        self.caption = caption
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Sort by title")
+                    .font(.subheadline).foregroundStyle(LumiPalette.onSurfaceVariant)
+                Spacer()
+                sortChip("A-Z", ascending: true)
+                sortChip("Z-A", ascending: false)
+            }
+            if let caption {
+                Text(caption)
+                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+            }
+        }
+    }
+
+    private func sortChip(_ label: String, ascending: Bool) -> some View {
+        let direction: ContentSortDirection = ascending ? .ascending : .descending
+        let selected = model.contentSort == direction
+        return Button {
+            model.setContentSort(direction)
+        } label: {
+            Text(label)
+                .font(.footnote).fontWeight(.semibold)
+                .foregroundStyle(selected ? LumiPalette.onPrimaryContainer : LumiPalette.onSurfaceVariant)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Capsule().fill(selected ? LumiPalette.primaryContainer : LumiPalette.surfaceContainerHigh))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One tree row with the tree's left connector lines - the port of the
+/// Android app's TreeRowFrame: a 1 pt vertical rail in each of the
+/// levels' rail columns above the row (every rail spans the row's full
+/// frame height, so the rails run continuously down a column from the
+/// first nested row to the last), plus - for a row nested at least one
+/// level - a short horizontal stub from the innermost rail out to the
+/// row. A folder row with displayed children also carries its children's
+/// rail from its own vertical center down (its first child's row picks
+/// the line up at its top), so each branch's line starts where its
+/// folder row sits. The row's content indents one 16 pt rail step per
+/// level (the rails occupy the indent), and the row's 12 pt bottom
+/// spacing (the tree's rows sit in a single non-spaced stack, so the
+/// spacing is the rows' only inter-row spacing) lives INSIDE the frame;
+/// the tree's last row carries none, so no rail dangles past the tree.
+public struct TreeRowFrame<Content: View>: View {
+    private let depth: Int
+    private let hasVisibleBranch: Bool
+    private let isLast: Bool
+    private let content: Content
+
+    private static let railStep: CGFloat = 16
+    private static let railWidth: CGFloat = 1
+    private static let stubWidth: CGFloat = 8
+    private static let bottomSpacing: CGFloat = 12
+
+    public init(
+        depth: Int,
+        hasVisibleBranch: Bool,
+        isLast: Bool,
+        @ViewBuilder content: () -> Content,
+    ) {
+        self.depth = depth
+        self.hasVisibleBranch = hasVisibleBranch
+        self.isLast = isLast
+        self.content = content()
+    }
+
+    public var body: some View {
+        let spacing: CGFloat = isLast ? 0 : Self.bottomSpacing
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, CGFloat(depth) * Self.railStep)
+            .padding(.bottom, spacing)
+            .background(
+                TreeRails(
+                    depth: depth,
+                    hasVisibleBranch: hasVisibleBranch,
+                    bottomSpacing: spacing,
+                    railStep: Self.railStep,
+                    stubWidth: Self.stubWidth,
+                )
+                    .stroke(style: StrokeStyle(lineWidth: Self.railWidth))
+                    .foregroundStyle(LumiPalette.onSurfaceVariant.opacity(0.5)),
+            )
+    }
+}
+
+/// The tree row's connector lines (the Android TreeRowFrame's
+/// drawBehind, ported to a Shape over the row's full frame).
+private struct TreeRails: Shape {
+    var depth: Int
+    var hasVisibleBranch: Bool
+    var bottomSpacing: CGFloat
+    var railStep: CGFloat
+    var stubWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        // The row's content centers in the frame minus its bottom
+        // spacing (the spacing is below the content, inside the frame).
+        let contentCenterY = (rect.height - bottomSpacing) / 2
+        // The vertical rails of the levels above this row: each spans
+        // the frame's full height, so the line is continuous through the
+        // row and into the next row's frame.
+        for level in 0..<depth {
+            let x = CGFloat(level) * railStep
+            path.move(to: CGPoint(x: x, y: 0))
+            path.addLine(to: CGPoint(x: x, y: rect.height))
+        }
+        // The row's own branch rail (a folder row's children's rail):
+        // from the row's vertical center to the frame's bottom - the
+        // first child's row continues it from its top.
+        if hasVisibleBranch {
+            let x = CGFloat(depth) * railStep
+            path.move(to: CGPoint(x: x, y: contentCenterY))
+            path.addLine(to: CGPoint(x: x, y: rect.height))
+        }
+        // The horizontal stub from the innermost rail to the row itself.
+        if depth > 0 {
+            let x = CGFloat(depth - 1) * railStep
+            path.move(to: CGPoint(x: x, y: contentCenterY))
+            path.addLine(to: CGPoint(x: x + stubWidth, y: contentCenterY))
+        }
+        return path
+    }
 }

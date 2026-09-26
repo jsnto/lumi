@@ -411,10 +411,10 @@ public final class Store {
     public func removeFolder(folder: Folder, importedPayloads: Set<String>) -> Int {
         var removed = 0
         mutate { d in
-            let kept = d.entries.filter { !importedPayloads.contains($0.payload) }
+            var kept = d.entries.filter { !importedPayloads.contains($0.payload) }
             removed = d.entries.count - kept.count
             for i in kept.indices where kept[i].folderId == folder.id {
-                d.entries[i].folderId = nil // unmark the survivors
+                kept[i].folderId = nil // unmark the survivors
             }
             d.entries = kept
             d.folders.removeAll { $0.id == folder.id }
