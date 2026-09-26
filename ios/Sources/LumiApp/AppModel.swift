@@ -471,7 +471,7 @@ public final class AppModel: ObservableObject {
             let bookmark = FolderAccess.bookmarkData(for: url)
             let payload = url.path
             if store.addEntryUnique(
-                label: url.deletingPathExtension().lastPathComponent,
+                label: url.lastPathComponent,
                 payload: payload,
                 folderId: nil,
                 bookmark: bookmark,
@@ -682,15 +682,16 @@ public final class AppModel: ObservableObject {
     }
 
     /// Asserts the security scope for [path] via [bookmark] at most once
-    /// per path per process (the scope is then held for the session).
+    /// per path per process (the scope is then held for the session). A
+    /// failed assert (a stale bookmark) is NOT cached: the next call
+    /// retries, so a fresh bookmark stored on a re-add is assertable in
+    /// the same process.
     nonisolated private static func assertAccess(path: String, bookmark: Data) {
         accessPathLock.lock()
-        let first = !accessedPaths.contains(path)
-        if first { accessedPaths.insert(path) }
-        accessPathLock.unlock()
-        if first {
-            _ = FolderAccess.resolve(bookmark)
-        }
+        defer { accessPathLock.unlock() }
+        guard !accessedPaths.contains(path) else { return }
+        guard FolderAccess.resolve(bookmark) != nil else { return }
+        accessedPaths.insert(path)
     }
 
     /// The content pane's Folders section (sorted by label through the

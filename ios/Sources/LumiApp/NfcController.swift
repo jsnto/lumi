@@ -527,7 +527,7 @@ extension NfcController: NFCNDEFReaderSessionDelegate {
             // settle an armed scan). A re-detect after the removal is
             // already confirmed - or of any tag the probe did not target
             // - settles the read normally.
-            let recovery = self.probeRecoveryUid == uid && self.watchedUid != nil
+            let recovery = self.probeRecoveryUid == uid && self.watchedUid == uid
             if self.probeRecoveryUid == uid { self.probeRecoveryUid = nil }
             tag.read { [weak self] data, error in
                 guard let self else { return }

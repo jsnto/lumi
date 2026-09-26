@@ -110,12 +110,14 @@ public struct TagLink: Codable, Hashable, Identifiable, Sendable {
 /// A row of a tag's song list as the UI sees it: the stored link plus the
 /// live-resolved content entry (nil while the song is missing from the
 /// content list - the "song not found" row).
-public struct TagSongRow: Hashable, Sendable {
+public struct TagSongRow: Identifiable, Hashable, Sendable {
     public let linkId: Int
     public let entryId: Int?
     public let sortOrder: Int
     public let name: String
     public let entry: Entry?
+
+    public var id: Int { linkId }
 
     public init(linkId: Int, entryId: Int?, sortOrder: Int, name: String, entry: Entry?) {
         self.linkId = linkId

@@ -387,8 +387,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         guard let uid = state.activeTagUid, !queue.isEmpty, queue.indices.contains(position) else { return }
         let spec = queue[position]
         guard spec.type == "audio" else { return }
-        // The media time within the current item, in milliseconds.
-        let ms = Int64(max(0, player.currentTime().seconds) * 1000)
+        // The media time within the current item, in milliseconds. An
+        // unready or failed item reports a NaN time (Int64(NaN) is a
+        // fatal trap) - it settles to 0, the position the Android
+        // service reports before the player is ready.
+        let seconds = player.currentTime().seconds
+        let ms = seconds.isFinite ? Int64(max(0, seconds) * 1000) : 0
         lastPositionSaveMs = Date().timeIntervalSinceReferenceDate
         delegate?.playbackEngineSavePosition(
             tagUid: uid,

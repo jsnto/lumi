@@ -328,9 +328,12 @@ public final class Store {
     public func rememberFolder(uri: String, bookmark: Data, label: String) -> Folder {
         var made: Folder!
         mutate { d in
-            if let existing = d.folders.first(where: { $0.uri == uri }) {
-                made = existing
-                return false
+            if let i = d.folders.firstIndex(where: { $0.uri == uri }) {
+                // A re-add refreshes the stored grant: a stale bookmark
+                // becomes assertable again without a relaunch.
+                d.folders[i].bookmark = bookmark
+                made = d.folders[i]
+                return true
             }
             let folder = Folder(
                 id: self.nextId(d.folders.map { $0.id }),
@@ -356,8 +359,12 @@ public final class Store {
         var added = 0
         mutate { d in
             let f: Folder
-            if let existing = d.folders.first(where: { $0.uri == uri }) {
-                f = existing
+            if let i = d.folders.firstIndex(where: { $0.uri == uri }) {
+                // A re-add refreshes the stored grant (same as
+                // rememberFolder): the fresh picker bookmark replaces a
+                // stale one so the tree stays accessible.
+                d.folders[i].bookmark = bookmark
+                f = d.folders[i]
             } else {
                 f = Folder(id: self.nextId(d.folders.map { $0.id }), uri: uri, bookmark: bookmark, label: label, createdAt: self.nowMillis())
                 d.folders.append(f)

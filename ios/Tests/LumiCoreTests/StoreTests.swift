@@ -139,6 +139,25 @@ private func makeStore() -> Store {
     #expect(store.entries.count == 2)
 }
 
+@Test func readdingAFolderRefreshesTheStoredBookmark() {
+    // A re-add must replace the stored grant: a stale bookmark becomes
+    // assertable again without a relaunch (the fresh picker bookmark is
+    // what the play-path assert later resolves).
+    let store = makeStore()
+    let first = store.rememberFolder(uri: "/Music/Album", bookmark: Data([1]), label: "Album")
+    let (_, added) = store.addFolderEntry(
+        uri: "/Music/Album",
+        bookmark: Data([2]),
+        label: "Album",
+        songs: [],
+    )
+    #expect(added == 0)
+    #expect(store.folderById(first.id)?.bookmark == Data([2]))
+    let again = store.rememberFolder(uri: "/Music/Album", bookmark: Data([3]), label: "Album")
+    #expect(again.id == first.id)
+    #expect(again.bookmark == Data([3]))
+}
+
 @Test func folderImportedRowsStayOutOfTheIndividualList() {
     let store = makeStore()
     _ = store.addEntryUnique(label: "Solo", payload: "/solo.mp3", folderId: nil)
