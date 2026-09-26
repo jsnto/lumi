@@ -7,3 +7,8 @@ android/app/.cxx
 .gradle
 build
 .kotlin
+# The iOS host-side artifacts (the Swift SDK is mounted into the
+# container, never copied into the build context; .build is the host
+# SwiftPM output).
+ios/.build
+ios/sdk

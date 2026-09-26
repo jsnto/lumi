@@ -1,0 +1,6 @@
+# SwiftPM build output (host-side; the Docker build builds its own).
+.build/
+
+# The iOS Swift SDK directory (a swift-sdk-generator output, ~GBs):
+# it is mounted into the Docker build at /ios-sdk, never committed.
+sdk/
