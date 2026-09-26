@@ -44,6 +44,20 @@ public final class AppModel: ObservableObject {
     /// The Android app's Toast: the last user-facing event (the UI shows
     /// it as a transient banner).
     @Published public var uiEvent: String? = nil
+
+    /// Sets the event and schedules its own auto-dismiss (the Android
+    /// Toast's ~3-second dismissal) - the dismiss runs where the event is
+    /// SET, so an event raised while the user is on any screen still goes
+    /// away. An earlier event's timer only clears a value that is still its
+    /// own (compare-and-clear), so a later event is never dismissed by an
+    /// earlier schedule.
+    public func uiEvent(_ message: String) {
+        uiEvent = message
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if self.uiEvent == message { self.uiEvent = nil }
+        }
+    }
     @Published public private(set) var isNfcSupported: Bool = false
 
     /// A pending registration (the naming dialog): the scanned tag's uid,
@@ -606,14 +620,38 @@ public final class AppModel: ObservableObject {
     /// longer be read is left unmarked (its songs degrade into the
     /// individual list - visible, not lost).
     public func backfillFolderEntries() {
-        for folder in store.folders {
-            guard let url = FolderAccess.resolve(folder.bookmark) else { continue }
-            defer { url.stopAccessingSecurityScopedResource() }
-            guard FolderAccess.children(of: url.path) != nil else { continue }
-            let walked: Set<String> = Set(
-                collectAudioFiles(rootPath: url.path, childrenOf: { FolderAccess.children(of: $0) ?? [] }).map { $0.path },
-            )
-            store.markEntriesFromFolder(folderId: folder.id, payloads: walked)
+        let folders = store.folders
+        guard !folders.isEmpty else { return }
+        // The resolve + walk runs OFF the main actor (the Android app's
+        // backfill runs the same walk as a suspending view-model
+        // coroutine): only the store write hops back. An unreadable folder
+        // is left unmarked (the individual list degrades, the songs stay
+        // visible) - the tolerance semantics are unchanged.
+        Task {
+            let walked: [(folderId: Int, payloads: Set<String>)] = await withTaskGroup(
+                of: (Int, Set<String>)?.self,
+            ) { group -> [(Int, Set<String>)] in
+                for folder in folders {
+                    group.addTask {
+                        guard let url = FolderAccess.resolve(folder.bookmark) else { return nil }
+                        defer { url.stopAccessingSecurityScopedResource() }
+                        guard FolderAccess.children(of: url.path) != nil else { return nil }
+                        let payloads: Set<String> = Set(
+                            collectAudioFiles(rootPath: url.path, childrenOf: { FolderAccess.children(of: $0) ?? [] })
+                                .map { $0.path },
+                        )
+                        return (folder.id, payloads)
+                    }
+                }
+                var results: [(Int, Set<String>)] = []
+                for await pair in group where pair != nil {
+                    results.append((pair!.0, pair!.1))
+                }
+                return results
+            }
+            for result in walked {
+                store.markEntriesFromFolder(folderId: result.folderId, payloads: result.payloads)
+            }
         }
     }
 

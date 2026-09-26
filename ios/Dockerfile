@@ -46,9 +46,15 @@ CMD ["bash", "-c", "set -eux; \
     test -d /ios-sdk; \
     test -f /ios-sdk/swiftSDK.json; \
     export LUMI_BUILD_APP=1; \
+    # The bin path is QUERIED (swift build --show-bin-path with the same
+    # build flags) rather than guessed: the package-path build lives under
+    # ios/.build and the cross-compile output sits in the triple-suffixed
+    # products directory (SwiftPM's out/Products layout), so a hardcoded
+    # .build/release would miss. \
+    BIN_PATH=\"$(swift build --show-bin-path --package-path ios -c release --arch arm64 --swift-sdk /ios-sdk)\"; \
     swift build --package-path ios -c release --arch arm64 --swift-sdk /ios-sdk; \
     mkdir -p /out/Payload/Lumi.app; \
-    install -m 0755 .build/release/LumiApp /out/Payload/Lumi.app/Lumi; \
+    install -m 0755 \"$BIN_PATH/LumiApp\" /out/Payload/Lumi.app/Lumi; \
     install -m 0644 ios/packaging/Info.plist /out/Payload/Lumi.app/Info.plist; \
     cd /out; \
     python3 -m zipfile -c lumi-ios.ipa Payload; \

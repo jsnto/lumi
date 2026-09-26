@@ -135,7 +135,6 @@ struct PlayerScreenView: View {
                     .padding(.bottom, 8)
             }
         }
-        .onAppear(perform: clearStaleEvent)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -148,16 +147,6 @@ struct PlayerScreenView: View {
             return model.engine.currentLabel ?? "Playing."
         case .paused:
             return (model.engine.currentLabel ?? "Paused") + " - paused"
-        }
-    }
-
-    private func clearStaleEvent() {
-        // The banner clears itself a short while after it shows (the
-        // Android app's toast auto-dismiss).
-        guard model.uiEvent != nil else { return }
-        Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            model.uiEvent = nil
         }
     }
 }

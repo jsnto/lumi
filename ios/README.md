@@ -135,8 +135,10 @@ iOS forces to be different:
   foreground dispatch keeps reading then). Consequences: a held tag
   read while backgrounded is picked up on the return to the foreground;
   proximity-mode removal detection runs only while the app is
-  foregrounded, and the absence window keeps counting while backgrounded
-  (the pause then lands on the return). Audio itself is unaffected —
+  foregrounded, and the absence window is re-armed from the carried
+  active tag when the app returns (the Android app's resume re-seed -
+  a tag that left while backgrounded pauses up to one full window after
+  the return, not on the return). Audio itself is unaffected —
   background audio playback is full.
 - **The presence read is a low-level NDEF read on the held tag.** The
   Android app's fast path re-reads the tag's tech session (Mifare/NfcA/

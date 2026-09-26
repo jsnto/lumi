@@ -61,8 +61,11 @@ public enum FolderAccess {
     /// or a moved folder - the provider-query-thrown failure on Android).
     public static func children(of folderPath: String) -> [FolderChild]? {
         let fm = FileManager.default
+        // The URL overload (contentsOfDirectory(at:includingPropertiesForKeys:)
+        // -> [URL]): the atPath: overload returns [String] names, which have
+        // no resourceValues / lastPathComponent / path members.
         guard let items = try? fm.contentsOfDirectory(
-            atPath: folderPath,
+            at: URL(fileURLWithPath: folderPath),
             includingPropertiesForKeys: [.isDirectoryKey],
         ) else {
             return nil
