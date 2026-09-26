@@ -165,6 +165,13 @@ public final class NfcController: NSObject, ObservableObject {
             queue: .main,
         )
         session = s
+        // The documented NDEF-only design, made real: the iOS 11 init
+        // leaves requireNDEF at its default false, so a non-NDEF tag could
+        // be delivered and (on a successful connect) refresh the watched
+        // tag's absence window. The app's cards are NDEF tags and a
+        // non-NDEF tag has no supported path - the session must not see
+        // one.
+        s.requireNDEF = true
         s.alertMessage = "Hold an NFC tag against the back of the iPhone."
         isListening = true
     }
@@ -485,6 +492,12 @@ extension NfcController: NFCNDEFReaderSessionDelegate {
     }
 
     public func readerSession(_ session: NFCNDEFReaderSession, didInvalidate reason: NFCNDEFReaderSession.InvalidationReason) {
+        // A delayed callback from a session that has ALREADY been
+        // replaced (a quick background -> foreground bounce tears the old
+        // one down and starts a fresh one) must not tear down or re-arm
+        // the CURRENT session: only the session we are holding
+        // invalidates us.
+        guard session === self.session else { return }
         let backgrounded = invalidatedForBackground
         teardownSession()
         guard !backgrounded else { return }

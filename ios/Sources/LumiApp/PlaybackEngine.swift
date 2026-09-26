@@ -95,10 +95,6 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         observePeriodicTime()
     }
 
-    private func publishState() {
-        state = PlayerState()
-    }
-
     private func configureAudioSession() {
         guard !audioConfigured else { return }
         audioConfigured = true

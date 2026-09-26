@@ -40,8 +40,10 @@ public enum FolderAccess {
     /// Resolves a persisted bookmark to its url and ASSERTS the
     /// security-scoped access. Returns nil when the bookmark is stale
     /// (the folder was moved/deleted) - the caller surfaces the unreadable
-    /// state (the Android app's revoked-grant surface).
-    public static func resolve(_ bookmark: Data, releasingOnDeinit: Bool = false) -> URL? {
+    /// state (the Android app's revoked-grant surface). The caller owns
+    /// the asserted access for as long as it needs it and stops it itself
+    /// (`stopAccessingSecurityScopedResource`) when done.
+    public static func resolve(_ bookmark: Data) -> URL? {
         var stale = false
         guard let url = URL(
             resolvingBookmarkData: bookmark,
@@ -76,25 +78,5 @@ public enum FolderAccess {
             result.append(FolderChild(displayName: item.lastPathComponent, isDirectory: isDir, path: item.path))
         }
         return result
-    }
-
-    /// Walks a picked folder recursively (pre-order depth-first) and
-    /// returns every supported audio file at any depth. [rootUrl] must
-    /// have its security scope asserted by the caller. Returns nil when
-    /// the folder can no longer be read at the ROOT (the rescan / removal
-    /// / add surfaces that as the unreadable state).
-    public static func walk(rootUrl: URL) -> [ScannedSong]? {
-        let rootPath = rootUrl.path
-        // The root-readability guard: a nil listing at the root means the
-        // tree is gone (revoked grant / moved folder) - the add, rescan
-        // and removal paths surface that as the unreadable state (the
-        // Android app's revoked-grant surface).
-        guard children(of: rootPath) != nil else { return nil }
-        return collectAudioFiles(rootPath: rootPath, childrenOf: { path in
-            // A subfolder that can no longer be read degrades to EMPTY
-            // (its songs are simply not listed) - the walk itself only
-            // fails at the root.
-            children(of: path) ?? []
-        })
     }
 }

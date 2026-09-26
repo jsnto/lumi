@@ -54,10 +54,20 @@ struct PlayerScreenView: View {
                         : .default,
                     value: model.engine.status,
                 )
-                .onAppear {
-                    guard model.engine.status == .playing else { return }
-                    withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-                        blobScale = 1.06
+                .onChange(of: model.engine.status) { status in
+                    // The breathing is driven by the state transition
+                    // itself (the app always launches idle, so an
+                    // onAppear-time arming would never run): idle ->
+                    // playing starts the repeat, any stop settles the
+                    // scale back with the default animation.
+                    if status == .playing {
+                        withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+                            blobScale = 1.06
+                        }
+                    } else {
+                        withAnimation(.default) {
+                            blobScale = 0.9
+                        }
                     }
                 }
 

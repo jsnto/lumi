@@ -41,34 +41,57 @@ public enum MetadataReader {
             let lock = NSLock()
             var value: SongMetadata? = nil
             var done = false
+            var waiter: CheckedContinuation<SongMetadata?, Never>? = nil
             func set(_ v: SongMetadata?) {
                 lock.lock()
                 defer { lock.unlock() }
+                if done { return }
                 value = v
                 done = true
+                waiter?.resume(returning: v)
             }
-            func snapshot() -> (value: SongMetadata?, done: Bool) {
+            func settleToCurrent() {
                 lock.lock()
                 defer { lock.unlock() }
-                return (value, done)
+                if done { return }
+                done = true
+                waiter?.resume(returning: value)
+            }
+            func awaitSettled() async -> SongMetadata? {
+                await withCheckedContinuation { continuation in
+                    lock.lock()
+                    defer { lock.unlock() }
+                    if done {
+                        continuation.resume(returning: value)
+                    } else {
+                        waiter = continuation
+                    }
+                }
             }
         }
         let box = Box()
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                let metadata = await Self.loadMetadata(url: url)
-                box.set(metadata)
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: readTimeoutSeconds * 1_000_000_000)
-            }
-            // Settle on the FIRST of: the read finishing or the timeout.
-            // Returning here cancels the group's remaining task (the slow
-            // read keeps running in the background, harmlessly - it is
-            // best-effort and its late result is dropped).
-            _ = await group.next()
+        // The read runs UNSTRUCTURED, so a load that does not honour
+        // cancellation cannot hold the caller past the deadline: at the
+        // timeout the caller settles to whatever has landed so far and
+        // drops the late result (the Android reader's timeout shape - the
+        // read keeps running in the background and its late value is no
+        // longer consumed). A withTaskGroup would not do this: returning
+        // from its body cancels the remaining children but still awaits
+        // their completion.
+        let load = Task.detached {
+            box.set(await Self.loadMetadata(url: url))
         }
-        return box.snapshot().value
+        let deadline = Task {
+            try? await Task.sleep(nanoseconds: readTimeoutSeconds * 1_000_000_000)
+            load.cancel()
+            box.settleToCurrent()
+        }
+        let result = await box.awaitSettled()
+        deadline.cancel()
+        // The winner already resumed the continuation: the loser's settle
+        // is a locked no-op (done == true). A load that outlives the
+        // timeout settles late and is dropped.
+        return result
     }
 
     private static func loadMetadata(url: URL) async -> SongMetadata? {
