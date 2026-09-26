@@ -143,15 +143,19 @@ iOS forces to be different:
   IsoDep) every 300 ms; iOS has no equivalent of a connected tech
   session, so the presence monitor runs the connected tag's own low-
   level NDEF read (`NFCNDEFTag.read` - the same call the write path's
-  read side uses) on a 300 ms heartbeat, with the same 100 ms retry +
-  two-strike debounce + absence window. The debounce semantics - not
-  the RF mechanism - are what the tests pin, and the user-visible
-  behavior (pause ~window after removal, ~0.4 s when the tag answers)
-  matches. A failed read first tries a fresh session (a held-still tag
-  whose RF session dropped re-detects and reads again - no strike), and
-  the re-detected tag's read is a presence read only: it never
-  re-dispatches the payload, so a probe-originated re-read cannot undo
-  a user pause/stop or settle an armed scan.
+  read side uses) on a 300 ms heartbeat, with the same two-strike
+  debounce + absence window. A failed probe does NOT confirm the
+  removal on its own: it drops the stale session and re-checks in 100 ms
+  steps, bounded, while the system re-detect is in flight - the
+  re-detect's own read settles the outcome (a success refreshes the
+  presence, so a cold-but-present tag whose RF session dropped re-
+  detects within the bound and is not paused; a failed read - or the
+  bound running out without a re-detect at all - is the fresh-session
+  read failure, the two-strike confirmation), and the re-detected tag's
+  read is a presence read only: it never re-dispatches the payload, so a
+  probe-originated re-read cannot undo a user pause/stop or settle an
+  armed scan. The absence window is the backstop when no live read can
+  be held at all.
 - **No screen lock / device-admin auto-lock / themes.** Those are
   Android platform features (the device-admin lock, the window-chrome
   themes) with no iOS equivalent; the iOS app keeps the play-mode / NFC
@@ -184,15 +188,16 @@ iOS forces to be different:
   written and read through the tag's OWN low-level NDEF read/write
   (`NFCNDEFTag.read`/`.write` with raw bytes) - not CoreNFC's
   high-level message APIs, which neither emit nor parse that shape.
-  The record is the AOSP `NdefRecord` short form (`0xD4` header, the
-  17-byte MIME type `application/x-lumi`, 8-bit payload length) while
-  the payload is under 256 bytes, and the long form (the `0xC4`
-  header, 32-bit payload length) from 256 bytes up to the app's 512-
-  byte cap - the long form KEEPS the type field (the typeless
-  long-form degradation the Android app emits for such payloads is
-  unreadable by type-matching readers and is not replicated here; the
-  cap makes it unreachable in practice). The record carries no ID
-  field and its TNF byte is 4 (MIME media), matching the Android
-  writer; readers - including the Android app - match the record by
-  its type field, never the TNF, so the byte-exact grammar is the
-  interop contract, pinned by the codec's golden byte tests.
+  The record is the AOSP `NdefRecord` short form while the payload is
+  under 256 bytes (the `0xD4` header, the 1-byte type length, the 8-bit
+  payload length, then the 18-byte MIME type `application/x-lumi`, then
+  the payload), and the long form from 256 bytes up to the app's 512-
+  byte cap (the `0xC4` header, the 1-byte type length, a 32-bit payload
+  length, then the type and the payload) - the AOSP writer writes the
+  type field in BOTH forms (there is no typeless long form; the long
+  form keeps the 18-byte type with the 4-byte length, exactly what the
+  iOS codec writes). The record carries no ID field and its TNF byte is
+  4 (MIME media), matching the Android writer; readers - including the
+  Android app - match the record by its type field, never the TNF, so
+  the byte-exact grammar is the interop contract, pinned by the codec's
+  golden byte tests.

@@ -191,13 +191,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             return
         }
         wantsPlay = false
-        if player.timeControlStatus == .playing {
-            player.pause()
-            setState { s in s.status = .paused }
-            saveCurrentPosition()
-            positionSaveTimer?.invalidate()
-            positionSaveTimer = nil
-        }
+        // Pause unconditionally: player.pause() while the current item is
+        // still loading (waitingToPlayMinimallyStalled) cancels the
+        // pending start, so a pause that lands in the load window sticks
+        // (the Android service pauses during BUFFERING too - a paused
+        // session STAYS paused).
+        player.pause()
+        setState { s in s.status = .paused }
+        saveCurrentPosition()
+        positionSaveTimer?.invalidate()
+        positionSaveTimer = nil
     }
 
     /// ACTION_STOP: ends the session.
@@ -291,35 +294,40 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             stopPlayback()
             return
         }
+        // The start seek belongs to the queue's start entry only: once
+        // the list advances, a remembered offset must not apply to a
+        // later item (it would seek the wrong song).
+        pendingSeekMs = 0
         position = (position + 1) % queue.count
         loadCurrent()
     }
 
     /// Polls the player's ready state: the pending seek applies on the
-    /// FIRST ready (media3 has no onPlayerReady listener either - the
-    /// Android app applies it on STATE_READY), a failed load counts an
-    /// error.
+    /// FIRST ready of the CURRENT item (media3 has no onPlayerReady
+    /// listener either - the Android app applies it on STATE_READY), a
+    /// failed load counts an error.
     private func pollReadyState() {
         readyPollTimer?.invalidate()
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] t in
-            guard let self else {
+            guard let self, let item = self.currentItem else {
                 t.invalidate()
                 return
             }
-            switch self.player.status {
-            case .readyToPlay:
+            // The CURRENT item's own readiness: player.status right after
+            // a replaceCurrentItem can already report the new item's
+            // not-yet-loaded default (readyToPlay is the status default),
+            // so the pending seek must wait for the item's real ready.
+            if item.isReadyToPlay {
                 t.invalidate()
                 self.readyPollTimer = nil
                 if !self.readyApplied {
                     self.readyApplied = true
                     self.applyPendingSeek()
                 }
-            case .failed:
+            } else if item.status == .failed {
                 t.invalidate()
                 self.readyPollTimer = nil
                 self.handlePlaybackFailure()
-            default:
-                break
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -329,8 +337,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private func applyPendingSeek() {
         guard pendingSeekMs > 0 else { return }
         let seconds = TimeInterval(pendingSeekMs) / 1000.0
-        player.seek(to: seconds, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            self?.pendingSeekMs = 0
+        player.seek(to: seconds, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] success in
+            // A failed seek keeps the pending offset (the song starts at
+            // 0 instead of silently dropping the remembered position);
+            // a success consumes it. advance()/stopPlayback clear the
+            // offset either way, so it can never leak into a later item.
+            if success { self?.pendingSeekMs = 0 }
         }
     }
 

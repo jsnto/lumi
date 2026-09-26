@@ -178,11 +178,14 @@ private func makeStore() -> Store {
     // (surviving the payload match) must be UNMARKED by the removal - it
     // degrades into the individual content list (visible, not lost) -
     // and a stamped row of ANOTHER folder's payload match is untouched.
+    // The survivor is stored AFTER a removed row on purpose: the unmark
+    // must address rows of the COMPACTED survivor array - the same index
+    // into the original (pre-filter) array lands on a different row.
     let store = makeStore()
     let folder = store.rememberFolder(uri: "/Music/Album", bookmark: Data([1]), label: "Album")
     let other = store.rememberFolder(uri: "/Music/Other", bookmark: Data([2]), label: "Other")
-    let gone = store.addEntry(label: "Left the tree", payload: "/Music/Album/gone.mp3", folderId: folder.id)
     let walked = store.addEntry(label: "Walked", payload: "/Music/Album/walked.mp3", folderId: folder.id)
+    let gone = store.addEntry(label: "Left the tree", payload: "/Music/Album/gone.mp3", folderId: folder.id)
     let otherWalked = store.addEntry(label: "Other walked", payload: "/Music/Other/w.mp3", folderId: other.id)
 
     store.removeFolder(folder: folder, importedPayloads: ["/Music/Album/walked.mp3"])

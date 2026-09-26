@@ -80,6 +80,11 @@ public final class NfcController: NSObject, ObservableObject {
     /// The absence-timeout fallback's default window, in seconds (the
     /// Android nfc_reread_seconds default, clamped 1-120 on read).
     public static let rereadSecondsDefault = 15
+    /// Bound on the in-flight re-detect re-checks: while a failed probe's
+    /// fresh-session re-detect has not landed, the strike re-checks every
+    /// retryDelayMs up to this count; running out IS the fresh-session
+    /// read failure (the two-strike confirm - a gone tag never re-detects).
+    public static let maxRecoveryRechecks = 5
 
     public weak var eventListener: NfcEventListener?
 
@@ -107,6 +112,10 @@ public final class NfcController: NSObject, ObservableObject {
     /// that tag's re-detect read is a presence read only (no dispatch),
     /// so a probe-originated re-read never re-presents the tag.
     private var probeRecoveryUid: String?
+    /// The in-flight re-detect's re-check count (bounded by
+    /// maxRecoveryRechecks): re-checks every retryDelayMs while a
+    /// failed probe's fresh-session re-detect has not landed.
+    private var strikeRetryReschedules = 0
     /// Set when the session is invalidated for app backgrounding (as
     /// opposed to a tag removal): no loss event fires for it, and the
     /// session is NOT re-armed (the scene phase re-arms it on return).
@@ -179,6 +188,7 @@ public final class NfcController: NSObject, ObservableObject {
         // retry must not confirm a removal across the teardown.
         strikeRetryScheduled = false
         probeRecoveryUid = nil
+        strikeRetryReschedules = 0
         isListening = false
     }
 
@@ -292,6 +302,7 @@ public final class NfcController: NSObject, ObservableObject {
         // Re-detect: the fresh-session attempt. The stale connected tag's
         // session is dropped; pollForTags looks again.
         probeRecoveryUid = connectedUid
+        strikeRetryReschedules = 0
         connectedTag = nil
         connectedUid = nil
         session?.pollForTags()
@@ -306,17 +317,34 @@ public final class NfcController: NSObject, ObservableObject {
 
     private func strikeRetry() {
         strikeRetryScheduled = false
-        // The recovery tag's own read (run at its re-detect's connect)
-        // has already settled its fate - present (presence refreshed) or
-        // gone (the removal confirmed). Only a probed tag that never
-        // re-detected (or a different tag holding the slot meanwhile) is
-        // confirmed removed here - and only while it is STILL the watched
-        // tag (a different tag made active in the meantime owns the
-        // presence record now, and its loss must not fire).
-        if let recovery = probeRecoveryUid, connectedUid != recovery, watchedUid == recovery {
+        // The recovery re-detect's own read settles its own outcome (a
+        // success refreshes the presence - the cold-but-present case,
+        // no strike; a failure confirms the removal - the fresh-session
+        // read failure), so while the re-detect is still IN FLIGHT the
+        // probed tag is not confirmed here: a system re-scan + connect
+        // + read routinely takes longer than the first 100 ms check.
+        // The wait is bounded (a gone tag never re-detects): once the
+        // re-checks run out, the fresh session produced no read at all -
+        // the two-strike confirm.
+        guard let recovery = probeRecoveryUid else { return }
+        guard watchedUid == recovery else {
+            // A different tag took the field and owns the presence record
+            // now (or the watch is gone): the probed tag's fate is
+            // settled by the policy's switch, not by this retry.
             probeRecoveryUid = nil
-            confirmRemoval()
+            return
         }
+        if strikeRetryReschedules < Self.maxRecoveryRechecks {
+            strikeRetryReschedules += 1
+            strikeRetryScheduled = true
+            let deadline = DispatchTime.now() + .milliseconds(Int(NfcController.retryDelayMs))
+            DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
+                self?.strikeRetry()
+            }
+            return
+        }
+        probeRecoveryUid = nil
+        confirmRemoval()
     }
 
     private func confirmRemoval() {
