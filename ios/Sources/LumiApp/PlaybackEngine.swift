@@ -18,8 +18,7 @@
 //   on the Android app; ported);
 // - position remembering: saved while playing (every 5 s) and on
 //   pause/stop, only for the active tag's loaded audio;
-// - a tag list LOOPS (Toonies-style continuous play) until stopped or
-//   switched.
+// - a tag list LOOPS until stopped or switched.
 //
 // The engine never reads the store itself: the app model passes the queue
 // (specs) and the tag uid, and the engine reports saves back through its
@@ -283,8 +282,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         pollReadyState()
     }
 
-    /// Move to the next entry, looping the list (Toonies-style continuous
-    /// play).
+    /// Move to the next entry, looping the list.
     private func advance() {
         guard !queue.isEmpty else {
             stopPlayback()
