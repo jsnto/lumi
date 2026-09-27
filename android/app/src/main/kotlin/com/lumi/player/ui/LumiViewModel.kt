@@ -1,6 +1,5 @@
 package com.lumi.player.ui
 
-import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -8,7 +7,6 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.nfc.Tag
 import android.os.Build
-import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -29,24 +27,17 @@ import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongRow
 import com.lumi.player.data.FolderChild
 import com.lumi.player.data.FolderEntity
+import com.lumi.player.data.FolderTreeReader
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.ScannedSong
 import com.lumi.player.data.TagSyncState
-import com.lumi.player.data.collectAudioFiles
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
-import com.lumi.player.data.folderDocIdOf
 import com.lumi.player.data.rescanNewSongs
-import com.lumi.player.data.AutoLockTimer
-import com.lumi.player.device.LumiDeviceAdminReceiver
-import com.lumi.player.nfc.CardWriteGate
 import com.lumi.player.nfc.LumiTagData
-import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagCardDetails
 import com.lumi.player.nfc.TagInspect
 import com.lumi.player.nfc.TagPayloadRead
-import com.lumi.player.nfc.cardDetails
-import com.lumi.player.nfc.cardWriteGate
 import com.lumi.player.player.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
@@ -57,7 +48,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -92,15 +82,6 @@ class LumiViewModel(
     @Volatile
     private var policy: PlaybackPolicy = PlaybackPolicy(playMode.value)
 
-    /**
-     * The auto-lock idle timer's decision logic (pure; the clock is fed in
-     * through [clock]). It lives here so the idle stretch outlives a
-     * settings pane leaving and coming back: it is fed from the shared
-     * player state (every playback change resets or arms it) and ticked by
-     * the loop in the init block.
-     */
-    private val autoLockTimer = AutoLockTimer()
-
     // ---- observed data for the UI ----
 
     fun observeTags(): Flow<List<TagEntity>> = repository.observeTags()
@@ -116,72 +97,53 @@ class LumiViewModel(
     /** The tags that link the entry (the song profile's assign-to-tag flags), live. */
     fun observeTagsForEntry(entryId: Long): Flow<List<TagEntity>> = repository.observeTagsForEntry(entryId)
 
-    // ---- tag scan: the "Scan NFC" action of the NFC tags pane ----
+    // ---- NFC tag session (delegated to [nfcCoordinator]) ----
 
     /**
-     * Whether a tag scan is in progress: the next tag read settles it - a
-     * registered tag resolves to its profile page, an unregistered one
-     * enters the registration flow (capture + naming dialog - registration
-     * never writes the card).
+     * The NFC tag session behind this surface: the scan arm states (the
+     * plain scan, the scan-to-assign, the card-write and card-compare
+     * scans), the settle of an armed scan by the next tag read, the
+     * registration capture + save, the per-uid card details and per-song
+     * download urls observed per presentation, and the phone's NFC
+     * usability flags. The flows below delegate here; [onTagDetected]
+     * keeps the read dispatch (it consults
+     * [NfcTagCoordinator.settleIfScanning] first), and the scan/capture
+     * actions and physical seams further down the class forward to it.
      */
-    private val _scanActive = MutableStateFlow(false)
-    val scanActive: StateFlow<Boolean> = _scanActive.asStateFlow()
+    private val nfcCoordinator = NfcTagCoordinator(this, ::event)
+
+    val scanActive: StateFlow<Boolean> get() = nfcCoordinator.scanActive
+
+    val pendingTagProfile: StateFlow<TagEntity?> get() = nfcCoordinator.pendingTagProfile
+
+    val scanAssignEntry: StateFlow<EntryEntity?> get() = nfcCoordinator.scanAssignEntry
+
+    val cardWriteTarget: StateFlow<TagEntity?> get() = nfcCoordinator.cardWriteTarget
+
+    val cardCompareTarget: StateFlow<TagEntity?> get() = nfcCoordinator.cardCompareTarget
+
+    val tagCardDetails: StateFlow<Map<String, TagCardDetails>> get() = nfcCoordinator.tagCardDetails
+
+    val tagSongUrls: StateFlow<Map<String, Map<String, String>>> get() = nfcCoordinator.tagSongUrls
+
+    val nfcMissing: StateFlow<Boolean> get() = nfcCoordinator.nfcMissing
+
+    val nfcDisabled: StateFlow<Boolean> get() = nfcCoordinator.nfcDisabled
+
+    val capturedUid: StateFlow<String?> get() = nfcCoordinator.capturedUid
+
+    val capturedTagData: StateFlow<LumiTagData?> get() = nfcCoordinator.capturedTagData
+
+    val capturedRestoreSongs: StateFlow<List<String>> get() = nfcCoordinator.capturedRestoreSongs
 
     /**
-     * The registered tag a settled scan resolved to; consumed by the
-     * settings screen (it opens the tag's profile page).
+     * Re-publishes the phone's NFC usability (the activity re-checks on
+     * every resume + the radio's state-changed broadcast) - see
+     * [NfcTagCoordinator.nfcMissing].
      */
-    private val _pendingTagProfile = MutableStateFlow<TagEntity?>(null)
-    val pendingTagProfile: StateFlow<TagEntity?> = _pendingTagProfile.asStateFlow()
-
-    /**
-     * The song an assign-to-tag scan targets (null for the NFC tags pane's
-     * plain scan): while set, a read links the song to the tag the read
-     * resolves to - registering the tag first, through the usual flow, when
-     * it is not registered yet (the song is linked once the tag is saved).
-     */
-    private val _scanAssignEntry = MutableStateFlow<EntryEntity?>(null)
-    val scanAssignEntry: StateFlow<EntryEntity?> = _scanAssignEntry.asStateFlow()
-
-    // The tag whose data a card-write scan will write (the tag details
-    // page's "Save to NFC tag" action; null for a plain scan). The scan
-    // writes the tag's data only to the tag's OWN card - the presented
-    // card's NFC ID must match the tag's uid (a mismatched card is
-    // reported, nothing is written; see [settleCardWrite]).
-    private val _cardWriteTarget = MutableStateFlow<TagEntity?>(null)
-    val cardWriteTarget: StateFlow<TagEntity?> = _cardWriteTarget.asStateFlow()
-
-    // The tag whose data a COMPARE scan will compare (the tag details
-    // page's "Save to NFC tag" section's "Scan to compare" action; null
-    // for a plain scan). The scan READS the tag's own card - the
-    // presented card's NFC ID must match the tag's uid (a mismatched card
-    // is reported, nothing is recorded) - and records the card's ACTUAL
-    // contents as the tag's per-uid memory (a card with no lumi data
-    // clears the record); the section's in-sync indicator recomputes
-    // from the comparison (see [settleCardCompare]).
-    private val _cardCompareTarget = MutableStateFlow<TagEntity?>(null)
-    val cardCompareTarget: StateFlow<TagEntity?> = _cardCompareTarget.asStateFlow()
-
-    // The card details observed per presented tag uid: a read updates the
-    // entry for THAT uid only, so a tag's page keeps its own details no
-    // matter what is scanned afterwards. A page shows the entry for its
-    // own uid - never guessed: a tag whose details were never observed
-    // shows the section empty.
-    private val _tagCardDetails = MutableStateFlow<Map<String, TagCardDetails>>(emptyMap())
-    val tagCardDetails: StateFlow<Map<String, TagCardDetails>> = _tagCardDetails.asStateFlow()
-
-    // The per-song download urls observed per presented tag uid (the card
-    // side's "secret option" - see [LumiTagData.songUrls]): an answered
-    // read is the uid's source of truth (a card answered with no lumi
-    // record clears it), and a read that could not connect keeps the last
-    // known urls. The entry updates for THAT uid only, so a tag's page
-    // keeps its own urls no matter what is scanned afterwards. The map is
-    // the card payload's clamped-name → url map. Read-only app-side: the
-    // app's own card write never carries urls. A successful card write
-    // clears the entry (the card now carries the app's url-less payload);
-    // a refused or failed write leaves it (the card was not rewritten).
-    private val _tagSongUrls = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
-    val tagSongUrls: StateFlow<Map<String, Map<String, String>>> = _tagSongUrls.asStateFlow()
+    fun setNfcUsability(missing: Boolean, disabled: Boolean) {
+        nfcCoordinator.setNfcUsability(missing, disabled)
+    }
 
     // ---- song downloads (the tag page's download icon, Music/lumi) ----
 
@@ -199,52 +161,6 @@ class LumiViewModel(
 
     private val _songDownloadStates = MutableStateFlow<Map<Long, SongDownloadState>>(emptyMap())
     val songDownloadStates: StateFlow<Map<Long, SongDownloadState>> = _songDownloadStates.asStateFlow()
-
-    // ---- device NFC usability (published by MainActivity from the NfcAdapter) ----
-
-    /**
-     * The phone's own NFC hardware state, published by [MainActivity]
-     * (on create/resume and on the radio's state-changed broadcast, so it
-     * goes live when the radio is toggled while the app is open):
-     * [nfcMissing] = no NFC hardware at all; [nfcDisabled] = hardware
-     * present but the radio off. The tag details page's save-to-card
-     * control greys out while either holds - a card write needs the
-     * phone's own radio - and the note next to it names the reason.
-     */
-    private val _nfcMissing = MutableStateFlow(false)
-    val nfcMissing: StateFlow<Boolean> = _nfcMissing.asStateFlow()
-    private val _nfcDisabled = MutableStateFlow(false)
-    val nfcDisabled: StateFlow<Boolean> = _nfcDisabled.asStateFlow()
-
-    /** Re-publishes the phone's NFC usability (the activity re-checks on every resume + state change). */
-    fun setNfcUsability(missing: Boolean, disabled: Boolean) {
-        _nfcMissing.value = missing
-        _nfcDisabled.value = disabled
-    }
-
-    private val _capturedUid = MutableStateFlow<String?>(null)
-    val capturedUid: StateFlow<String?> = _capturedUid.asStateFlow()
-
-    /**
-     * The captured tag's prefill: the payload it carried (name + song
-     * list), with the name falling back to the card's REMEMBERED name
-     * (the per-card memory) when the payload is missing or nameless - a
-     * re-scanned card whose tag was deleted prefills its old name. Null
-     * when neither the payload nor the memory offers anything.
-     */
-    private val _capturedTagData = MutableStateFlow<LumiTagData?>(null)
-    val capturedTagData: StateFlow<LumiTagData?> = _capturedTagData.asStateFlow()
-
-    /**
-     * The captured card's RESTORE SONG LIST - the song names a save of this
-     * capture should land on the tag when it comes back empty: the payload's
-     * ordered song list when the card carries one (the card payload is the
-     * restore source for tags written in the new format), else the
-     * remembered per-uid song list (the memory of cards written before the
-     * payload carried songs, or never written).
-     */
-    private val _capturedRestoreSongs = MutableStateFlow<List<String>>(emptyList())
-    val capturedRestoreSongs: StateFlow<List<String>> = _capturedRestoreSongs.asStateFlow()
 
     // ---- transient UI events (toasts/snackbars) ----
 
@@ -318,13 +234,6 @@ class LumiViewModel(
         // no longer be read degrades to its songs appearing in the
         // individual content list (its rows keep no marker).
         viewModelScope.launch { backfillFolderEntries() }
-
-        // NOTE: the auto-lock engine's collectors (the stored delay, the
-        // shared player state, and the tick loop) are launched from an
-        // init block further down, right after the [autoLockDelay]
-        // property they read: property initializers and init blocks run
-        // in source order, so a collector launched here would NPE on the
-        // not-yet-initialized [autoLockDelay].
     }
 
     // ---- NFC events from the activity ----
@@ -340,38 +249,16 @@ class LumiViewModel(
      * card's per-uid details.
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
-        if (tag != null) inspectTagDetails(uid, tag)
-        // A card-write scan (the tag details page's "Save to NFC tag")
-        // is armed for a specific card write: the read's card is written
-        // the target tag's data ONLY when the card's NFC ID is the tag's
-        // own uid - a mismatched card is reported, nothing is written -
-        // and it never goes to registration or playback. The write path
-        // makes its OWN single NDEF connection (the physical write) - no
-        // payload read runs alongside it, so the write's connect never
-        // hits a second client on the tag's single connection slot.
-        val cardWrite = _cardWriteTarget.value
-        if (_scanActive.value && cardWrite != null) {
-            settleCardWrite(cardWrite, uid, tag)
-            return
-        }
-        // A COMPARE scan (the save section's "Scan to compare" action) is
-        // armed for a specific card read: the read's card is READ (not
-        // written) the target tag's data only when the card's NFC ID is
-        // the tag's own uid, and its actual contents become the tag's
-        // per-uid memory (see [settleCardCompare]).
-        val cardCompare = _cardCompareTarget.value
-        if (_scanActive.value && cardCompare != null) {
-            settleCardCompare(cardCompare, uid, tag)
-            return
-        }
-        if (_scanActive.value) {
-            settleTagScan(uid, tag)
-            return
-        }
+        if (tag != null) nfcCoordinator.inspectTagDetails(uid, tag)
+        // While a tag scan is in progress the read settles the armed scan
+        // (the card-write scan, then the compare scan, then the plain
+        // scan) and never reaches the playback path (see
+        // [nfcCoordinator.settleIfScanning]).
+        if (nfcCoordinator.settleIfScanning(uid, tag)) return
         // The plain read's own NDEF read: the card's per-song download
         // urls publish from it (a read that could not connect keeps the
         // last known urls).
-        if (tag != null) readTagSongUrls(uid, tag)
+        if (tag != null) nfcCoordinator.readTagSongUrls(uid, tag)
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
@@ -412,240 +299,6 @@ class LumiViewModel(
                 // playing (Ignore), or a proximity pause (handled via
                 // [onTagLost] instead of the read path).
                 NfcAction.Ignore, NfcAction.PausePlayback -> Unit
-            }
-        }
-    }
-
-    /**
-     * Settles a tag read while a tag scan is in progress (the NFC tags
-     * pane's "Scan NFC" action, or the song profile's scan-to-assign): a
-     * registered tag resolves to its profile page (the settings screen
-     * consumes [pendingTagProfile] and opens the tag detail page) - or, for
-     * a scan-to-assign, links its target song to it; an unknown one goes
-     * into the registration flow (capture + naming dialog - registration
-     * never writes the card), and a scan-to-assign's song waits for the
-     * tag's save. Either way the scan is over, so further reads are normal
-     * playback reads.
-     */
-    private fun settleTagScan(uid: String, tag: Tag?) {
-        _scanActive.value = false
-        viewModelScope.launch {
-            val existing = repository.tagByUid(uid)
-            val assignEntry = _scanAssignEntry.value
-            if (existing != null) {
-                // The registered card's read is this presentation's only
-                // NDEF read: its urls publish from it.
-                if (tag != null) readTagSongUrls(uid, tag)
-                if (assignEntry != null) {
-                    // The song profile's scan-to-assign: link the song
-                    // to the scanned tag (the picker's own mechanism -
-                    // a tag that already plays it is reported, not
-                    // duplicated). The profile page's live assigned-tags
-                    // list picks the link up; the user stays on it.
-                    _scanAssignEntry.value = null
-                    linkEntryToTag(existing, assignEntry)
-                } else {
-                    _pendingTagProfile.value = existing
-                }
-            } else {
-                capture(uid, tag)
-            }
-        }
-    }
-
-    /**
-     * Observes a presented tag's additional card details (its tech list,
-     * and, when the handle carries the NDEF tech, its NDEF type, capacity
-     * and writability - all of it discovery-time data: no connection, no
-     * RF activity) and records them for that tag's uid. The record is
-     * PER-UID (a read updates only that uid's entry), so a tag's page
-     * keeps its own details no matter what is scanned afterwards, and a
-     * re-scan of the tag refreshes them. A page shows the details only
-     * for the tag it is open on (its own uid), so a read of another tag
-     * can never surface its details - and a tag whose details were never
-     * observed shows the section empty (never guessed).
-     */
-    private fun inspectTagDetails(uid: String, tag: Tag) {
-        viewModelScope.launch {
-            // Pure discovery-data reads (no IO, no binder): the launch
-            // body runs before any suspension, so the publish is ordered
-            // with the read that produced it.
-            _tagCardDetails.value = _tagCardDetails.value + (uid to tag.cardDetails())
-        }
-    }
-
-    /**
-     * Best-effort read of the presented card's per-song download urls (the
-     * card side's "secret option"): the read's payload publishes its
-     * clamped-name → url map for that uid (see [publishSongUrls]). It is
-     * off the playback path's critical path (the playback read never waits
-     * on it). A re-scan refreshes the record - including clearing urls the
-     * card no longer carries - but a read that could not connect says
-     * nothing about the card's payload, so it keeps the last known urls
-     * instead of clearing them.
-     */
-    private fun readTagSongUrls(uid: String, tag: Tag) {
-        viewModelScope.launch {
-            publishSongUrls(uid, withContext(Dispatchers.IO) { songPayloadReader(tag) })
-        }
-    }
-
-    /**
-     * Publishes [read]'s urls for [uid]: an answered read is the card's
-     * current payload (a card answered with no lumi record clears the
-     * uid's urls), and a failed read publishes nothing (the last known
-     * urls stay).
-     */
-    private fun publishSongUrls(uid: String, read: TagPayloadRead) {
-        if (read is TagPayloadRead.Answered) {
-            _tagSongUrls.value = _tagSongUrls.value + (uid to (read.data?.songUrls ?: emptyMap()))
-        }
-    }
-
-    /**
-     * Settles a tag read while a card-write scan is armed (the tag
-     * details page's "Save to NFC tag" section's write action): the read's card is written the
-     * target tag's data - the tag's name and the tag's ORDERED SONG LIST
-     * (by the songs' display names, "song not
-     * found" names among them - the names a re-registered tag restores
-     * name-for-name; the play mode is no longer part of the written
-     * payload) - the card's own payload shape - through the existing
-     * write path, but ONLY when the card's NFC ID ([uid]) is the tag's own
-     * uid: a mismatched card is reported and nothing is written to it.
-     * Before any per-card verdict the payload's own size is checked
-     * against the app's write cap ([LumiTagNdef.MAX_PAYLOAD_BYTES]): a
-     * payload that exceeds it can be refused by NO card, so it is
-     * reported as too large - a permanent size fact, never as a card
-     * failure to retry - and nothing is written to any card. For the
-     * matching card the verdict is discovery-time data (no connect, no
-     * RF): a card that isn't NDEF, is read-only, or is too small to hold
-     * the payload is reported and nothing is written to it; only a card
-     * that passes reaches the physical write (which itself reports a
-     * failure - an unknown-capacity card can turn out too small there, or
-     * the card left range mid-write). A write that lands remembers the
-     * card's last saved name + songs (the per-card memory) and clears the
-     * card's published urls (the written payload carries none). The scan
-     * settles either way (the target is cleared and the flag disarmed):
-     * further reads are normal reads, never re-routed to this write - the
-     * user re-arms the action to try again.
-     */
-    private fun settleCardWrite(target: TagEntity, uid: String, tag: Tag?) {
-        _scanActive.value = false
-        _cardWriteTarget.value = null
-        if (tag == null) {
-            event("Couldn't read that tag - try again.")
-            return
-        }
-        // The card must BE the tag's own card: the presented card's NFC
-        // ID has to match the tag's uid (the same string the tags table
-        // stores). A different card is reported and left untouched.
-        if (uid != target.uid) {
-            event("That card's NFC ID doesn't match this tag's - nothing was written.")
-            return
-        }
-        viewModelScope.launch {
-            // The full payload: the tag's name + ordered song list (the
-            // names the list shows, missing songs' snapshot names
-            // included - the restore source for a re-registered tag). The
-            // play mode is no longer part of the written payload.
-            val names = repository.songNamesForTag(target.id)
-            val payload = LumiTagData(name = target.name, songs = names)
-            val messageBytes = LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(payload))
-            if (messageBytes > LumiTagNdef.MAX_PAYLOAD_BYTES) {
-                event(
-                    "The tag's data is too large to save to a tag - it needs $messageBytes bytes, the app writes at most ${LumiTagNdef.MAX_PAYLOAD_BYTES}. Nothing was written.",
-                )
-                return@launch
-            }
-            val gate = withContext(Dispatchers.IO) { cardWriteGate(tag, payload) }
-            event(
-                when (gate) {
-                    is CardWriteGate.Ok ->
-                        if (withContext(Dispatchers.IO) { tagWriter(tag, payload) }) {
-                            // The write landed: the card now carries the
-                            // name + songs (the app's url-less payload),
-                            // and the per-uid memory follows the written
-                            // card (the restore source that survives the
-                            // tag row's deletion; the save section's
-                            // in-sync indicator recomputes from it).
-                            repository.rememberTag(target.uid, target.name, names)
-                            _tagSongUrls.value = _tagSongUrls.value + (uid to emptyMap())
-                            "Saved to the tag."
-                        } else {
-                            "Couldn't write to that tag - keep it on the phone and try again."
-                        }
-                    is CardWriteGate.NotNdef ->
-                        "That tag isn't an NDEF tag - nothing was written."
-                    is CardWriteGate.ReadOnly ->
-                        "That tag is read-only - nothing was written."
-                    is CardWriteGate.TooSmall ->
-                        "That tag is too small for the tag's data - it holds ${gate.capacityBytes} bytes, the data needs ${gate.neededBytes}. Nothing was written."
-                },
-            )
-        }
-    }
-
-    /**
-     * Settles a tag read while a COMPARE scan is armed (the tag details
-     * page's "Save to NFC tag" section's "Scan to compare" action): the
-     * read's card is READ - not written - and its lumi payload (name +
-     * songs) is recorded as the tag's per-uid saved memory, but ONLY
-     * when the card's NFC ID ([uid]) is the tag's own uid: a mismatched
-     * card is reported with the write path's own verdict language and
-     * nothing is recorded. For the matching card the read's payload is
-     * the card's ACTUAL current contents: a card that carries a lumi
-     * record updates the memory to it (the section's in-sync indicator
-     * then recomputes from the comparison - InSync when the card equals
-     * the tag's current system data, Differs when it does not), and a
-     * card that carries NO lumi data CLEARS the record (the indicator
-     * goes Unknown - nothing saved or compared). A read that could not
-     * connect says nothing about the card's payload (it must never be
-     * read as "the card carries no record"), so it reports and records
-     * nothing. The scan settles either way (disarmed): further reads are
-     * normal reads, never re-routed to the compare.
-     */
-    private fun settleCardCompare(target: TagEntity, uid: String, tag: Tag?) {
-        _scanActive.value = false
-        _cardCompareTarget.value = null
-        if (tag == null) {
-            event("Couldn't read that tag - try again.")
-            return
-        }
-        // The card must BE the tag's own card (the same uid-match the
-        // write path enforces): a different card is reported with the
-        // write path's own verdict language and left untouched.
-        if (uid != target.uid) {
-            event("That card's NFC ID doesn't match this tag's - nothing was written.")
-            return
-        }
-        viewModelScope.launch {
-            val read = withContext(Dispatchers.IO) { songPayloadReader(tag) }
-            when (read) {
-                is TagPayloadRead.Answered -> {
-                    val data = read.data
-                    if (data != null) {
-                        // The card's ACTUAL contents become the tag's
-                        // last known tag state (the per-uid memory): the
-                        // indicator recomputes from the comparison.
-                        repository.rememberTag(uid, data.name, data.songs)
-                        val systemNames = repository.songNamesForTag(target.id)
-                        event(
-                            if (data.name == target.name && data.songs == systemNames) {
-                                "In sync - no changes since the last save."
-                            } else {
-                                "This tag's data differs from the saved tag."
-                            },
-                        )
-                    } else {
-                        // The card carries no lumi data: the record is
-                        // cleared (the indicator goes Unknown - nothing
-                        // saved or compared).
-                        repository.forgetTag(uid)
-                        event("That tag carries no saved data.")
-                    }
-                }
-
-                is TagPayloadRead.Failed -> event("Couldn't read that tag - try again.")
             }
         }
     }
@@ -815,40 +468,54 @@ class LumiViewModel(
         viewModelScope.launch { repository.setAutoLockDelay(delay) }
         // The running stretch follows the new choice immediately: the
         // timer re-arms (or disarms) against the current playback state.
-        applyAutoLockDelayToTimer(delay)
+        autoLockEngine.applyAutoLockDelayToTimer(delay)
     }
-
-    // Test seams (declared before the admin-state flow below, whose
-    // initializer reads the first one):
-    // the device-admin state check (the real one asks the platform's
-    // DevicePolicyManager), the actual screen lock (the real one is
-    // DevicePolicyManager.lockNow, only valid while the admin is active),
-    // and the wall clock the idle timer reads.
-    internal var isDeviceAdminActive: (ComponentName) -> Boolean = { admin ->
-        (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager)
-            .isAdminActive(admin)
-    }
-
-    internal var lockDevice: () -> Unit = {
-        (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager)
-            .lockNow()
-    }
-
-    internal var clock: () -> Long = System::currentTimeMillis
 
     /**
-     * Whether the host activity is in the foreground right now
+     * The auto-lock engine (the System setting's "Auto-lock after idle"): the
+     * idle timer's decision logic (pure - the wall clock is fed in through
+     * the engine's own [clock] seam) driven from the shared player state,
+     * so the idle stretch outlives a settings pane leaving and coming back
+     * and the lock mechanism is a device admin (the engine's real
+     * [lockDevice] seam is DevicePolicyManager.lockNow, only valid while
+     * the admin is active). The engine owns its own collectors (the stored
+     * delay, the shared player state, and the tick loop) and reads the
+     * [autoLockDelay] and [keepScreenOn] flows passed to it - both declared
+     * above, so property-initializer order keeps them initialized before
+     * the engine is constructed; the engine's own init-ordering sharp edge
+     * (an inline first emission during construction) lives inside
+     * [AutoLockEngine].
+     */
+    private val autoLockEngine =
+        AutoLockEngine(context, autoLockDelay, keepScreenOn, viewModelScope)
+
+    // The engine's auto-lock surface, delegated (tests reach the seams
+    // through the view model): the device-admin state check, the actual
+    // screen lock, the wall clock the idle timer reads, and the foreground
+    // gate the tick's lock applies against.
+    internal var isDeviceAdminActive: (ComponentName) -> Boolean
+        get() = autoLockEngine.isDeviceAdminActive
+        set(value) { autoLockEngine.isDeviceAdminActive = value }
+
+    internal var lockDevice: () -> Unit
+        get() = autoLockEngine.lockDevice
+        set(value) { autoLockEngine.lockDevice = value }
+
+    internal var clock: () -> Long
+        get() = autoLockEngine.clock
+        set(value) { autoLockEngine.clock = value }
+
+    /** Whether the host activity is in the foreground right now
      * ([MainActivity] keeps it in sync from onResume / onPause): the
      * auto-lock may lock the screen only while the app is in the
-     * foreground - an idle stretch that elapses while the user is in
-     * another app is held, not fired, and fires on the first foreground
-     * tick.
-     */
-    internal var appInForeground: Boolean = false
+     * foreground. */
+    internal var appInForeground: Boolean
+        get() = autoLockEngine.appInForeground
+        set(value) { autoLockEngine.appInForeground = value }
 
     /** The app's own screen-lock device admin (the auto-lock's consent target). */
-    val deviceAdminComponent: ComponentName =
-        ComponentName(context.packageName, LumiDeviceAdminReceiver::class.java.name)
+    val deviceAdminComponent: ComponentName
+        get() = autoLockEngine.deviceAdminComponent
 
     /**
      * Whether the app's screen-lock device admin is active right now. The
@@ -856,129 +523,34 @@ class LumiViewModel(
      * and usable either way (the System page prompts to enable it when it
      * is not, and the app keeps working without the admin).
      */
-    private val _deviceAdminActive =
-        MutableStateFlow(isDeviceAdminActive(deviceAdminComponent))
-    val deviceAdminActive: StateFlow<Boolean> = _deviceAdminActive.asStateFlow()
+    val deviceAdminActive: StateFlow<Boolean>
+        get() = autoLockEngine.deviceAdminActive
 
     /**
      * The auto-lock's claim on the screen (the lock wins over keep
      * screen-on): set when the idle timeout fires and the lock is
      * applied, cleared when music plays again - until then the app's own
      * keep-screen-on flag must not keep the (locked) screen awake.
-     * Declared BEFORE the engine's init block: its player-state collector
-     * is delivered inline on the main thread during construction (the
-     * scope's Main.immediate), so a construction that starts while music
-     * is already playing writes this flow before the property's own
-     * initializer would have run - a not-yet-initialized flow is a
-     * cold-start-during-playback crash.
      */
-    private val _autoLockKeepScreenSuppressed = MutableStateFlow(false)
-    val autoLockKeepScreenSuppressed: StateFlow<Boolean> =
-        _autoLockKeepScreenSuppressed.asStateFlow()
+    val autoLockKeepScreenSuppressed: StateFlow<Boolean>
+        get() = autoLockEngine.autoLockKeepScreenSuppressed
 
     /**
      * Whether the window should carry FLAG_KEEP_SCREEN_ON right now: the
      * user's keep-screen-on choice AND the auto-lock not having claimed the
      * screen (the lock wins over keep-screen-on until music plays again).
      */
-    val keepScreenOnEffective: StateFlow<Boolean> =
-        keepScreenOn.combine(autoLockKeepScreenSuppressed) { on, suppressed ->
-            on && !suppressed
-        }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    // The auto-lock engine (the System setting's "Auto-lock after idle"),
-    // driven from the shared player state so it is unit-testable and
-    // survives the settings screens' navigation: the stored delay is
-    // applied to the timer whenever it lands (or changes), every playback
-    // change resets/arms the idle stretch, and a loop ticks the timer
-    // until the stretch's idle time elapses (the lock then wins over
-    // keep-screen-on - see [performAutoLock]). The loop runs for the view
-    // model's lifetime (the app's process), so the idle time is measured
-    // while the app sits open and idle, foreground or background; only a
-    // process death loses the running stretch - but the lock itself is
-    // applied only while the activity is in the foreground (the tick holds
-    // an elapsed stretch while the app is backgrounded - see
-    // [runAutoLockTick]). This init block runs AFTER
-    // the [autoLockDelay] property and the test seams above (property
-    // initializers and init blocks run in source order), so the collectors
-    // cannot NPE on a not-yet-initialized property.
-    init {
-        viewModelScope.launch {
-            autoLockDelay.collect { delay ->
-                applyAutoLockDelayToTimer(delay)
-            }
-        }
-        viewModelScope.launch {
-            PlayerStateHolder.state.collect { state ->
-                onPlaybackStatusForAutoLock(state.isPlaying)
-            }
-        }
-        viewModelScope.launch {
-            while (true) {
-                delay(AUTO_LOCK_TICK_MS)
-                runAutoLockTick()
-            }
-        }
-    }
+    val keepScreenOnEffective: StateFlow<Boolean>
+        get() = autoLockEngine.keepScreenOnEffective
 
     /**
-     * Feeds the auto-lock timer with a playback state change (the engine's
-     * own collector of the shared player state forwards every change): an
-     * active playback resets the idle stretch and releases the keep-screen-
-     * on suppression; an inactive state starts (or keeps) the stretch.
+     * One idle check: the production loop calls this every second; tests
+     * drive it with a faked clock. Returns true when the idle timeout fired
+     * on this tick - and the lock is applied only while the activity is in
+     * the foreground (an elapsed stretch is held while backgrounded, see
+     * [AutoLockEngine.runAutoLockTick]).
      */
-    private fun onPlaybackStatusForAutoLock(isPlaying: Boolean) {
-        val now = clock()
-        autoLockTimer.onPlaybackStatus(isPlaying, now)
-        if (isPlaying) _autoLockKeepScreenSuppressed.value = false
-    }
-
-    /**
-     * One idle check: the production loop calls this every
-     * [AUTO_LOCK_TICK_MS]; tests drive it with a faked clock. Returns true
-     * when the idle timeout fired on this tick. The lock is applied only
-     * while the activity is in the foreground: while it is not, an elapsed
-     * stretch is HELD - the tick reports nothing and the stretch stays
-     * un-fired - so it fires on the first tick once the app is back in the
-     * foreground, never mid-way through the user's time in another app.
-     */
-    internal fun runAutoLockTick(): Boolean {
-        if (!appInForeground) return false
-        return if (autoLockTimer.tick(clock())) {
-            performAutoLock()
-            true
-        } else {
-            false
-        }
-    }
-
-    /** The idle timeout fired: lock the screen - or not, when the admin is
-     * not active (the app keeps working, the setting stays visible). */
-    private fun performAutoLock() {
-        val adminActive = isDeviceAdminActive(deviceAdminComponent)
-        _deviceAdminActive.value = adminActive
-        if (adminActive) {
-            lockDevice()
-            // The lock wins over keep-screen-on: the screen is being locked
-            // now, so the app's own keep-screen-on flag must not keep it
-            // awake (and must not be re-applied while the stretch lasts).
-            _autoLockKeepScreenSuppressed.value = true
-            Log.i(TAG, "Auto-lock: the idle timeout fired and the screen was locked")
-        } else {
-            Log.w(
-                TAG,
-                "Auto-lock: the idle timeout fired but the screen-lock permission " +
-                    "(device admin) is not active - the screen stays unlocked",
-            )
-        }
-    }
-
-    private fun applyAutoLockDelayToTimer(delay: AutoLockDelay) {
-        val now = clock()
-        autoLockTimer.setDelay(delay.minutes * 60_000L, now)
-        autoLockTimer.onPlaybackStatus(PlayerStateHolder.state.value.isPlaying, now)
-    }
+    internal fun runAutoLockTick(): Boolean = autoLockEngine.runAutoLockTick()
 
     /**
      * Re-checks the screen-lock admin's real state with the platform:
@@ -986,7 +558,7 @@ class LumiViewModel(
      * app's back) and after the enable flow's result comes back.
      */
     fun refreshDeviceAdminState() {
-        _deviceAdminActive.value = isDeviceAdminActive(deviceAdminComponent)
+        autoLockEngine.refreshDeviceAdminState()
     }
 
     /**
@@ -995,20 +567,12 @@ class LumiViewModel(
      * lock the screen, so the explanation states exactly that. The result
      * is fed back through [onDeviceAdminResult].
      */
-    fun deviceAdminIntent(): Intent =
-        Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, deviceAdminComponent)
-            putExtra(
-                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "lumi is asking for permission to lock the phone's screen after " +
-                    "music has stopped playing for the time you choose in the System setting.",
-            )
-        }
+    fun deviceAdminIntent(): Intent = autoLockEngine.deviceAdminIntent()
 
     /** The device-admin enable flow's result: the platform's real state is
      * the authority, so re-check it (a cancel and a grant both land here). */
     fun onDeviceAdminResult(resultCode: Int) {
-        refreshDeviceAdminState()
+        autoLockEngine.onDeviceAdminResult(resultCode)
     }
 
     // ---- content: manual playback (the play buttons) ----
@@ -1124,162 +688,68 @@ class LumiViewModel(
     private companion object {
         /** How long a song's metadata read may take before it gives up. */
         const val METADATA_READ_TIMEOUT_MS = 5_000L
-
-        /** How often the auto-lock idle timer is checked. */
-        const val AUTO_LOCK_TICK_MS = 1_000L
     }
 
     // ---- settings: tags ----
 
     /**
-     * Arms a tag scan (the NFC tags pane's "Scan NFC" action): the next
-     * tag read settles it - a registered tag opens its profile page, an
-     * unregistered one goes into the registration flow (capture, naming
-     * dialog - registration never writes the card). Reuses the app's only
-     * read path - the foreground-dispatch read into [onTagDetected] - so
-     * only the flag checked there differs.
+     * Arms a tag scan (the NFC tags pane's "Scan NFC" action) - the scan
+     * and its settle live in [nfcCoordinator] (see
+     * [NfcTagCoordinator.startScan]).
      */
     fun startTagScan() {
-        _capturedUid.value = null
-        _scanAssignEntry.value = null
-        _cardWriteTarget.value = null
-        _cardCompareTarget.value = null
-        _scanActive.value = true
+        nfcCoordinator.startScan()
     }
 
-    /**
-     * Arms the unified scan targeting [entry] (the song profile's
-     * "Scan a tag to assign" action): a read of a registered tag links the
-     * song to it through the existing link mechanism, and a read of an
-     * unregistered one registers it first (the naming dialog) and links
-     * the song once the tag is saved. The scan dialog ([scanActive]) and
-     * the foreground-dispatch read path ([onTagDetected]) are the app's
-     * only ones - only what a settled read links differs.
-     */
+    /** Arms the unified scan targeting [entry] (the song profile's "Scan a tag to assign" action) - see [NfcTagCoordinator.startScanForEntry]. */
     fun startTagScanForEntry(entry: EntryEntity) {
-        _capturedUid.value = null
-        _scanAssignEntry.value = entry
-        _cardWriteTarget.value = null
-        _cardCompareTarget.value = null
-        _scanActive.value = true
+        nfcCoordinator.startScanForEntry(entry)
     }
 
-    /**
-     * Arms the card-write scan (the tag details page's "Save to NFC tag"
-     * section's write action): the next tag read - through the app's own
-     * foreground-dispatch read path ([onTagDetected]) - writes [tag]'s
-     * data to it ONLY when that card's NFC ID is the tag's own uid
-     * (see [settleCardWrite]); a card with a different NFC ID is
-     * reported and nothing is written. The scan dialog's copy asks the
-     * user to hold the tag's own tag against the back of the phone.
-     */
+    /** Arms the card-write scan (the tag details page's "Save to NFC tag" section's write action) - see [NfcTagCoordinator.startCardWrite]. */
     fun startCardWrite(tag: TagEntity) {
-        _capturedUid.value = null
-        _scanAssignEntry.value = null
-        _cardCompareTarget.value = null
-        _cardWriteTarget.value = tag
-        _scanActive.value = true
+        nfcCoordinator.startCardWrite(tag)
     }
 
-    /**
-     * Arms the COMPARE scan (the tag details page's "Save to NFC tag"
-     * section's "Scan to compare" action): the next tag read - through
-     * the app's own foreground-dispatch read path ([onTagDetected]) -
-     * READS [tag]'s own card (its NFC ID must match the tag's uid; a
-     * mismatched card is reported and nothing is recorded) and records
-     * the card's actual contents as the tag's per-uid memory (see
-     * [settleCardCompare]); the section's in-sync indicator recomputes
-     * from the comparison.
-     */
+    /** Arms the COMPARE scan (the save section's "Scan to compare" action) - see [NfcTagCoordinator.startCardCompare]. */
     fun startCardCompare(tag: TagEntity) {
-        _capturedUid.value = null
-        _scanAssignEntry.value = null
-        _cardWriteTarget.value = null
-        _cardCompareTarget.value = tag
-        _scanActive.value = true
+        nfcCoordinator.startCardCompare(tag)
     }
 
     fun cancelTagScan() {
-        _scanActive.value = false
-        _scanAssignEntry.value = null
-        _cardWriteTarget.value = null
-        _cardCompareTarget.value = null
+        nfcCoordinator.cancelScan()
     }
 
     /** Consumes the resolved scan target (the settings screen has opened the tag's profile page). */
     fun consumePendingTagProfile() {
-        _pendingTagProfile.value = null
+        nfcCoordinator.consumePendingTagProfile()
     }
 
     /**
-     * Records a tag captured during a registration session, reading its
-     * lumi payload (for the name/songs form prefill) and merging the
-     * card's per-uid memory (the last saved name + song list) as the
-     * fallback prefill and restore source. Registration NEVER writes the
-     * physical card - the explicit card-write action (the tag detail page's
-     * "Save to NFC tag") is the only write path.
+     * Records a tag captured during a registration session - see
+     * [NfcTagCoordinator.capture].
      */
     internal fun capture(uid: String, tag: Tag? = null) {
-        _capturedUid.value = uid
-        if (tag == null) {
-            _capturedTagData.value = null
-            _capturedRestoreSongs.value = emptyList()
-            return
-        }
-        viewModelScope.launch {
-            // One NDEF session reads the payload - this presentation's
-            // only NDEF read: the card's urls publish from its own result,
-            // so no second read races it for the tag's single connection
-            // slot.
-            val inspected = withContext(Dispatchers.IO) {
-                tagInspector(tag, LumiTagData(name = ""))
-            }
-            if (_capturedUid.value != uid) return@launch
-            when (val read = inspected.read) {
-                is TagPayloadRead.Answered -> {
-                    publishCapture(uid, read.data)
-                    publishSongUrls(uid, read)
-                }
-
-                is TagPayloadRead.Failed -> publishCapture(uid, null)
-            }
-        }
+        nfcCoordinator.capture(uid, tag)
     }
 
     /** Test seam: capture with an explicit payload (no live tag). */
     internal fun captureForTest(uid: String, data: LumiTagData?) {
-        _capturedUid.value = uid
-        viewModelScope.launch { publishCapture(uid, data) }
-    }
-
-    /**
-     * Publishes a capture's prefill + restore songs: the payload when it
-     * offers the name (a payload-less card falls back to the card's
-     * REMEMBERED name, and a nameless payload to the remembered one), and
-     * the restore song list (the payload's songs when non-empty, else the
-     * remembered songs).
-     */
-    private suspend fun publishCapture(uid: String, data: LumiTagData?) {
-        val memory = repository.memoryForUid(uid)
-        _capturedTagData.value = when {
-            data == null -> memory?.name?.takeIf { it.isNotBlank() }?.let { LumiTagData(it) }
-            data.name.isBlank() && (memory?.name?.isNotBlank() == true) -> data.copy(name = memory.name)
-            else -> data
-        }
-        _capturedRestoreSongs.value = data?.songs?.takeIf { it.isNotEmpty() } ?: (memory?.songs ?: emptyList())
+        nfcCoordinator.captureForTest(uid, data)
     }
 
     /** Test seam: the physical card write, replaced in unit tests. */
-    internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean = { tag, data ->
-        LumiTagNdef.write(tag, data)
-    }
+    internal var tagWriter: suspend (Tag?, LumiTagData) -> Boolean
+        get() = nfcCoordinator.tagWriter
+        set(value) { nfcCoordinator.tagWriter = value }
+
     /**
      * Test seam: the physical tag inspect (payload + writability in one
      * NDEF session), replaced in unit tests.
      */
-    internal var tagInspector: (Tag?, LumiTagData) -> TagInspect = { tag, fallback ->
-        LumiTagNdef.inspect(tag, fallback)
-    }
+    internal var tagInspector: (Tag?, LumiTagData) -> TagInspect
+        get() = nfcCoordinator.tagInspector
+        set(value) { nfcCoordinator.tagInspector = value }
 
     /**
      * Test seam: the card's lumi payload read for the per-song download
@@ -1287,9 +757,9 @@ class LumiViewModel(
      * card's payload, a failed read keeps the last known urls), replaced
      * in unit tests.
      */
-    internal var songPayloadReader: suspend (Tag?) -> TagPayloadRead = { tag ->
-        LumiTagNdef.readFromTag(tag)
-    }
+    internal var songPayloadReader: suspend (Tag?) -> TagPayloadRead
+        get() = nfcCoordinator.songPayloadReader
+        set(value) { nfcCoordinator.songPayloadReader = value }
 
     /**
      * Test seam: the song download (the Music/lumi MediaStore write),
@@ -1332,72 +802,12 @@ class LumiViewModel(
     }
 
     fun discardCaptured() {
-        _capturedUid.value = null
-        _scanAssignEntry.value = null
-        _capturedTagData.value = null
-        _capturedRestoreSongs.value = emptyList()
+        nfcCoordinator.discardCaptured()
     }
 
-    /**
-     * Saves the captured tag under [name]. Registration never writes the
-     * physical card - the explicit card-write action is the only write
-     * path - but it remembers the card's last saved name + song list (the
-     * per-card memory that survives the tag row's deletion): when the card
-     * comes back with an EMPTY tag (its tag was deleted and re-registered,
-     * or a fresh registration of a card whose payload carries songs), the
-     * capture's restore song list (the payload's songs, else the remembered
-     * ones) is linked onto the tag name-for-name, with each name resolving
-     * to the live content entry that plays it - a name of exactly the
-     * payload's 50-char clamp that no entry carries exactly resolves to
-     * the one longer stored label it was clamped from, and only when
-     * exactly one label starts with it (the link stores that label in
-     * full) - or staying a "song not found" row when nothing resolves
-     * (no exact match, or several labels share the clamped prefix).
-     */
+    /** Saves the captured tag under [name] - see [NfcTagCoordinator.confirmTagName]. */
     fun confirmTagName(name: String) {
-        val uid = _capturedUid.value ?: return
-        val restoreSongs = _capturedRestoreSongs.value
-        // A scan-to-assign's target song, if the capture came from one: it
-        // is linked once this save settles (below).
-        val assignEntry = _scanAssignEntry.value
-        _capturedUid.value = null
-        _capturedTagData.value = null
-        _capturedRestoreSongs.value = emptyList()
-        viewModelScope.launch {
-            val saved = repository.addTag(uid, name)
-            event(if (saved != null) "Tag added!" else "That tag is already registered.")
-            val tag = saved ?: repository.tagByUid(uid)
-            // The card's songs restored onto a tag that came back empty -
-            // the card payload's list when it carried one, else the
-            // remembered per-uid list. Names land in their carried order;
-            // each resolves to the live content entry its name points at
-            // (a 50-char clamped name the payload's name cap wrote as a
-            // prefix resolves to the one longer stored label it was
-            // clamped from, and only when exactly one label starts with
-            // it; a name the content carries in no form resolves to
-            // nothing), and the link stores that entry's full label - or
-            // the carried name, when nothing resolves (the tag's "song not
-            // found" row).
-            if (tag != null && restoreSongs.isNotEmpty() && repository.entriesForTag(tag.id).isEmpty()) {
-                restoreSongs.distinct().forEach { songName ->
-                    val entry = repository.entryByLabel(songName)
-                    repository.insertLinkByName(tag.id, entry?.label ?: songName, entry?.id)
-                }
-            }
-            // The card's last saved name + song list remembered per uid -
-            // the restore source that survives this tag row's deletion.
-            // The name is stored the way the tag row stores it (trimmed),
-            // so a later re-scan prefills exactly what was saved.
-            tag?.let { repository.rememberTag(uid, name.trim(), repository.songNamesForTag(it.id)) }
-            if (saved != null) _selectedTagId.value = saved.id
-            // The scan-to-assign's song is assigned once its tag is saved -
-            // the tag it was scanned against, looked up by uid when the tag
-            // already existed.
-            assignEntry?.let { entry ->
-                _scanAssignEntry.value = null
-                tag?.let { linkEntryToTag(it, entry) }
-            }
-        }
+        nfcCoordinator.confirmTagName(name)
     }
 
     fun removeTag(tag: TagEntity) {
@@ -1417,6 +827,14 @@ class LumiViewModel(
     }
 
     // ---- settings: entries ----
+
+    /**
+     * The picked-folder tree reader (the SAF documents provider's
+     * tree-scoped listing seam and the guarded tree walks behind the
+     * folder add, rescan, removal, and folder-page song list): unit tests
+     * replace its seam through the [folderChildren] delegate below.
+     */
+    private val folderTreeReader = FolderTreeReader(context)
 
     /** Persist the SAF grant, then store the picked file as an entry. */
     fun addFileEntry(uri: Uri, type: EntryType, displayName: String?) {
@@ -1452,10 +870,10 @@ class LumiViewModel(
             if (!persistReadGrant(treeUri)) return@launch
             // Remember the folder so it can be rescanned later for new songs.
             // The label query is a ContentResolver read, so keep it off the main thread.
-            val label = withContext(Dispatchers.IO) { folderDisplayName(treeUri) }
+            val label = withContext(Dispatchers.IO) { folderTreeReader.folderDisplayName(treeUri) }
             val folder = repository.rememberFolder(treeUri.toString(), label)
             val scanned = try {
-                withContext(Dispatchers.IO) { scanFolderAudioFiles(treeUri) }
+                withContext(Dispatchers.IO) { folderTreeReader.scanFolderAudioFiles(treeUri) }
             } catch (e: Exception) {
                 // The per-node attribution (which folder uri threw) is logged
                 // by scanFolderAudioFiles' seam; this is the top-level name.
@@ -1511,7 +929,7 @@ class LumiViewModel(
             val newSongs = try {
                 withContext(Dispatchers.IO) {
                     rescanNewSongs(folder.uri, stored) { folderUri ->
-                        folderChildrenAttributed(Uri.parse(folderUri))
+                        folderTreeReader.folderChildrenAttributed(Uri.parse(folderUri))
                     }
                 }
             } catch (e: Exception) {
@@ -1569,7 +987,7 @@ class LumiViewModel(
         if (_folderRemovalPreview.value != null || removalJob?.isActive == true) return
         removalJob = viewModelScope.launch {
             val walked: List<ScannedSong>? =
-                walkFolderTree("Failed to read the songs of folder ${folder.uri} for removal", folder.uri)
+                folderTreeReader.walkFolderTree("Failed to read the songs of folder ${folder.uri} for removal", folder.uri)
             _folderRemovalPreview.value =
                 if (walked == null) {
                     FolderRemovalPreview(folder, null, null)
@@ -1647,7 +1065,7 @@ class LumiViewModel(
         _folderSongs.value = null
         folderSongsJob = viewModelScope.launch {
             val payloads: Set<String>? =
-                walkFolderTree("Failed to read the songs of folder ${folder.uri} for the folder page", folder.uri)
+                folderTreeReader.walkFolderTree("Failed to read the songs of folder ${folder.uri} for the folder page", folder.uri)
                     ?.let { songs -> songs.map { it.uri }.toSet() }
             // The folder (or the page) may have changed while the walk ran.
             if (selectedFolder?.id != folder.id) return@launch
@@ -1658,192 +1076,14 @@ class LumiViewModel(
     }
 
     /**
-     * The label for a picked folder: the `_display_name` of the folder's own
-     * row, read at the folder's own tree-scoped document uri (see the
-     * [folderChildren] seam's grammar note - the tree uri itself is NOT a
-     * listing uri, so the label is a single-row document query, not a
-     * listing read - and the treeless document uri is not authorized under
-     * the tree grant). The provider may still answer empty (or throw, e.g.
-     * on a revoked grant), so the read is guarded and any provider failure
-     * falls back to the uri string instead of aborting the add.
-     */
-    private fun folderDisplayName(treeUri: Uri): String =
-        try {
-            context.contentResolver
-                .query(
-                    Uri.parse(documentUri(treeUri, treeIdOf(treeUri), folderDocIdOf(treeUri))),
-                    arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                    null,
-                    null,
-                    null,
-                )
-                ?.use { cursor ->
-                    if (!cursor.moveToFirst()) return@use null
-                    cursor.getString(cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
-                }
-                ?.ifEmpty { null }
-                ?: treeUri.toString()
-        } catch (_: Exception) {
-            treeUri.toString()
-        }
-
-    /**
      * Test seam: the documents provider's folder listing (a folder uri to
-     * its direct children), replaced in unit tests with a fake tree.
-     *
-     * The SAF picker persists a grant on the picked tree uri
-     * (`tree/<treeId>`), and the framework's permission check authorizes
-     * ONLY the tree-scoped shapes under that grant: every treeless
-     * `document/<docId>(/children)` query against the tree's provider is
-     * rejected with `SecurityException: Permission Denial ... requires
-     * that you obtain access using ACTION_OPEN_DOCUMENT` (device-proven on
-     * Android 14 - that denial is what made the pre-fix treeless seam
-     * import zero songs for EVERY folder and surface the generic "Couldn't
-     * read that folder's songs."). So this seam lists every folder - the
-     * tree's root and each subfolder alike - at the tree-scoped
-     * `tree/<treeId>/document/<docId>/children` under the grant's own
-     * treeId, and a folder's node uri is its own tree-scoped document uri
-     * `tree/<treeId>/document/<docId>` - never the bare tree uri (the
-     * provider's matcher has no entry for a bare tree uri) and never a
-     * treeless
-     * `document/` uri (the permission layer denies it under the tree
-     * grant).
-     *
-     * A picked tree's docIds contain `/` and `:` (e.g.
-     * `primary:Music/Album/song.mp3`), so every uri this seam builds carries
-     * the treeId and the docId each percent-encoded into ONE path segment
-     * (`Uri.encode(id, null)` + `encodedPath`), and a stored payload is
-     * openable under the tree grant alone (device-proven: the treeless
-     * `document/<docId>` payload fails with a SecurityException under the
-     * same grant, the tree-scoped one opens).
-     *
-     * The provider's cursor carries the DocumentsContract columns
-     * `document_id`, `_display_name` and `mime_type` - the constants
-     * [DocumentsContract.Document.COLUMN_DOCUMENT_ID],
-     * [DocumentsContract.Document.COLUMN_DISPLAY_NAME] and
-     * [DocumentsContract.Document.COLUMN_MIME_TYPE] (NOT the `_id`/
-     * `_mime_type` names the treeless seam read - the real provider's
-     * cursor has no such columns, so that read crashed on the first row -
-     * device-proven), and rows are directories when their `mime_type` is
-     * `vnd.android.document/directory` ([DocumentsContract.Document.MIME_TYPE_DIR]).
-     *
-     * The tree uri's docId is its second path segment; a trailing
-     * `:openable` picker suffix on that segment (android.net.Uri has no
-     * `:`-fragment parsing, so it rides in the path) is stripped before the
-     * query - the provider answers only the bare docId. The strip applies
-     * to the picker's tree uri ONLY: the tree-scoped node uris this seam
-     * builds never carry it, and a raw docId may legitimately end in
-     * `:openable` (legal on ext4), so a subfolder's docId is used verbatim.
-     * The folders table stores the picker uri verbatim (normalization is at
-     * query time only).
+     * its direct children), replaced in unit tests with a fake tree -
+     * delegated to [folderTreeReader], whose [folderChildren] KDoc carries
+     * the SAF tree-grant uri grammar this seam enforces.
      */
-    internal var folderChildren: (Uri) -> List<FolderChild> = { folderUri ->
-        val treeId = treeIdOf(folderUri)
-        val docId = folderDocIdOf(folderUri)
-        context.contentResolver
-            .query(
-                listChildrenUri(folderUri, treeId, docId),
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                ),
-                null,
-                null,
-                null,
-            )
-            ?.use { cursor ->
-                val docIdColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                buildList {
-                    while (cursor.moveToNext()) {
-                        val rawDocId = cursor.getString(docIdColumn) ?: continue
-                        // The child's own tree-scoped document uri is the
-                        // walk node for a subfolder AND the stored payload
-                        // for a file - one uri shape for both, openable
-                        // under the tree grant alone.
-                        add(
-                            FolderChild(
-                                displayName = cursor.getString(nameColumn) ?: "",
-                                isDirectory = cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR,
-                                childUri = documentUri(folderUri, treeId, rawDocId),
-                            ),
-                        )
-                    }
-                }
-            }
-            ?: emptyList()
-    }
-
-    /**
-     * The grant's own treeId: the picker's tree uri carries it as its
-     * second path segment (a trailing `:openable` picker suffix on that
-     * segment is stripped - the provider answers only the bare docId), and
-     * every tree-scoped node uri this seam builds carries the same
-     * (already-stripped) treeId as its second segment, verbatim.
-     */
-    private fun treeIdOf(folderUri: Uri): String {
-        val segments = folderUri.pathSegments
-        if (segments.firstOrNull() != "tree") return ""
-        val treeId = segments.getOrNull(1) ?: return ""
-        return if (segments.size == 2) treeId.removeSuffix(":openable") else treeId
-    }
-
-    /** A folder's children listing uri `scheme://authority/tree/<treeId>/document/<docId>/children`, the treeId and the docId each percent-encoded into a single path segment. */
-    private fun listChildrenUri(folderUri: Uri, treeId: String, docId: String): Uri =
-        Uri.Builder()
-            .scheme(folderUri.scheme)
-            .authority(folderUri.authority)
-            .encodedPath("/tree/${Uri.encode(treeId, null)}/document/${Uri.encode(docId, null)}/children")
-            .build()
-
-    /** A child's own uri `scheme://authority/tree/<treeId>/document/<docId>` built from [folderUri]'s scheme + authority, the treeId and the docId each percent-encoded into a single path segment. It is the walk node for a subfolder AND the stored payload for a file - openable under the tree grant alone. */
-    private fun documentUri(folderUri: Uri, treeId: String, docId: String): String =
-        Uri.Builder()
-            .scheme(folderUri.scheme)
-            .authority(folderUri.authority)
-            .encodedPath("/tree/${Uri.encode(treeId, null)}/document/${Uri.encode(docId, null)}")
-            .build()
-            .toString()
-
-    /**
-     * The [folderChildren] seam with per-node failure attribution: a query
-     * that throws names the folder uri that failed and the exception, so a
-     * scan or rescan failure is diagnosable from the log instead of a bare
-     * generic event. The exception is rethrown unchanged.
-     */
-    private fun folderChildrenAttributed(folderUri: Uri): List<FolderChild> =
-        try {
-            folderChildren(folderUri)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to list the children of $folderUri", e)
-            throw e
-        }
-
-    /** Walks [treeUri] through the attributed [folderChildren] seam, keeping the supported audio only. */
-    private fun scanFolderAudioFiles(treeUri: Uri): List<ScannedSong> =
-        collectAudioFiles(treeUri.toString()) { folderUri ->
-            folderChildrenAttributed(Uri.parse(folderUri))
-        }
-
-    /**
-     * The guarded tree walk behind the folder reads: the full
-     * [collectAudioFiles] walk through the attributed seam, settling to
-     * null (and logging [what] with the exception) when the tree can no
-     * longer be read - a revoked grant makes the provider query throw.
-     */
-    private suspend fun walkFolderTree(what: String, folderUri: String): List<ScannedSong>? =
-        try {
-            withContext(Dispatchers.IO) {
-                collectAudioFiles(folderUri) { childUri ->
-                    folderChildrenAttributed(Uri.parse(childUri))
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, what, e)
-            null
-        }
+    internal var folderChildren: (Uri) -> List<FolderChild>
+        get() = folderTreeReader.folderChildren
+        set(value) { folderTreeReader.folderChildren = value }
 
     /**
      * The v3 -> v4 backfill (see [com.lumi.player.data.LumiDatabase.MIGRATION_3_4]):
@@ -1861,7 +1101,7 @@ class LumiViewModel(
         if (folders.isEmpty()) return
         folders.forEach { folder ->
             val payloads: Set<String>? =
-                walkFolderTree("Failed to backfill the songs of folder ${folder.uri}", folder.uri)
+                folderTreeReader.walkFolderTree("Failed to backfill the songs of folder ${folder.uri}", folder.uri)
                     ?.let { songs -> songs.map { it.uri }.toSet() }
             if (!payloads.isNullOrEmpty()) {
                 repository.markEntriesFromFolder(folder.id, payloads)
