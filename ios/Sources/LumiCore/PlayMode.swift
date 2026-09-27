@@ -14,8 +14,8 @@ public enum PlayMode: String, CaseIterable, Codable, Sendable {
     case proximity
 
     /// Reads a stored play mode. Unset or invalid values fall back to
-    /// .continuous - the app's default.
+    /// .proximity - the app's default (a stored mode still wins).
     public static func fromStorage(_ value: String) -> PlayMode {
-        allCases.first { $0.rawValue.caseInsensitiveCompare(value) == .orderedSame } ?? .continuous
+        allCases.first { $0.rawValue.caseInsensitiveCompare(value) == .orderedSame } ?? .proximity
     }
 }

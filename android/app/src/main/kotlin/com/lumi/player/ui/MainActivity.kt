@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var viewModel: LumiViewModel
     private var nfc: NfcAdapter? = null
     private var nfcConfigured = false
-    private var currentMode: PlayMode = PlayMode.CONTINUOUS
+    private var currentMode: PlayMode = PlayMode.PROXIMITY
 
     // NFC availability for the UI prompt. [nfcMissing] = no NFC hardware;
     // [nfcDisabled] = hardware present but the radio is off. [showNfcPrompt]

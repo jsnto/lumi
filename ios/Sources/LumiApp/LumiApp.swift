@@ -8,6 +8,7 @@
 // overrides pause).
 
 import SwiftUI
+import LumiCore
 
 @main
 struct LumiApp: App {
@@ -66,12 +67,12 @@ struct RootView: View {
         .environmentObject(nav)
         // The unified scan's in-progress dialog (the Android
         // SettingsScreen's scan AlertDialog, at the SCREEN level so it
-        // overlays any pane - the card-write scan is armed from the tag
-        // page, the scan-to-assign from the song profile): the title and
-        // the copy branch on what the scan is for (the Android
-        // SettingsScreen's own branches).
+        // overlays any pane - the card-write and compare scans are armed
+        // from the tag page, the scan-to-assign from the song profile):
+        // the title is always "Scan a tag" and the copy branches on what
+        // the scan is for (the Android SettingsScreen's own branches).
         .alert(
-            model.cardWriteTargetId != nil ? "Scan a card" : "Scan a tag",
+            "Scan a tag",
             isPresented: Binding(get: { model.scanActive }, set: { if !$0 { model.stopTagScan() } }),
         ) {
             Button("Cancel", role: .cancel) { model.stopTagScan() }
@@ -99,14 +100,18 @@ struct RootView: View {
 
     /// The scan dialog's copy (the Android SettingsScreen's branches,
     /// in the Android's own priority order): the scan-to-assign names
-    /// the song it will link, the card-write asks for the tag's own
-    /// card, and the plain scan asks for any tag.
+    /// the song it will link, the compare asks for the tag's own tag to
+    /// read what it carries, the card-write asks for it to save the
+    /// tag's data to it, and the plain scan asks for any tag.
     private var scanDialogMessage: String {
         if let entryId = model.scanAssignEntryId, let entry = model.store.entryById(entryId) {
-            return "Hold the back of the phone against any NFC tag to add “\(entry.label)” to it."
+            return "Hold the back of the phone against any NFC tag to add \(entry.label) to it."
+        }
+        if model.cardCompareTargetId != nil {
+            return "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to read what it carries. A tag with a different NFC ID is not recorded."
         }
         if model.cardWriteTargetId != nil {
-            return "Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written."
+            return "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written."
         }
         return "Hold the back of the phone against any NFC tag…"
     }

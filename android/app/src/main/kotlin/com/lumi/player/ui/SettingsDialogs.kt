@@ -321,7 +321,7 @@ private fun PickerTreeRows(
  * payload-less or nameless capture). Registration NEVER writes the
  * physical card - the save registers (or updates) the tag and remembers
  * the card's name + song list; the explicit card-write action (the tag
- * detail page's "Save to NFC card") is the only write path.
+ * detail page's "Save to NFC tag") is the only write path.
  */
 @Composable
 internal fun TagNameDialog(

@@ -41,6 +41,7 @@
 
 import CoreNFC
 import Foundation
+import LumiCore
 
 /// What an armed scan settles to.
 public enum ScanOutcome: Equatable {
@@ -54,6 +55,9 @@ public enum ScanOutcome: Equatable {
     case unknownTag(uid: String, payload: LumiTagData?, memory: TagMemoryRecord?)
     /// The card-write scan wrote (or refused) the target tag's data.
     case cardWrite(message: String)
+    /// The card-compare scan read (or cleared) the target tag's card - the
+    /// verdict message for the app model's event line.
+    case cardCompare(message: String)
 }
 
 /// The app model's face for NFC events.
@@ -131,9 +135,13 @@ public final class NfcController: NSObject, ObservableObject {
         /// The tags pane's "Scan NFC": a registered tag opens its page, an
         /// unknown one enters registration.
         case tagScan
-        /// The tag page's "Save to NFC card": writes [target]'s data to the
-        /// presented card when the card's uid matches.
+        /// The tag page's "Save to NFC tag": writes [target]'s data to the
+        /// presented tag when the tag's uid matches.
         case cardWrite(target: Tag)
+        /// The tag page's "Scan to compare": reads [target]'s own tag when
+        /// the tag's uid matches; the card's actual contents become the
+        /// per-uid memory (a blank card clears it).
+        case cardCompare(target: Tag)
     }
 
     private var scanMode: ScanMode = .none
@@ -223,6 +231,10 @@ public final class NfcController: NSObject, ObservableObject {
 
     public func armCardWrite(target: Tag) {
         scanMode = .cardWrite(target: target)
+    }
+
+    public func armCardCompare(target: Tag) {
+        scanMode = .cardCompare(target: target)
     }
 
     public func disarmScan() {
@@ -391,6 +403,14 @@ public final class NfcController: NSObject, ObservableObject {
             settleCardWrite(target: target, uid: uid, tag: tag)
             return
         }
+        if case let .cardCompare(target) = scanMode {
+            // The card-compare scan: the read's payload IS the outcome (the
+            // compare is a read - nil payload = the card carries no lumi
+            // data).
+            scanMode = .none
+            settleCardCompare(target: target, uid: uid, payload: payload)
+            return
+        }
         if scanMode == .tagScan {
             scanMode = .none
             settleTagScan(uid: uid, payload: payload)
@@ -439,7 +459,7 @@ public final class NfcController: NSObject, ObservableObject {
             eventListener?.nfcControllerDidSettleScan(
                 .cardWrite(
                     message:
-                        "The tag's data is too large to save to a card - it needs \(messageBytes) bytes, the app writes at most \(NdefCodec.maxPayloadBytes). Nothing was written.",
+                        "The tag's data is too large to save to a tag - it needs \(messageBytes) bytes, the app writes at most \(NdefCodec.maxPayloadBytes). Nothing was written.",
                 ),
             )
             return
@@ -452,10 +472,10 @@ public final class NfcController: NSObject, ObservableObject {
             guard let self else { return }
             if error == nil {
                 self.onCardWriteLanded(target: target, data: data)
-                self.eventListener?.nfcControllerDidSettleScan(.cardWrite(message: "Saved to the card."))
+                self.eventListener?.nfcControllerDidSettleScan(.cardWrite(message: "Saved to the tag."))
             } else {
                 self.eventListener?.nfcControllerDidSettleScan(
-                    .cardWrite(message: "Couldn't write to that card - keep it on the phone and try again."),
+                    .cardWrite(message: "Couldn't write to that tag - keep it on the phone and try again."),
                 )
             }
         }
@@ -465,6 +485,59 @@ public final class NfcController: NSObject, ObservableObject {
     /// ordered song list) and the per-card memory write.
     public var cardWriteDataFor: (Tag) -> LumiTagData? = { _ in nil }
     public var onCardWriteLanded: (Tag, LumiTagData) -> Void = { _, _ in }
+
+    /// The card-compare settle (the Android settleCardCompare, ported): the
+    /// presented tag is the target tag's OWN tag only when its NFC ID
+    /// matches the tag's uid - a mismatched tag is reported with the write
+    /// path's own verdict language and left untouched. A matching tag's
+    /// ACTUAL contents become the tag's per-uid memory (the in-sync
+    /// indicator recomputes); a matching tag that carries no lumi data
+    /// clears the record (the indicator goes unknown). The read here always
+    /// completed (handleRead dispatches only on an answered read), so the
+    /// Android compare's failed-read report has no route here: a read that
+    /// could not complete never settles (the scan stays armed for the next
+    /// read - the write path's own behavior).
+    private func settleCardCompare(target: Tag, uid: String, payload: LumiTagData?) {
+        guard uid == target.uid else {
+            eventListener?.nfcControllerDidSettleScan(
+                .cardCompare(message: "That card's NFC ID doesn't match this tag's - nothing was written."),
+            )
+            return
+        }
+        if let payload {
+            // The card's ACTUAL contents become the tag's last known tag
+            // state (the per-uid memory): the indicator recomputes from
+            // the comparison.
+            let matched = compareMatchesSystemData(target: target, payload: payload)
+            onCardCompared(target, payload)
+            eventListener?.nfcControllerDidSettleScan(
+                .cardCompare(
+                    message: matched
+                        ? "In sync - no changes since the last save."
+                        : "This tag's data differs from the saved tag.",
+                ),
+            )
+        } else {
+            // The card carries no lumi data: the record is cleared (the
+            // indicator goes unknown - nothing saved or compared).
+            onCardCompared(target, nil)
+            eventListener?.nfcControllerDidSettleScan(
+                .cardCompare(message: "That tag carries no saved data."),
+            )
+        }
+    }
+
+    /// The compare's in-sync verdict: the card's contents against the
+    /// tag's current system data (the write payload's own shape - name +
+    /// ordered song display names).
+    private func compareMatchesSystemData(target: Tag, payload: LumiTagData) -> Bool {
+        guard let system = cardWriteDataFor(target) else { return false }
+        return system.name == payload.name && system.songs == payload.songs
+    }
+
+    /// The app model persists the compare's outcome (a nil payload clears
+    /// the tag's memory record).
+    public var onCardCompared: (Tag, LumiTagData?) -> Void = { _, _ in }
     public var memoryRecord: (String) -> TagMemoryRecord? = { _ in nil }
 
     // MARK: - helpers

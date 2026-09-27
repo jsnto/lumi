@@ -38,8 +38,8 @@ import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
 
 /**
- * The tag details page's card information and its "Save to NFC card"
- * action.
+ * The tag details page's card information and its "Save to NFC tag"
+ * section.
  *
  * DETAILS: a presented tag's additional card information - its tech list
  * and, when the handle carries the NDEF tech, its NDEF type, NDEF
@@ -49,18 +49,22 @@ import org.robolectric.shadows.ShadowToast
  * fields, and the details are keyed by the tag's uid, so a read of
  * another tag never surfaces on (or persists into) this tag's page.
  *
- * SAVE TO CARD: the "Save to NFC card" section arms the app's existing
- * foreground-dispatch scan (no reader mode) targeted at a card write
- * for the tag's OWN card: a presented card is written the tag's data
- * (its name and its song list) through the existing write path only
- * when the card's NFC ID matches the tag's uid - a mismatched card is
- * reported and never written. For the matched card, the verdict is
- * discovery-time data: a card that isn't NDEF, is read-only, or is too
- * small to hold the payload is reported, and nothing is written to it;
- * a card that passes is written and the save is confirmed. The scan
- * settles on any read (success, failure, mismatch, or cancel): further
- * reads are normal reads - never re-routed to the write, and never into
- * registration.
+ * SAVE TO TAG: the "Save to NFC tag" section carries the in-sync
+ * indicator (derived: the tag's current system data against its last
+ * known per-uid saved memory) and its two actions. "Scan to compare"
+ * arms the app's existing foreground-dispatch scan (no reader mode)
+ * targeted at a READ of the tag's OWN tag: the card's actual contents
+ * become the tag's per-uid memory (a card with no lumi data clears it).
+ * "Write to NFC tag" arms the same scan targeted at a card write for the
+ * tag's OWN tag: a presented card is written the tag's data (its name and
+ * its song list) through the existing write path only when the card's NFC
+ * ID matches the tag's uid - a mismatched card is reported and never
+ * written. For the matched card, the verdict is discovery-time data: a
+ * card that isn't NDEF, is read-only, or is too small to hold the payload
+ * is reported, and nothing is written to it; a card that passes is written
+ * and the save is confirmed. The scan settles on any read (success,
+ * failure, mismatch, or cancel): further reads are normal reads - never
+ * re-routed to the compare or the write, and never into registration.
  *
  * Tag reads are driven the way the NFC tests drive them: reflectively-
  * built [Tag]s (with the NDEF tech's extras forged the way the framework
@@ -331,12 +335,12 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         // The scan dialog asks for the tag's own card (the card-write
         // copy - the NFC ID must match).
-        compose.onNodeWithText("Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written.").assertExists()
+        compose.onNodeWithText("Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written.").assertExists()
 
         // The physical write seam: record what is written; it must run
         // exactly once, for the card, with the tag's data.
@@ -353,7 +357,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
         assertEquals("the card write ran exactly once", 1, writes)
@@ -386,8 +390,8 @@ class TagCardWriteUiTest {
         // presented card is the tag's own), so the bottom section scrolls
         // back into view before the display assertion (the short test
         // screen clips what it pushes below the fold).
-        compose.onNodeWithText("Save to NFC card").performScrollTo()
-        compose.onNodeWithText("Save to NFC card").assertIsDisplayed()
+        compose.onNodeWithText("Save to NFC tag").performScrollTo()
+        compose.onNodeWithText("Save to NFC tag").assertIsDisplayed()
     }
 
     @Test
@@ -409,8 +413,8 @@ class TagCardWriteUiTest {
             )
         }
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var writes = 0
@@ -424,7 +428,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
         assertEquals("the card write ran exactly once", 1, writes)
@@ -448,8 +452,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         // The physical write seam: it must NEVER run for a card whose
@@ -480,8 +484,8 @@ class TagCardWriteUiTest {
         // presented card is the tag's own), so the bottom section scrolls
         // back into view before the display assertion (the short test
         // screen clips what it pushes below the fold).
-        compose.onNodeWithText("Save to NFC card").performScrollTo()
-        compose.onNodeWithText("Save to NFC card").assertIsDisplayed()
+        compose.onNodeWithText("Save to NFC tag").performScrollTo()
+        compose.onNodeWithText("Save to NFC tag").assertIsDisplayed()
     }
 
     @Test
@@ -489,8 +493,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var writes = 0
@@ -506,7 +510,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID, writable = false))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "That card is read-only - nothing was written." },
+            { ShadowToast.getTextOfLatestToast() == "That tag is read-only - nothing was written." },
             message = "the read-only report",
         )
         assertEquals("nothing was written to the read-only card", 0, writes)
@@ -519,8 +523,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var writes = 0
@@ -536,7 +540,7 @@ class TagCardWriteUiTest {
         idleUntil(
             {
                 val toast = ShadowToast.getTextOfLatestToast()
-                toast != null && toast.startsWith("That card is too small for the tag's data") &&
+                toast != null && toast.startsWith("That tag is too small for the tag's data") &&
                     toast.contains("it holds 20 bytes") && toast.contains("Nothing was written.")
             },
             message = "the too-small report",
@@ -560,10 +564,10 @@ class TagCardWriteUiTest {
 
         // Arm the card-write scan while the tag's list is small (the
         // button is enabled - no songs yet)...
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written.").assertExists()
+        compose.onNodeWithText("Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written.").assertExists()
 
         // ...then grow the list over the cap while the scan is armed.
         val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
@@ -596,7 +600,7 @@ class TagCardWriteUiTest {
             {
                 val toast = ShadowToast.getTextOfLatestToast()
                 toast != null &&
-                    toast.startsWith("The tag's data is too large to save to a card") &&
+                    toast.startsWith("The tag's data is too large to save to a tag") &&
                     toast.contains("it needs $needed bytes") &&
                     toast.contains("Nothing was written.")
             },
@@ -627,7 +631,7 @@ class TagCardWriteUiTest {
             }
         }
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
 
         // The note shows near the button (the mirror's text matcher is
@@ -635,7 +639,7 @@ class TagCardWriteUiTest {
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("This tag's data is too large for the card payload - nothing can be written.").assertExists()
+                    compose.onNodeWithText("This tag's data is too large for the tag payload - nothing can be written.").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
@@ -646,11 +650,11 @@ class TagCardWriteUiTest {
         // ...and the button carries the disabled semantic...
         assertTrue(
             "the save button is disabled while the payload is over the cap",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
         // ...and a tap arms nothing: no scan, no card-write target.
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
         assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
@@ -671,22 +675,22 @@ class TagCardWriteUiTest {
             )
         }
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
 
         // No size note, and the button carries no disabled semantic.
-        compose.onNodeWithText("This tag's data is too large for the card payload - nothing can be written.").assertDoesNotExist()
+        compose.onNodeWithText("This tag's data is too large for the tag payload - nothing can be written.").assertDoesNotExist()
         assertFalse(
             "the save button stays enabled while the payload is under the cap",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
 
         // Tapping it arms the scan (the card-write dialog appears) -
         // then Cancel disarms it again.
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written.").assertExists()
+        compose.onNodeWithText("Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written.").assertExists()
         compose.onNodeWithText("Cancel").performClick()
         compose.waitForIdle()
         assertFalse("the scan is disarmed after the cancel", viewModel.scanActive.value)
@@ -697,8 +701,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         // The physical write seam: the gate must pass the card through
@@ -718,7 +722,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 0))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
         assertEquals("the physical write was attempted on the card", 1, writes)
@@ -731,8 +735,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var writes = 0
@@ -746,7 +750,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID, ndef = false))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "That card isn't an NDEF card - nothing was written." },
+            { ShadowToast.getTextOfLatestToast() == "That tag isn't an NDEF tag - nothing was written." },
             message = "the non-NDEF report",
         )
         assertEquals("nothing was written to the non-NDEF card", 0, writes)
@@ -757,8 +761,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         // The card passes the gate (the tag's own card: NDEF, writable,
@@ -769,7 +773,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "Couldn't write to that card - keep it on the phone and try again." },
+            { ShadowToast.getTextOfLatestToast() == "Couldn't write to that tag - keep it on the phone and try again." },
             message = "the write-failure report",
         )
         assertTrue(!viewModel.scanActive.value)
@@ -781,8 +785,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         // The scan dialog's Cancel disarms the write (the target clears
@@ -835,8 +839,8 @@ class TagCardWriteUiTest {
         idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
 
         // ...and the card-write scan: its read must not run at all.
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var urlReads = 0
@@ -852,7 +856,7 @@ class TagCardWriteUiTest {
 
         sendTag(controller, forgeTag(TAG_UID))
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "Saved to the card." },
+            { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
         // Let the (absent) read settle, then assert the write was the
@@ -884,8 +888,8 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID))
         idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
 
-        compose.onNodeWithText("Scan a card").performScrollTo()
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
         var writes = 0
@@ -897,7 +901,7 @@ class TagCardWriteUiTest {
         sendTag(controller, forgeTag(TAG_UID, writable = false))
 
         idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "That card is read-only - nothing was written." },
+            { ShadowToast.getTextOfLatestToast() == "That tag is read-only - nothing was written." },
             message = "the read-only report",
         )
         assertEquals("nothing was written to the read-only card", 0, writes)
@@ -924,14 +928,14 @@ class TagCardWriteUiTest {
         compose.onNodeWithText("Later").performClick()
         compose.waitForIdle()
         openTagPage()
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
 
         // The note next to the button says why...
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("Turn on NFC to save to card.").assertExists()
+                    compose.onNodeWithText("Turn on NFC to save to tag.").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
@@ -942,12 +946,12 @@ class TagCardWriteUiTest {
         // ...and the button carries the disabled semantic...
         assertTrue(
             "the save button is disabled while the radio is off",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
         // ...and a tap arms nothing: no scan, no card-write target.
         val viewModel = viewModelOf(controller.get())
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
         assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
@@ -965,12 +969,12 @@ class TagCardWriteUiTest {
         compose.onNodeWithText("OK").performClick()
         compose.waitForIdle()
         openTagPage()
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("This device has no NFC, so it can't save to a card.").assertExists()
+                    compose.onNodeWithText("This device has no NFC, so it can't save to a tag.").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
@@ -980,7 +984,7 @@ class TagCardWriteUiTest {
         )
         assertTrue(
             "the save button is disabled with no NFC hardware",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
     }
@@ -999,11 +1003,11 @@ class TagCardWriteUiTest {
         compose.onNodeWithText("Later").performClick()
         compose.waitForIdle()
         openTagPage()
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
         assertTrue(
             "the save button starts disabled while the radio is off",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
 
@@ -1020,8 +1024,8 @@ class TagCardWriteUiTest {
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("Turn on NFC to save to card.").assertDoesNotExist()
-                    !compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+                    compose.onNodeWithText("Turn on NFC to save to tag.").assertDoesNotExist()
+                    !compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                         .config.contains(SemanticsProperties.Disabled)
                 } catch (e: AssertionError) {
                     false
@@ -1031,7 +1035,7 @@ class TagCardWriteUiTest {
         )
         // And the re-enabled button arms the write scan when tapped.
         val viewModel = viewModelOf(controller.get())
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertTrue("the re-enabled button arms the card-write scan", viewModel.scanActive.value)
     }
@@ -1064,13 +1068,13 @@ class TagCardWriteUiTest {
             },
             message = "the read-only detail",
         )
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
 
         // ...the note next to the button says why...
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("That card is read-only, so it can't be written.").assertExists()
+                    compose.onNodeWithText("That tag is read-only, so it can't be written.").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
@@ -1081,11 +1085,11 @@ class TagCardWriteUiTest {
         // ...and the button carries the disabled semantic...
         assertTrue(
             "the save button is disabled while the tag's card is read-only",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
         // ...and a tap arms nothing: no scan, no card-write target.
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
         assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
@@ -1101,12 +1105,12 @@ class TagCardWriteUiTest {
         val viewModel = viewModelOf(controller.get())
 
         sendTag(controller, forgeTag(TAG_UID, ndef = false))
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
 
         idleUntil(
             {
                 try {
-                    compose.onNodeWithText("That card isn't an NDEF card, so it can't be written.").assertExists()
+                    compose.onNodeWithText("That tag isn't an NDEF tag, so it can't be written.").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
@@ -1116,10 +1120,10 @@ class TagCardWriteUiTest {
         )
         assertTrue(
             "the save button is disabled while the tag's card is not an NDEF card",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertFalse("the disabled button arms no scan", viewModel.scanActive.value)
         assertNull("the disabled button sets no card-write target", viewModel.cardWriteTarget.value)
@@ -1135,17 +1139,17 @@ class TagCardWriteUiTest {
         val viewModel = viewModelOf(controller.get())
 
         sendTag(controller, forgeTag(TAG_UID))
-        compose.onNodeWithText("Scan a card").performScrollTo()
+        compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
 
-        compose.onNodeWithText("That card is read-only, so it can't be written.").assertDoesNotExist()
-        compose.onNodeWithText("That card isn't an NDEF card, so it can't be written.").assertDoesNotExist()
+        compose.onNodeWithText("That tag is read-only, so it can't be written.").assertDoesNotExist()
+        compose.onNodeWithText("That tag isn't an NDEF tag, so it can't be written.").assertDoesNotExist()
         assertFalse(
             "the save button stays enabled for the tag's own writable card",
-            compose.onNodeWithText("Scan a card").fetchSemanticsNode()
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
                 .config.contains(SemanticsProperties.Disabled),
         )
-        compose.onNodeWithText("Scan a card").performClick()
+        compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
         assertTrue("the enabled button arms the card-write scan", viewModel.scanActive.value)
     }

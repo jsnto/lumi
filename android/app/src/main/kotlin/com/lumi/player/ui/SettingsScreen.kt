@@ -87,7 +87,7 @@ fun SettingsScreen(
     // (they are visible only inside their folder's own page).
     val individualEntries by viewModel.observeIndividualEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
-    val playMode by viewModel.playMode.collectAsState(PlayMode.CONTINUOUS)
+    val playMode by viewModel.playMode.collectAsState(PlayMode.PROXIMITY)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
     val scanActive by viewModel.scanActive.collectAsState(false)
     val pendingTagProfile by viewModel.pendingTagProfile.collectAsState(null)
@@ -108,10 +108,14 @@ fun SettingsScreen(
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
     val scanAssignEntry by viewModel.scanAssignEntry.collectAsState(null)
-    // The tag whose data a card-write scan will save to a card (the tag
-    // details page's "Save to NFC card"; the scan dialog's copy asks for a
-    // card to hold).
+    // The tag whose data a card-write scan will save to the tag's own
+    // tag (the tag details page's "Save to NFC tag"; the scan dialog's
+    // copy asks for the tag's own tag to hold).
     val cardWriteTarget by viewModel.cardWriteTarget.collectAsState(null)
+    // The tag whose own tag a compare scan will read (the tag details
+    // page's "Save to NFC tag" section's "Scan to compare"; the scan
+    // dialog's copy asks for the tag's own tag to read).
+    val cardCompareTarget by viewModel.cardCompareTarget.collectAsState(null)
     // The selected tag's live song list (the tag detail page's plumbing).
     val linked by viewModel.linkedEntries.collectAsState(emptyList())
     val folderRemoval by viewModel.folderRemovalPreview.collectAsState(null)
@@ -439,9 +443,11 @@ fun SettingsScreen(
     // its profile page, an unregistered one is registered. A scan-to-assign
     // (the song profile's own scan) instead links its target song to the
     // scanned tag, and the copy names the song it will assign. A card-write
-    // scan (the tag details page's "Save to NFC card") writes the tag's
-    // data to the presented card only when its NFC ID matches the tag's,
-    // and the copy asks for the tag's own card.
+    // scan (the tag details page's "Save to NFC tag") writes the tag's
+    // data to the presented tag only when its NFC ID matches the tag's,
+    // and a compare scan (the section's "Scan to compare") reads the
+    // presented tag's own contents the same way - the copy asks for the
+    // tag's own tag in both cases.
     if (scanActive) {
         AlertDialog(
             onDismissRequest = { viewModel.cancelTagScan() },
@@ -450,7 +456,7 @@ fun SettingsScreen(
             icon = { NfcAnchor() },
             title = {
                 Text(
-                    if (cardWriteTarget != null) "Scan a card" else "Scan a tag",
+                    "Scan a tag",
                     style = MaterialTheme.typography.headlineSmall,
                 )
             },
@@ -459,7 +465,8 @@ fun SettingsScreen(
                 Text(
                     when {
                         target != null -> "Hold the back of the phone against any NFC tag to add “${target.label}” to it."
-                        cardWriteTarget != null -> "Hold the tag's own card - the card whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A card with a different NFC ID is not written."
+                        cardCompareTarget != null -> "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to read what it carries. A tag with a different NFC ID is not recorded."
+                        cardWriteTarget != null -> "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written."
                         else -> "Hold the back of the phone against any NFC tag…"
                     },
                 )

@@ -38,7 +38,18 @@ public final class Store {
 
     // MARK: - observation
 
-    public var tags: [Tag] { doc.tags.sorted { $0.createdAt < $1.createdAt || ($0.createdAt == $1.createdAt && $0.id < $1.id) } }
+    /// The tags by name (case-insensitive - the Android tags query's
+    /// `name COLLATE NOCASE ASC`), the stable tie-break (createdAt, then
+    /// id) keeping equal names in creation order.
+    public var tags: [Tag] {
+        doc.tags.sorted {
+            let a = $0.name.lowercased()
+            let b = $1.name.lowercased()
+            if a != b { return a < b }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id < $1.id
+        }
+    }
     public var entries: [Entry] { doc.entries } // insertion order
     public var individualEntries: [Entry] { doc.entries.filter { $0.folderId == nil } }
     public var folders: [Folder] { doc.folders.sorted { $0.createdAt < $1.createdAt } }
@@ -437,15 +448,25 @@ public final class Store {
     }
 
     /// Remembers the last saved name + song list for the card uid [uid] -
-    /// written on registration and on a successful card write. Deleting a
-    /// tag row never touches the record, so re-scanning the same card later
-    /// can restore it.
+    /// written on registration, on a successful card write, and by the
+    /// compare scan (the card's ACTUAL contents). Deleting a tag row never
+    /// touches the record, so re-scanning the same card later can restore
+    /// it.
     public func rememberTag(uid: String, name: String, songs: [String]) {
         let uid = uid.trimmingCharacters(in: .whitespacesAndNewlines)
         mutate { d in
             d.memory[uid] = TagMemoryRecord(name: name, songs: songs)
             return true
         }
+    }
+
+    /// Forgets the per-uid memory record (the compare scan's blank-card
+    /// clear): no record afterwards - the in-sync indicator goes unknown.
+    /// A no-op (false) when the uid has no record.
+    @discardableResult
+    public func forgetTag(uid: String) -> Bool {
+        let uid = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return mutate { d in d.memory.removeValue(forKey: uid) != nil }
     }
 
     // MARK: - remembered positions (per tag, LRU 3)

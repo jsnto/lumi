@@ -20,6 +20,7 @@
 import Combine
 import Foundation
 import os
+import LumiCore
 
 /// The app's own log (store load/save failures must not fail silently).
 private let storeLog = Logger(subsystem: "com.lumi.player", category: "store")
@@ -80,6 +81,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var scanActive: Bool = false
     /// The tag whose card the armed card-write scan writes (nil = none).
     @Published public private(set) var cardWriteTargetId: Int? = nil
+    /// The tag whose own tag the armed compare scan reads (nil = none) -
+    /// the tag page's "Scan to compare" action.
+    @Published public private(set) var cardCompareTargetId: Int? = nil
     /// A registered tag an armed scan just resolved (the Android
     /// pendingTagProfile route): the tags pane opens its detail page and
     /// consumes this.
@@ -119,6 +123,17 @@ public final class AppModel: ObservableObject {
         }
         nfc.onCardWriteLanded = { [weak self] tag, data in
             self?.store.rememberTag(tag.uid, tag.name, data.songs)
+        }
+        nfc.onCardCompared = { [weak self] tag, data in
+            // The compare's persistence: the card's ACTUAL contents become
+            // the per-uid memory; a blank card clears the record (the
+            // in-sync indicator recomputes from the store change).
+            guard let self else { return }
+            if let data {
+                self.store.rememberTag(uid: tag.uid, name: data.name, songs: data.songs)
+            } else {
+                self.store.forgetTag(uid: tag.uid)
+            }
         }
         nfc.memoryRecord = { [store] uid in store.memoryForUid(uid) }
         store.onChange = { [weak self] in
@@ -331,6 +346,7 @@ public final class AppModel: ObservableObject {
         scanActive = false
         scanAssignEntryId = nil
         cardWriteTargetId = nil // the single cancel disarms every armed scan (the Android cancelTagScan)
+        cardCompareTargetId = nil
         nfc.disarmScan()
     }
 
@@ -344,7 +360,7 @@ public final class AppModel: ObservableObject {
         nfc.armTagScan()
     }
 
-    /// The tag page's "Save to NFC card" (the Android startCardWrite):
+    /// The tag page's "Save to NFC tag" (the Android startCardWrite):
     /// the armed state rides the SAME unified-scan flag the dialog is
     /// driven by, so the scan-in-progress dialog (with the card-write's
     /// own copy) appears for the card write too. The payload is refused
@@ -358,8 +374,28 @@ public final class AppModel: ObservableObject {
         capture = nil
         scanAssignEntryId = nil
         cardWriteTargetId = tag.id
+        cardCompareTargetId = nil
         scanActive = true
         nfc.armCardWrite(target: tag)
+        return true
+    }
+
+    /// The tag page's "Scan to compare" (the Android startCardCompare):
+    /// the armed state rides the SAME unified-scan flag the dialog is
+    /// driven by, so the scan-in-progress dialog (with the compare's own
+    /// copy) appears for the compare too. The compare is a READ - it
+    /// works on read-only and blank tags (a blank card is a legitimate
+    /// compare result), so it carries the write's usability gate but not
+    /// the over-cap refusal (a tag that cannot take the payload still
+    /// answers a read).
+    public func startCardCompare(_ tag: Tag) -> Bool {
+        guard isNfcSupported else { return false }
+        capture = nil
+        scanAssignEntryId = nil
+        cardWriteTargetId = nil
+        cardCompareTargetId = tag.id
+        scanActive = true
+        nfc.armCardCompare(target: tag)
         return true
     }
 
@@ -804,6 +840,7 @@ private extension AppModel {
     func settleScan(_ outcome: NfcController.ScanOutcome) {
         scanActive = false
         cardWriteTargetId = nil
+        cardCompareTargetId = nil
         switch outcome {
         case let .registeredTag(tag):
             if let entryId = scanAssignEntryId, let entry = store.entryById(entryId) {
@@ -832,6 +869,8 @@ private extension AppModel {
             if songs.isEmpty { songs = memory?.songs ?? [] }
             capture = CaptureState(uid: uid, name: prefill, restoreSongs: songs)
         case let .cardWrite(message):
+            uiEvent(message)
+        case let .cardCompare(message):
             uiEvent(message)
         }
     }

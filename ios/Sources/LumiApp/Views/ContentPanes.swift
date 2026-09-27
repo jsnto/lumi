@@ -15,6 +15,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import LumiCore
 
 // MARK: - the content pane
 
