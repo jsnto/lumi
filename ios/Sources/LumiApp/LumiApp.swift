@@ -105,7 +105,7 @@ struct RootView: View {
     /// tag's data to it, and the plain scan asks for any tag.
     private var scanDialogMessage: String {
         if let entryId = model.scanAssignEntryId, let entry = model.store.entryById(entryId) {
-            return "Hold the back of the phone against any NFC tag to add \(entry.label) to it."
+            return "Hold the back of the phone against any NFC tag to add “\(entry.label)” to it."
         }
         if model.cardCompareTargetId != nil {
             return "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to read what it carries. A tag with a different NFC ID is not recorded."
