@@ -5,6 +5,7 @@
 // own pop - the Android app's BackHandler semantics).
 
 import SwiftUI
+import LumiCore
 
 struct SettingsMenuPane: View {
     @EnvironmentObject private var model: AppModel

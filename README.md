@@ -12,10 +12,10 @@ Docker (see the Building section and the ios/ README).
 
 1. In **Settings**, register an NFC tag (hold the back of the phone against
    the tag after tapping "Scan NFC" in the NFC tags pane — the dialog lets
-   you name it; registration never writes to the card, and a card
-   previously written with the tag's data
-   (the tag page's "Save to NFC card") pre-fills the name and restores
-   its saved song list), register content (pick an audio file from the
+   you name it; registration never writes to the tag, and a tag
+   previously written with the tag's data (the tag page's "Save to NFC
+   tag" section) pre-fills the name and restores its saved song list),
+   register content (pick an audio file from the
    device, or a whole folder to add every song in it and its subfolders —
    the list is sorted by title, A-Z by default, and every song row has a
    play button that plays that song directly with no tag attached (a folder
@@ -26,8 +26,9 @@ Docker (see the Building section and the ios/ README).
    on the page (an unregistered one is registered first, and the song is
    assigned once it is saved)), and link a
    tag to the songs it should play. Scanning a tag that is
-   already registered opens its page instead. The NFC tags section lists
-   the registered tags, and tapping a tag opens its own page — the tag's
+   already registered opens its page instead. The NFC tags section lists the registered
+   tags (in name order, case-insensitive), and tapping a tag opens its
+   own page — the tag's
    details (its name, which can be edited, and its read-only ID; when the
    tag's last read carried card information, its tech list and — for an
    NDEF card — its type, capacity and writability are shown as well), its
@@ -42,19 +43,25 @@ Docker (see the Building section and the ios/ README).
    its row when the tag's card carries a download link for it — the file
    lands in the device's Music folder's lumi subfolder, with a per-row
    progress while it downloads and a visible retryable failure state;
-   managing the list never writes to the tag), a "Save to NFC
-   card" section that writes the tag's data (its name and song list) to
-   the tag's own card — only a card whose NFC ID matches the tag's is
-   written, a mismatched card is reported and left untouched, and a
-   card that can't take it (not NDEF, read-only, or too small) is
-   reported with nothing written — and a danger zone to delete the tag
-   (its songs stay in the content list). The button is greyed out with
-   a note while the tag's data is too large for the card payload, while
-   the phone's own NFC is unusable (no NFC hardware, or the radio off),
-   or while the tag's own card is known not to be writable (not an
-   NDEF card, or read-only), and a write that lands remembers the
-   tag's name and song list on the card, so re-scanning a card whose
-   tag was deleted pre-fills its name and restores its songs.
+   managing the list never writes to the tag), a "Save to NFC tag"
+   section — the section shows whether the tag's data matches its last
+   saved state (in sync / differs / nothing saved or compared yet), a
+   "Scan to compare" action that reads the tag's own tag and updates the
+   last saved state to what the tag actually carries (a blank tag clears
+   it), and a "Write to NFC tag" action that writes the tag's data (its
+   name and song list) to the tag's own tag — only a tag whose NFC ID
+   matches the tag's is written, a mismatched tag is reported and left
+   untouched, and a tag that can't take it (not NDEF, read-only, or too
+   small) is reported with nothing written — and a danger zone to
+   delete the tag (its songs stay in the content list). The write button
+   is greyed out with a note while the tag's data is too large for the
+   tag payload, while the phone's own NFC is unusable (no NFC hardware,
+   or the radio off), or while the tag's own tag is known not to be
+   writable (not an NDEF tag, or read-only) — the compare button only
+   needs the NFC radio (a read-only or blank tag is a legitimate compare
+   result) — and a write that lands, or a compare read, remembers the
+   tag's name and song list, so re-scanning a tag whose tag was deleted
+   pre-fills its name and restores its songs.
 2. On the **front screen**, hold a registered tag against the phone (no tap
    needed — the NFC reader is always listening). lumi looks up the tag's
    content list and starts playing, with a big friendly animated visual
@@ -76,7 +83,9 @@ prompt with a shortcut to the NFC settings screen.
 
 ## Play modes
 
-Both modes are selectable in Settings and are remembered on the device.
+Both modes are selectable in Settings and are remembered on the
+device; with no stored choice the app falls back to proximity (a stored
+choice always wins).
 
 - **Continuous** — reading a tag starts playback and it keeps going (and
   loops the tag's list, even after the tag is removed) until you read a

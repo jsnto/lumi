@@ -177,7 +177,28 @@ class UiRevampUiTest {
         openSettings()
 
         compose.onNodeWithText("Twinkle").assertIsDisplayed()
+        // No play mode stored: the strip falls back to the app's
+        // default, which is proximity (a stored mode would still win -
+        // see the continuous case below).
+        compose.onNodeWithText("PROXIMITY").assertIsDisplayed()
+        compose.onNodeWithText("CONTINUOUS").assertDoesNotExist()
+    }
+
+    @Test
+    fun settingsMenuNowPlayingStripShowsContinuousWhenModeIsContinuous() {
+        // A stored play mode wins over the proximity default.
+        dbAndGet { app().repository.setPlayMode(PlayMode.CONTINUOUS) }
+        PlayerStateHolder.update {
+            PlayerUiState(
+                status = PlaybackStatus.PLAYING,
+                currentLabel = "Twinkle",
+                currentType = "AUDIO",
+            )
+        }
+        openSettings()
+
         compose.onNodeWithText("CONTINUOUS").assertIsDisplayed()
+        compose.onNodeWithText("PROXIMITY").assertDoesNotExist()
     }
 
     @Test

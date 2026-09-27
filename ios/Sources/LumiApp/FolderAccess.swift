@@ -15,6 +15,7 @@
 
 import Foundation
 import UniformTypeIdentifiers
+import LumiCore
 
 public enum FolderAccess {
     /// The audio file types the document picker offers (the Android app's

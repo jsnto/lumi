@@ -13,8 +13,16 @@ interface LumiDao {
 
     // ---- tags ----
 
-    @Query("SELECT * FROM tags ORDER BY createdAt ASC, id ASC")
+    /**
+     * The tags pane's observed list: name order, case-insensitively, with
+     * a stable tie-break for equal names (creation time, then id).
+     */
+    @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC, createdAt ASC, id ASC")
     fun observeTags(): Flow<List<TagEntity>>
+
+    /** A single tag row, live (the save-section in-sync indicator's tag side). */
+    @Query("SELECT * FROM tags WHERE id = :id")
+    fun observeTagById(id: Long): Flow<TagEntity?>
 
     @Query("SELECT * FROM tags WHERE uid = :uid LIMIT 1")
     suspend fun tagByUid(uid: String): TagEntity?
@@ -170,8 +178,16 @@ interface LumiDao {
     @Query("SELECT * FROM tag_memory WHERE uid = :uid LIMIT 1")
     suspend fun memoryByUid(uid: String): TagMemoryEntity?
 
+    /** The per-uid memory row, live (the save-section in-sync indicator's saved side). */
+    @Query("SELECT * FROM tag_memory WHERE uid = :uid")
+    fun observeMemoryByUid(uid: String): Flow<TagMemoryEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMemory(memory: TagMemoryEntity)
+
+    /** Clears the per-uid memory record (a compare scan of a card that carries no lumi data). */
+    @Query("DELETE FROM tag_memory WHERE uid = :uid")
+    suspend fun deleteMemoryByUid(uid: String)
 
     // ---- remembered tag playback positions ----
 

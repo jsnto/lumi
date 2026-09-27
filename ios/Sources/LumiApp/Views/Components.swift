@@ -4,6 +4,7 @@
 // Android app's light-theme tokens) drives the colors.
 
 import SwiftUI
+import LumiCore
 
 /// The app palette (the Android app's settled "Sunlit amber" B token set,
 /// ported 1:1 from ui/theme/Theme.kt's light scheme).

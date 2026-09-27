@@ -27,11 +27,16 @@ class PlayModeTest {
     fun fromStorage_parsesKnownModes() {
         assertEquals(PlayMode.CONTINUOUS, PlayMode.fromStorage("continuous"))
         assertEquals(PlayMode.PROXIMITY, PlayMode.fromStorage("PROXIMITY"))
+        // A stored value always wins over the default: an explicit
+        // "continuous" stays continuous even though the default is now
+        // proximity.
+        assertEquals(PlayMode.CONTINUOUS, PlayMode.fromStorage("Continuous"))
+        assertEquals(PlayMode.PROXIMITY, PlayMode.fromStorage("proximity"))
     }
 
     @Test
-    fun fromStorage_defaultsToContinuousForUnknown() {
-        assertEquals(PlayMode.CONTINUOUS, PlayMode.fromStorage("unknown"))
-        assertEquals(PlayMode.CONTINUOUS, PlayMode.fromStorage(""))
+    fun fromStorage_defaultsToProximityForUnknown() {
+        assertEquals(PlayMode.PROXIMITY, PlayMode.fromStorage("unknown"))
+        assertEquals(PlayMode.PROXIMITY, PlayMode.fromStorage(""))
     }
 }

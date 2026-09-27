@@ -165,7 +165,7 @@ class RegistrationPrefillUiTest {
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
             "saving a tag must not change the app play mode",
-            PlayMode.CONTINUOUS,
+            PlayMode.PROXIMITY,
             playModeOf(viewModel),
         )
         assertEquals("The saved tag must carry the pre-filled name", "Hallway", savedTagName(UID))
@@ -193,7 +193,7 @@ class RegistrationPrefillUiTest {
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
             "a card's legacy mode field must not switch the app play mode",
-            PlayMode.CONTINUOUS,
+            PlayMode.PROXIMITY,
             playModeOf(viewModel),
         )
         assertEquals("The tag must be saved under the pre-filled name", "Porch", savedTagName(UID))
@@ -256,7 +256,7 @@ class RegistrationPrefillUiTest {
         idleUntil({ savedTagName(UID) != null })
         assertEquals(
             "saving a plain tag must leave the app mode untouched",
-            PlayMode.CONTINUOUS,
+            PlayMode.PROXIMITY,
             playModeOf(viewModel),
         )
         assertEquals(

@@ -26,7 +26,11 @@ Android app's observable behavior for the five core features:
    after 100 ms; two failed reads confirm the removal. The on-card
    payload is byte-compatible with the Android app (an
    `application/x-lumi` NDEF record carrying `{"name","songs"}` JSON),
-   and "Save to NFC card" writes that same payload to the tag's own card.
+   and the tag page's "Save to NFC tag" section writes that same
+   payload to the tag's own tag (its "Write to NFC tag" action, beside
+   a live in-sync indicator and a "Scan to compare" read that records
+   what the tag's own tag carries as its last saved state - a blank tag
+   clears it).
 5. **Background-capable playback** — `AVAudioSession` in the `.playback`
    category with the `audio` background mode declared: audio keeps
    playing with the screen locked or the app backgrounded.
@@ -52,6 +56,8 @@ ios/
     PlaybackPosition.swift the per-tag position memory (decideRestore, LRU 3)
     ContentSort.swift      the title sort (A-Z / Z-A)
     PlayMode.swift         the play-mode parse (stored values)
+    TagSync.swift          the save section's in-sync state (the derived
+                           compare verdict: in sync / differs / unknown)
     FolderTree.swift       the picked folder's tree (structure, per-level
                            sort, the visible-row count for the collapse)
     FolderScan.swift       the folder walk (pre-order, audio extensions,

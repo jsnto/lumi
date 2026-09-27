@@ -4,6 +4,8 @@ import androidx.room.withTransaction
 import com.lumi.player.nfc.LumiTagNdef
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 /**
@@ -30,7 +32,31 @@ class LumiRepository(private val db: LumiDatabase) {
         dao.observeSettings().map { rows ->
             rows.firstOrNull { it.key == SettingsEntity.PLAY_MODE }
                 ?.let { PlayMode.fromStorage(it.value) }
-                ?: PlayMode.CONTINUOUS
+                ?: PlayMode.PROXIMITY
+        }
+
+    /**
+     * The tag's "Save to NFC tag" in-sync indicator, live (DERIVED, not
+     * event-driven): the tag's current system data (its name + its
+     * ordered song display names - exactly what the card-write path
+     * composes) against its last known tag state (the per-uid saved
+     * memory). Any tag edit (rename, song added/removed/reordered) flips
+     * it to [TagSyncState.Differs] at once; a successful write or compare
+     * (which records the memory) flips it back when the data matches.
+     */
+    fun observeTagSync(tagId: Long): Flow<TagSyncState> =
+        dao.observeTagById(tagId).flatMapLatest { tag ->
+            if (tag == null) {
+                flowOf(TagSyncState.Unknown)
+            } else {
+                dao.observeLinksForTag(tagId).combine(dao.observeMemoryByUid(tag.uid)) { links, memory ->
+                    tagSyncState(
+                        tag.name,
+                        links.map { it.songName },
+                        memory?.let { TagMemory(it.name, TagMemory.songsFromJson(it.songs)) },
+                    )
+                }
+            }
         }
 
     /**
@@ -399,6 +425,15 @@ class LumiRepository(private val db: LumiDatabase) {
                 songs = TagMemory.songsToJson(songs),
             ),
         )
+    }
+
+    /**
+     * Clears the per-uid memory record (the save section's compare scan of
+     * a card that carries no lumi data): the indicator goes [TagSyncState.Unknown] -
+     * nothing saved or compared yet.
+     */
+    suspend fun forgetTag(uid: String) {
+        dao.deleteMemoryByUid(uid.trim())
     }
 
     // ---- remembered playback positions ----

@@ -27,6 +27,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import LumiCore
 
 /// The shared playback state the UI observes (the iOS counterpart of the
 /// Android app's PlayerStateHolder state).

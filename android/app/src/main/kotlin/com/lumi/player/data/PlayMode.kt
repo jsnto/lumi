@@ -14,7 +14,12 @@ enum class PlayMode(val storageValue: String) {
     PROXIMITY("proximity");
 
     companion object {
+        /**
+         * Reads a stored play mode. A stored value - either one - wins;
+         * only the no-setting fallback is [PROXIMITY] (the app's default:
+         * playback continues only while the tag stays in range).
+         */
         fun fromStorage(value: String): PlayMode =
-            entries.firstOrNull { it.storageValue.equals(value, ignoreCase = true) } ?: CONTINUOUS
+            entries.firstOrNull { it.storageValue.equals(value, ignoreCase = true) } ?: PROXIMITY
     }
 }

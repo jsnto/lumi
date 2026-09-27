@@ -31,6 +31,7 @@ import com.lumi.player.data.FolderChild
 import com.lumi.player.data.FolderEntity
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.ScannedSong
+import com.lumi.player.data.TagSyncState
 import com.lumi.player.data.collectAudioFiles
 import com.lumi.player.data.decideRestore
 import com.lumi.player.data.fingerprintOf
@@ -85,7 +86,7 @@ class LumiViewModel(
 
     /** The current play mode, persisted in the database. */
     val playMode: StateFlow<PlayMode> =
-        repository.observePlayMode().stateIn(viewModelScope, SharingStarted.Eagerly, PlayMode.CONTINUOUS)
+        repository.observePlayMode().stateIn(viewModelScope, SharingStarted.Eagerly, PlayMode.PROXIMITY)
 
     /** Tag read/lost decisions for the active mode. */
     @Volatile
@@ -143,12 +144,23 @@ class LumiViewModel(
     val scanAssignEntry: StateFlow<EntryEntity?> = _scanAssignEntry.asStateFlow()
 
     // The tag whose data a card-write scan will write (the tag details
-    // page's "Save to NFC card" action; null for a plain scan). The scan
+    // page's "Save to NFC tag" action; null for a plain scan). The scan
     // writes the tag's data only to the tag's OWN card - the presented
     // card's NFC ID must match the tag's uid (a mismatched card is
     // reported, nothing is written; see [settleCardWrite]).
     private val _cardWriteTarget = MutableStateFlow<TagEntity?>(null)
     val cardWriteTarget: StateFlow<TagEntity?> = _cardWriteTarget.asStateFlow()
+
+    // The tag whose data a COMPARE scan will compare (the tag details
+    // page's "Save to NFC tag" section's "Scan to compare" action; null
+    // for a plain scan). The scan READS the tag's own card - the
+    // presented card's NFC ID must match the tag's uid (a mismatched card
+    // is reported, nothing is recorded) - and records the card's ACTUAL
+    // contents as the tag's per-uid memory (a card with no lumi data
+    // clears the record); the section's in-sync indicator recomputes
+    // from the comparison (see [settleCardCompare]).
+    private val _cardCompareTarget = MutableStateFlow<TagEntity?>(null)
+    val cardCompareTarget: StateFlow<TagEntity?> = _cardCompareTarget.asStateFlow()
 
     // The card details observed per presented tag uid: a read updates the
     // entry for THAT uid only, so a tag's page keeps its own details no
@@ -272,6 +284,23 @@ class LumiViewModel(
     /** UID of the tag whose list is currently playing, if any. */
     val activeTagUid: String? get() = policy.activeTagUid
 
+    /**
+     * The selected tag's "Save to NFC tag" in-sync indicator (DERIVED, not
+     * event-driven): the tag's current system data (its name + its
+     * ordered song display names - exactly what the write path composes)
+     * against its last known tag state (the per-uid saved memory). Any
+     * tag edit (a rename, a song added/removed/reordered) flips it to
+     * [TagSyncState.Differs] at once; a successful write - or a compare
+     * scan of a matching card (which records the memory) - flips it to
+     * [TagSyncState.InSync] when the data matches; a tag with no memory
+     * for its uid reads [TagSyncState.Unknown].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val tagSaveSync: StateFlow<TagSyncState> =
+        effectiveSelectedTagId.flatMapLatest { id ->
+            if (id == null) flowOf(TagSyncState.Unknown) else repository.observeTagSync(id)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, TagSyncState.Unknown)
+
     init {
         viewModelScope.launch {
             playMode.collect { mode ->
@@ -312,7 +341,7 @@ class LumiViewModel(
      */
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (tag != null) inspectTagDetails(uid, tag)
-        // A card-write scan (the tag details page's "Save to NFC card")
+        // A card-write scan (the tag details page's "Save to NFC tag")
         // is armed for a specific card write: the read's card is written
         // the target tag's data ONLY when the card's NFC ID is the tag's
         // own uid - a mismatched card is reported, nothing is written -
@@ -323,6 +352,16 @@ class LumiViewModel(
         val cardWrite = _cardWriteTarget.value
         if (_scanActive.value && cardWrite != null) {
             settleCardWrite(cardWrite, uid, tag)
+            return
+        }
+        // A COMPARE scan (the save section's "Scan to compare" action) is
+        // armed for a specific card read: the read's card is READ (not
+        // written) the target tag's data only when the card's NFC ID is
+        // the tag's own uid, and its actual contents become the tag's
+        // per-uid memory (see [settleCardCompare]).
+        val cardCompare = _cardCompareTarget.value
+        if (_scanActive.value && cardCompare != null) {
+            settleCardCompare(cardCompare, uid, tag)
             return
         }
         if (_scanActive.value) {
@@ -465,7 +504,7 @@ class LumiViewModel(
 
     /**
      * Settles a tag read while a card-write scan is armed (the tag
-     * details page's "Save to NFC card"): the read's card is written the
+     * details page's "Save to NFC tag" section's write action): the read's card is written the
      * target tag's data - the tag's name and the tag's ORDERED SONG LIST
      * (by the songs' display names, "song not
      * found" names among them - the names a re-registered tag restores
@@ -494,7 +533,7 @@ class LumiViewModel(
         _scanActive.value = false
         _cardWriteTarget.value = null
         if (tag == null) {
-            event("Couldn't read that card - try again.")
+            event("Couldn't read that tag - try again.")
             return
         }
         // The card must BE the tag's own card: the presented card's NFC
@@ -514,7 +553,7 @@ class LumiViewModel(
             val messageBytes = LumiTagNdef.messageByteLength(LumiTagNdef.toNdefMessage(payload))
             if (messageBytes > LumiTagNdef.MAX_PAYLOAD_BYTES) {
                 event(
-                    "The tag's data is too large to save to a card - it needs $messageBytes bytes, the app writes at most ${LumiTagNdef.MAX_PAYLOAD_BYTES}. Nothing was written.",
+                    "The tag's data is too large to save to a tag - it needs $messageBytes bytes, the app writes at most ${LumiTagNdef.MAX_PAYLOAD_BYTES}. Nothing was written.",
                 )
                 return@launch
             }
@@ -527,21 +566,87 @@ class LumiViewModel(
                             // name + songs (the app's url-less payload),
                             // and the per-uid memory follows the written
                             // card (the restore source that survives the
-                            // tag row's deletion).
+                            // tag row's deletion; the save section's
+                            // in-sync indicator recomputes from it).
                             repository.rememberTag(target.uid, target.name, names)
                             _tagSongUrls.value = _tagSongUrls.value + (uid to emptyMap())
-                            "Saved to the card."
+                            "Saved to the tag."
                         } else {
-                            "Couldn't write to that card - keep it on the phone and try again."
+                            "Couldn't write to that tag - keep it on the phone and try again."
                         }
                     is CardWriteGate.NotNdef ->
-                        "That card isn't an NDEF card - nothing was written."
+                        "That tag isn't an NDEF tag - nothing was written."
                     is CardWriteGate.ReadOnly ->
-                        "That card is read-only - nothing was written."
+                        "That tag is read-only - nothing was written."
                     is CardWriteGate.TooSmall ->
-                        "That card is too small for the tag's data - it holds ${gate.capacityBytes} bytes, the data needs ${gate.neededBytes}. Nothing was written."
+                        "That tag is too small for the tag's data - it holds ${gate.capacityBytes} bytes, the data needs ${gate.neededBytes}. Nothing was written."
                 },
             )
+        }
+    }
+
+    /**
+     * Settles a tag read while a COMPARE scan is armed (the tag details
+     * page's "Save to NFC tag" section's "Scan to compare" action): the
+     * read's card is READ - not written - and its lumi payload (name +
+     * songs) is recorded as the tag's per-uid saved memory, but ONLY
+     * when the card's NFC ID ([uid]) is the tag's own uid: a mismatched
+     * card is reported with the write path's own verdict language and
+     * nothing is recorded. For the matching card the read's payload is
+     * the card's ACTUAL current contents: a card that carries a lumi
+     * record updates the memory to it (the section's in-sync indicator
+     * then recomputes from the comparison - InSync when the card equals
+     * the tag's current system data, Differs when it does not), and a
+     * card that carries NO lumi data CLEARS the record (the indicator
+     * goes Unknown - nothing saved or compared). A read that could not
+     * connect says nothing about the card's payload (it must never be
+     * read as "the card carries no record"), so it reports and records
+     * nothing. The scan settles either way (disarmed): further reads are
+     * normal reads, never re-routed to the compare.
+     */
+    private fun settleCardCompare(target: TagEntity, uid: String, tag: Tag?) {
+        _scanActive.value = false
+        _cardCompareTarget.value = null
+        if (tag == null) {
+            event("Couldn't read that tag - try again.")
+            return
+        }
+        // The card must BE the tag's own card (the same uid-match the
+        // write path enforces): a different card is reported with the
+        // write path's own verdict language and left untouched.
+        if (uid != target.uid) {
+            event("That card's NFC ID doesn't match this tag's - nothing was written.")
+            return
+        }
+        viewModelScope.launch {
+            val read = withContext(Dispatchers.IO) { songPayloadReader(tag) }
+            when (read) {
+                is TagPayloadRead.Answered -> {
+                    val data = read.data
+                    if (data != null) {
+                        // The card's ACTUAL contents become the tag's
+                        // last known tag state (the per-uid memory): the
+                        // indicator recomputes from the comparison.
+                        repository.rememberTag(uid, data.name, data.songs)
+                        val systemNames = repository.songNamesForTag(target.id)
+                        event(
+                            if (data.name == target.name && data.songs == systemNames) {
+                                "In sync - no changes since the last save."
+                            } else {
+                                "This tag's data differs from the saved tag."
+                            },
+                        )
+                    } else {
+                        // The card carries no lumi data: the record is
+                        // cleared (the indicator goes Unknown - nothing
+                        // saved or compared).
+                        repository.forgetTag(uid)
+                        event("That tag carries no saved data.")
+                    }
+                }
+
+                is TagPayloadRead.Failed -> event("Couldn't read that tag - try again.")
+            }
         }
     }
 
@@ -1037,6 +1142,8 @@ class LumiViewModel(
     fun startTagScan() {
         _capturedUid.value = null
         _scanAssignEntry.value = null
+        _cardWriteTarget.value = null
+        _cardCompareTarget.value = null
         _scanActive.value = true
     }
 
@@ -1052,22 +1159,43 @@ class LumiViewModel(
     fun startTagScanForEntry(entry: EntryEntity) {
         _capturedUid.value = null
         _scanAssignEntry.value = entry
+        _cardWriteTarget.value = null
+        _cardCompareTarget.value = null
         _scanActive.value = true
     }
 
     /**
-     * Arms the card-write scan (the tag details page's "Save to NFC card"
-     * action): the next tag read - through the app's own
+     * Arms the card-write scan (the tag details page's "Save to NFC tag"
+     * section's write action): the next tag read - through the app's own
      * foreground-dispatch read path ([onTagDetected]) - writes [tag]'s
      * data to it ONLY when that card's NFC ID is the tag's own uid
      * (see [settleCardWrite]); a card with a different NFC ID is
      * reported and nothing is written. The scan dialog's copy asks the
-     * user to hold the tag's own card against the back of the phone.
+     * user to hold the tag's own tag against the back of the phone.
      */
     fun startCardWrite(tag: TagEntity) {
         _capturedUid.value = null
         _scanAssignEntry.value = null
+        _cardCompareTarget.value = null
         _cardWriteTarget.value = tag
+        _scanActive.value = true
+    }
+
+    /**
+     * Arms the COMPARE scan (the tag details page's "Save to NFC tag"
+     * section's "Scan to compare" action): the next tag read - through
+     * the app's own foreground-dispatch read path ([onTagDetected]) -
+     * READS [tag]'s own card (its NFC ID must match the tag's uid; a
+     * mismatched card is reported and nothing is recorded) and records
+     * the card's actual contents as the tag's per-uid memory (see
+     * [settleCardCompare]); the section's in-sync indicator recomputes
+     * from the comparison.
+     */
+    fun startCardCompare(tag: TagEntity) {
+        _capturedUid.value = null
+        _scanAssignEntry.value = null
+        _cardWriteTarget.value = null
+        _cardCompareTarget.value = tag
         _scanActive.value = true
     }
 
@@ -1075,6 +1203,7 @@ class LumiViewModel(
         _scanActive.value = false
         _scanAssignEntry.value = null
         _cardWriteTarget.value = null
+        _cardCompareTarget.value = null
     }
 
     /** Consumes the resolved scan target (the settings screen has opened the tag's profile page). */
@@ -1088,7 +1217,7 @@ class LumiViewModel(
      * card's per-uid memory (the last saved name + song list) as the
      * fallback prefill and restore source. Registration NEVER writes the
      * physical card - the explicit card-write action (the tag detail page's
-     * "Save to NFC card") is the only write path.
+     * "Save to NFC tag") is the only write path.
      */
     internal fun capture(uid: String, tag: Tag? = null) {
         _capturedUid.value = uid

@@ -11,11 +11,14 @@
 // The detail page: the tag's name + UID (the UID is hardware-derived and
 // read-only), the edit action (the name is the only stored detail), the
 // song list (drag-reorderable, per-song remove, per-song play/pause),
-// the "Add song" in-app content picker, the "Save to NFC card" action
-// (uid match + size cap + NFC usability gates, mirroring the Android
-// app's card-write gate), and the danger zone.
+// the "Add song" in-app content picker, the "Save to NFC tag" section
+// (the derived in-sync indicator + the "Scan to compare" read and the
+// "Write to NFC tag" write with its uid match + size cap + NFC usability
+// gates, mirroring the Android app's save-section gates), and the danger
+// zone.
 
 import SwiftUI
+import LumiCore
 
 struct TagsPane: View {
     @EnvironmentObject private var model: AppModel
@@ -189,15 +192,16 @@ struct TagDetailPane: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
 
-            // The "Save to NFC card" section (the Android page's
-            // card-write action with its live gates).
+            // The "Save to NFC tag" section (the Android page's save
+            // section: the derived in-sync indicator + the two actions
+            // with their live gates).
             if let tag {
                 Section {
                     LumiCard {
-                        cardWriteButton(for: tag)
+                        saveSection(for: tag)
                     }
                 } header: {
-                    ListSectionHeader("Save to NFC card")
+                    ListSectionHeader("Save to NFC tag")
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
@@ -285,20 +289,69 @@ struct TagDetailPane: View {
         }
     }
 
-    /// The card-write button with its live gates (the Android page's
-    /// greyed-out conditions: over-cap payload, NFC missing).
+    /// The save section's content (the Android page's "Save to NFC tag"
+    /// section): the derived in-sync indicator (the tag's current system
+    /// data against its last known per-uid saved memory - Unknown with no
+    /// memory, InSync when it matches, Differs when it no longer does) +
+    /// the two actions. "Scan to compare" is a READ - it works on
+    /// read-only and blank tags (a blank card is a legitimate compare
+    /// result), so its only gate is the phone's own NFC; "Write to NFC
+    /// tag" keeps the write's live gates (over-cap payload, NFC missing).
     @ViewBuilder
-    private func cardWriteButton(for tag: Tag) -> some View {
+    private func saveSection(for tag: Tag) -> some View {
         let data = LumiTagData(name: tag.name, songs: model.store.songNamesForTag(tag.id))
         let overCap = NdefCodec.messageByteLength(data) > NdefCodec.maxPayloadBytes
         let nfcOk = model.isNfcSupported
-        let enabled = !overCap && nfcOk
-        Button {
-            _ = model.startCardWrite(tag)
-        } label: {
+        let sync = tagSyncState(
+            name: tag.name,
+            songs: model.store.songNamesForTag(tag.id),
+            memory: model.store.memoryForUid(tag.uid),
+        )
+        VStack(alignment: .leading, spacing: 8) {
+            Text(syncCopy(sync))
+                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+            HStack(spacing: 10) {
+                saveActionButton("Scan to compare", systemImage: "magnifyingglass", enabled: nfcOk) {
+                    _ = model.startCardCompare(tag)
+                }
+                saveActionButton("Write to NFC tag", systemImage: "nfc", enabled: !overCap && nfcOk) {
+                    _ = model.startCardWrite(tag)
+                }
+            }
+            if overCap {
+                Text("The tag's data is too large for the tag payload (\(NdefCodec.messageByteLength(data)) of \(NdefCodec.maxPayloadBytes) bytes).")
+                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+            } else if !nfcOk {
+                Text("This iPhone has no NFC reader, so the tag can't be written.")
+                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+            }
+        }
+    }
+
+    /// The in-sync indicator's copy (the Android section's text).
+    private func syncCopy(_ state: TagSyncState) -> String {
+        switch state {
+        case .inSync:
+            "In sync - no changes since the last save."
+        case .differs:
+            "This tag's data differs from the saved tag."
+        case .unknown:
+            "Nothing saved or compared yet."
+        }
+    }
+
+    /// One of the save section's capsule buttons (the page's peach-fill
+    /// language, greyed out while its gate holds).
+    private func saveActionButton(
+        _ title: String,
+        systemImage: String,
+        enabled: Bool,
+        action: @escaping () -> Void,
+    ) -> some View {
+        Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "nfc")
-                Text("Save to NFC card").font(.subheadline).fontWeight(.semibold)
+                Image(systemName: systemImage)
+                Text(title).font(.subheadline).fontWeight(.semibold)
             }
             .foregroundStyle(enabled ? LumiPalette.onPrimaryContainer : LumiPalette.onSurfaceVariant)
             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -306,13 +359,6 @@ struct TagDetailPane: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        if overCap {
-            Text("The tag's data is too large for the card payload (\(NdefCodec.messageByteLength(data)) of \(NdefCodec.maxPayloadBytes) bytes).")
-                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
-        } else if !nfcOk {
-            Text("This iPhone has no NFC reader, so the card can't be written.")
-                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
-        }
     }
 
     /// The drag reorder's settle (the Android page's onMove port): the
