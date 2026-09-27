@@ -65,6 +65,7 @@ import com.lumi.player.data.TagSongRow
 import com.lumi.player.data.TagSyncState
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
+import com.lumi.player.nfc.TagCardDetails
 import com.lumi.player.nfc.ndefTypeName
 import kotlin.math.roundToInt
 
@@ -210,183 +211,12 @@ internal fun TagDetailPane(
                     )
                 }
             }
-            // Save this tag's data to the physical NFC tag. The section
-            // holds, above the buttons, the in-sync indicator (DERIVED,
-            // not event-driven): the tag's current system data (its name
-            // + its ordered song display names - exactly what the write
-            // path composes) against its last known tag state (its
-            // per-uid saved memory: name + songs). InSync = the memory
-            // exists and equals it (no change since the last save);
-            // Differs = the memory exists but no longer matches - any
-            // tag edit (a rename, a song added/removed/reordered) flips
-            // it at once; Unknown = no saved memory for the uid yet
-            // (nothing saved or compared yet). A successful write records
-            // the memory; the compare scan records what the tag actually
-            // carries (a blank tag clears the record).
-            //
-            // The buttons: "Scan to compare" arms the compare scan - the
-            // next read of this tag's OWN tag (its NFC ID matches the
-            // tag's) is READ, not written, and its actual contents become
-            // the tag's per-uid memory. "Write to NFC tag" arms the
-            // EXISTING write scan - the next read of this tag's own tag
-            // is written the tag's data (its name and its ordered song
-            // list, the tag's own payload shape) when it is writable and
-            // can hold it. A tag with a different NFC ID is reported and
-            // left untouched (the write path's own verdict language).
-            //
-            // The WRITE button mirrors the write's own size check LIVE:
-            // the payload it arms (the tag's name and the tag's ordered
-            // song list - the same payload [LumiViewModel.settleCardWrite]
-            // sizes against the app's write cap) is measured on every
-            // recomposition, and while it is over the cap NO tag can
-            // take it - so the button is greyed out and the note says
-            // so: a write that cannot succeed cannot even be attempted.
-            // The settle-side pre-check stays as the backstop (the list
-            // can change after the button is rendered).
-            //
-            // The WRITE button is ALSO greyed out (with its own note)
-            // while the phone's own NFC is not usable - no NFC hardware,
-            // or the radio off: a tag write goes through the phone's
-            // radio, so without it no write can succeed. The usability
-            // flags are published by MainActivity (re-checked on resume
-            // AND on the radio's state-changed broadcast), so
-            // re-enabling the radio while the app is open re-enables the
-            // button live - no restart or re-entry.
-            //
-            // AND while the tag's OWN tag is known non-writable from the
-            // last presented handle's discovery data (the same uid-keyed
-            // details the details section shows): a tag that carries no
-            // NDEF tech, or whose NDEF area is read-only, is refused by
-            // the settle-time gate the same way - so a write that cannot
-            // succeed cannot even be attempted, and the note mirrors the
-            // gate's own verdict copy. A tag whose details were never
-            // observed is NOT refused here (unknown is not non-writable):
-            // the gate decides for the tag actually presented at settle
-            // time. The three conditions compose: the write button is
-            // never tappable while any of them holds. The COMPARE button
-            // is gated on the radio's usability alone: it READS the tag
-            // (a read-only or non-NDEF tag still answers - or answers
-            // with no data, which is a legitimate compare result).
-            SectionCard(title = "Save to NFC tag") {
-                Text(
-                    "Writes this tag's data (its name and its song list) to the NFC tag. Only this tag's own tag is written - a tag with a different NFC ID is not.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                // The in-sync indicator (derived, above the buttons -
-                // see the section's note): the observed state of the
-                // selected tag (this page selects it on open).
-                val syncState by viewModel.tagSaveSync.collectAsState()
-                Text(
-                    when (syncState) {
-                        TagSyncState.InSync -> "In sync - no changes since the last save."
-                        TagSyncState.Differs -> "This tag's data differs from the saved tag."
-                        TagSyncState.Unknown -> "Nothing saved or compared yet."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                val payloadBytes = LumiTagNdef.messageByteLength(
-                    LumiTagNdef.toNdefMessage(
-                        LumiTagData(tag.name, linked.map { it.name }),
-                    ),
-                )
-                val overCap = payloadBytes > LumiTagNdef.MAX_PAYLOAD_BYTES
-                if (overCap) {
-                    Text(
-                        "This tag's data is too large for the tag payload - nothing can be written.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                // The phone's own NFC usability (published by MainActivity,
-                // live off the radio's state-changed broadcast): a tag
-                // write needs the radio, so the control is unusable while
-                // the hardware is missing or the radio is off.
-                val nfcMissing by viewModel.nfcMissing.collectAsState()
-                val nfcDisabled by viewModel.nfcDisabled.collectAsState()
-                val nfcUsable = !nfcMissing && !nfcDisabled
-                if (!nfcUsable) {
-                    Text(
-                        if (nfcMissing) {
-                            "This device has no NFC, so it can't save to a tag."
-                        } else {
-                            "Turn on NFC to save to tag."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                // The tag's own tag, as its last presented handle
-                // reported it (the same uid-keyed record the details
-                // section shows): no NDEF tech, or a read-only NDEF area,
-                // is refused by the settle-time gate the same way, so the
-                // write control is unusable while that is what the last
-                // read saw. A tag whose details were never observed is
-                // not refused here: the gate decides for the tag actually
-                // presented at settle time.
-                val cardDetails = tagDetails[tag.uid]
-                val cardUnwritable = cardDetails != null &&
-                    (cardDetails.ndefType == null || cardDetails.ndefWritable == false)
-                if (cardUnwritable) {
-                    Text(
-                        if (cardDetails?.ndefType == null) {
-                            "That tag isn't an NDEF tag, so it can't be written."
-                        } else {
-                            "That tag is read-only, so it can't be written."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                // Button 1: scan to compare - the compare scan READS this
-                // tag's own tag (never writes it) and records its actual
-                // contents as the tag's per-uid memory; the indicator
-                // recomputes from the comparison. Gated on the radio's
-                // usability alone (a read is refused by nothing else up
-                // front - a non-NDEF or blank tag is a legitimate
-                // compare result).
-                FilledTonalButton(
-                    onClick = { viewModel.startCardCompare(tag) },
-                    enabled = nfcUsable,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = scheme.secondaryContainer,
-                        contentColor = scheme.onSecondaryContainer,
-                    ),
-                ) {
-                    Icon(
-                        Icons.Filled.Nfc,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Scan to compare",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-                // Button 2: write to the NFC tag - the existing write
-                // flow (the next read of this tag's own tag is written
-                // the tag's data), its enabled-state composition
-                // UNCHANGED: an over-cap or unwritable situation still
-                // blocks it exactly as before.
-                FilledTonalButton(
-                    onClick = { viewModel.startCardWrite(tag) },
-                    enabled = !overCap && nfcUsable && !cardUnwritable,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = scheme.secondaryContainer,
-                        contentColor = scheme.onSecondaryContainer,
-                    ),
-                ) {
-                    Text(
-                        "Write to NFC tag",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-            }
+            SaveToTagSection(
+                viewModel = viewModel,
+                tag = tag,
+                linked = linked,
+                tagDetails = tagDetails,
+            )
             // The danger zone: a visually separated, clearly destructive
             // section. The detail copy states the effect the confirm will
             // carry out - the tag and its song links go; the songs stay in
@@ -466,6 +296,195 @@ internal fun TagDetailPane(
  * drag scrolls nothing; the handle is the only row region that captures the
  * pointer, so a scroll started elsewhere on the page is untouched.
  */
+/**
+ * The tag details page's "Save to NFC tag" section: the write/compare scan buttons and
+ * holds, above the buttons, the in-sync indicator (DERIVED,
+ * not event-driven): the tag's current system data (its name
+ * + its ordered song display names - exactly what the write
+ * path composes) against its last known tag state (its
+ * per-uid saved memory: name + songs). InSync = the memory
+ * exists and equals it (no change since the last save);
+ * Differs = the memory exists but no longer matches - any
+ * tag edit (a rename, a song added/removed/reordered) flips
+ * it at once; Unknown = no saved memory for the uid yet
+ * (nothing saved or compared yet). A successful write records
+ * the memory; the compare scan records what the tag actually
+ * carries (a blank tag clears the record).
+ *
+ * The buttons: "Scan to compare" arms the compare scan - the
+ * next read of this tag's OWN tag (its NFC ID matches the
+ * tag's) is READ, not written, and its actual contents become
+ * the tag's per-uid memory. "Write to NFC tag" arms the
+ * EXISTING write scan - the next read of this tag's own tag
+ * is written the tag's data (its name and its ordered song
+ * list, the tag's own payload shape) when it is writable and
+ * can hold it. A tag with a different NFC ID is reported and
+ * left untouched (the write path's own verdict language).
+ *
+ * The WRITE button mirrors the write's own size check LIVE:
+ * the payload it arms (the tag's name and the tag's ordered
+ * song list - the same payload the app's write cap measures
+ * at settle time, in NfcTagCoordinator's card-write settle) is measured on every
+ * recomposition, and while it is over the cap NO tag can
+ * take it - so the button is greyed out and the note says
+ * so: a write that cannot succeed cannot even be attempted.
+ * The settle-side pre-check stays as the backstop (the list
+ * can change after the button is rendered).
+ *
+ * The WRITE button is ALSO greyed out (with its own note)
+ * while the phone's own NFC is not usable - no NFC hardware,
+ * or the radio off: a tag write goes through the phone's
+ * radio, so without it no write can succeed. The usability
+ * flags are published by MainActivity (re-checked on resume
+ * AND on the radio's state-changed broadcast), so
+ * re-enabling the radio while the app is open re-enables the
+ * button live - no restart or re-entry.
+ *
+ * AND while the tag's OWN tag is known non-writable from the
+ * last presented handle's discovery data (the same uid-keyed
+ * details the details section shows): a tag that carries no
+ * NDEF tech, or whose NDEF area is read-only, is refused by
+ * the settle-time gate the same way - so a write that cannot
+ * succeed cannot even be attempted, and the note mirrors the
+ * gate's own verdict copy. A tag whose details were never
+ * observed is NOT refused here (unknown is not non-writable):
+ * the gate decides for the tag actually presented at settle
+ * time. The three conditions compose: the write button is
+ * never tappable while any of them holds. The COMPARE button
+ * is gated on the radio's usability alone: it READS the tag
+ * (a read-only or non-NDEF tag still answers - or answers
+ * with no data, which is a legitimate compare result).
+ */
+@Composable
+private fun SaveToTagSection(
+    viewModel: LumiViewModel,
+    tag: TagEntity,
+    linked: List<TagSongRow>,
+    tagDetails: Map<String, TagCardDetails>,
+) {
+    val scheme = MaterialTheme.colorScheme
+    SectionCard(title = "Save to NFC tag") {
+        Text(
+            "Writes this tag's data (its name and its song list) to the NFC tag. Only this tag's own tag is written - a tag with a different NFC ID is not.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        // The in-sync indicator (derived, above the buttons -
+        // see the section's note): the observed state of the
+        // selected tag (this page selects it on open).
+        val syncState by viewModel.tagSaveSync.collectAsState()
+        Text(
+            when (syncState) {
+                TagSyncState.InSync -> "In sync - no changes since the last save."
+                TagSyncState.Differs -> "This tag's data differs from the saved tag."
+                TagSyncState.Unknown -> "Nothing saved or compared yet."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        val payloadBytes = LumiTagNdef.messageByteLength(
+            LumiTagNdef.toNdefMessage(
+                LumiTagData(tag.name, linked.map { it.name }),
+            ),
+        )
+        val overCap = payloadBytes > LumiTagNdef.MAX_PAYLOAD_BYTES
+        if (overCap) {
+            Text(
+                "This tag's data is too large for the tag payload - nothing can be written.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        // The phone's own NFC usability (published by MainActivity,
+        // live off the radio's state-changed broadcast): a tag
+        // write needs the radio, so the control is unusable while
+        // the hardware is missing or the radio is off.
+        val nfcMissing by viewModel.nfcMissing.collectAsState()
+        val nfcDisabled by viewModel.nfcDisabled.collectAsState()
+        val nfcUsable = !nfcMissing && !nfcDisabled
+        if (!nfcUsable) {
+            Text(
+                if (nfcMissing) {
+                    "This device has no NFC, so it can't save to a tag."
+                } else {
+                    "Turn on NFC to save to tag."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        // The tag's own tag, as its last presented handle
+        // reported it (the same uid-keyed record the details
+        // section shows): no NDEF tech, or a read-only NDEF area,
+        // is refused by the settle-time gate the same way, so the
+        // write control is unusable while that is what the last
+        // read saw. A tag whose details were never observed is
+        // not refused here: the gate decides for the tag actually
+        // presented at settle time.
+        val cardDetails = tagDetails[tag.uid]
+        val cardUnwritable = cardDetails != null &&
+            (cardDetails.ndefType == null || cardDetails.ndefWritable == false)
+        if (cardUnwritable) {
+            Text(
+                if (cardDetails?.ndefType == null) {
+                    "That tag isn't an NDEF tag, so it can't be written."
+                } else {
+                    "That tag is read-only, so it can't be written."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        // Button 1: scan to compare - the compare scan READS this
+        // tag's own tag (never writes it) and records its actual
+        // contents as the tag's per-uid memory; the indicator
+        // recomputes from the comparison. Gated on the radio's
+        // usability alone (a read is refused by nothing else up
+        // front - a non-NDEF or blank tag is a legitimate
+        // compare result).
+        FilledTonalButton(
+            onClick = { viewModel.startCardCompare(tag) },
+            enabled = nfcUsable,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = scheme.secondaryContainer,
+                contentColor = scheme.onSecondaryContainer,
+            ),
+        ) {
+            Icon(
+                Icons.Filled.Nfc,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Scan to compare",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        // Button 2: write to the NFC tag - the existing write
+        // flow (the next read of this tag's own tag is written
+        // the tag's data), its enabled-state composition
+        // UNCHANGED: an over-cap or unwritable situation still
+        // blocks it exactly as before.
+        FilledTonalButton(
+            onClick = { viewModel.startCardWrite(tag) },
+            enabled = !overCap && nfcUsable && !cardUnwritable,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = scheme.secondaryContainer,
+                contentColor = scheme.onSecondaryContainer,
+            ),
+        ) {
+            Text(
+                "Write to NFC tag",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ReorderableSongList(
     rows: List<TagSongRow>,
