@@ -1,7 +1,7 @@
 # lumi
 
-lumi is a children's music player in the spirit of Toonies and Yoto: an
-app that reads NFC tags and plays the music linked to them. Music lives on
+lumi is a children's music player: an app that reads NFC tags and plays
+the music linked to them. Music lives on
 the phone (picked with the standard file picker); there is no server or
 account — everything is stored locally on the device. The Android app
 (`android/`) is the original; the iOS/iPhone app (`ios/`) ports its core

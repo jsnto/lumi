@@ -174,7 +174,7 @@ class PlayerService : Service(), Player.Listener {
         }
     }
 
-    /** Move to the next entry, looping the list (Toonies-style continuous play). */
+    /** Move to the next entry, looping the list (continuous play). */
     private fun advance() {
         if (queue.isEmpty()) return stopPlayback()
         position = (position + 1) % queue.size
