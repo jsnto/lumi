@@ -4,6 +4,7 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.isDisplayed
@@ -438,6 +439,134 @@ class TagSaveSyncUiTest {
         openSaveSection()
         idleUntil({ hasText(IN_SYNC) }, message = "the in-sync indicator after the write")
         assertFalse("the unknown copy is gone after the write", hasText(UNKNOWN))
+    }
+
+    // ---- the compare button's gate (the phone's radio alone - the
+    // compare is a read, so an over-cap or unwritable tag never refuses
+    // it; the write keeps its own gates) ----
+
+    @Test
+    fun anOverCapTagStillOffersTheCompareButton_onlyTheWriteIsRefused() {
+        val controller = controllerWithOpenTagPage()
+        val viewModel = viewModelOf(controller.get())
+        val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
+        // Grow the tag's list over the app's write cap (the write's own
+        // size refusal source - the same list the write's over-cap pin
+        // uses).
+        val names = (0 until 12).map { "Song %02d ".format(it + 1) + "x".repeat(42) }
+        dbAndGet {
+            names.forEach {
+                app().repository.linkEntryToTag(
+                    tagId,
+                    app().repository.addEntry(EntryType.AUDIO, it, "content://$it").id,
+                )
+            }
+        }
+
+        openSaveSection()
+        idleUntil(
+            {
+                try {
+                    compose
+                        .onNodeWithText("This tag's data is too large for the tag payload - nothing can be written.")
+                        .assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the over-cap note",
+        )
+        // The WRITE is refused by its size gate ...
+        assertTrue(
+            "the write button is disabled while the payload is over the cap",
+            compose.onNodeWithText("Write to NFC tag").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        // ... but the COMPARE is a read (reading an over-cap tag is a
+        // legitimate compare result), so its gate - the radio alone -
+        // does not hold.
+        assertFalse(
+            "the compare button is not refused by the payload's size",
+            compose.onNodeWithText("Scan to compare").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        // ... and tapping it arms the COMPARE scan (never the write).
+        clickSectionButton("Scan to compare")
+        compose
+            .onNodeWithText(
+                "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to read what it carries. A tag with a different NFC ID is not recorded.",
+            )
+            .assertExists()
+        assertTrue("the compare scan is armed", viewModel.scanActive.value)
+        assertEquals(TAG_UID, viewModel.cardCompareTarget.value?.uid)
+        assertNull("the compare arms no write", viewModel.cardWriteTarget.value)
+    }
+
+    @Test
+    fun theRadioOffDisablesTheCompareButton_asWell() {
+        // The compare goes through the phone's radio too: with the radio
+        // off neither action can run, so the compare button is disabled
+        // just like the write's (and a tap arms nothing).
+        NfcTestState.radioEnabled = false
+        dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        // The launch prompt (the radio is off) overlays the screen first.
+        compose.onNodeWithText("NFC is off").assertIsDisplayed()
+        compose.onNodeWithText("Later").performClick()
+        compose.waitForIdle()
+        openTagPage()
+        openSaveSection()
+        idleUntil(
+            {
+                try {
+                    compose.onNodeWithText("Turn on NFC to save to tag.").assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            },
+            message = "the radio-off note",
+        )
+        assertTrue(
+            "the compare button is disabled while the radio is off",
+            compose.onNodeWithText("Scan to compare").fetchSemanticsNode()
+                .config.contains(SemanticsProperties.Disabled),
+        )
+        val viewModel = viewModelOf(controller.get())
+        compose.onNodeWithText("Scan to compare").performClick()
+        compose.waitForIdle()
+        assertFalse("the disabled compare button arms no scan", viewModel.scanActive.value)
+        assertNull("the disabled compare button sets no compare target", viewModel.cardCompareTarget.value)
+    }
+
+    @Test
+    fun theScanDialogTitleIsAlwaysScanATag_forTheWriteAndCompareScans() {
+        // The dialog's title no longer branches on the scan's purpose:
+        // the write scan AND the compare scan both read "Scan a tag" (the
+        // old "Scan a card" title is gone).
+        val controller = controllerWithOpenTagPage()
+
+        clickSectionButton("Write to NFC tag")
+        compose.onNodeWithText("Scan a tag").assertIsDisplayed()
+        compose.onNodeWithText("Scan a card").assertDoesNotExist()
+        compose
+            .onNodeWithText(
+                "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to save this tag's data to it. A tag with a different NFC ID is not written.",
+            )
+            .assertExists()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+
+        openSaveSection()
+        clickSectionButton("Scan to compare")
+        compose.onNodeWithText("Scan a tag").assertIsDisplayed()
+        compose.onNodeWithText("Scan a card").assertDoesNotExist()
+        compose
+            .onNodeWithText(
+                "Hold the tag's own tag - the tag whose NFC ID matches the tag's - against the back of the phone to read what it carries. A tag with a different NFC ID is not recorded.",
+            )
+            .assertExists()
     }
 
     // ---- the tags pane's name sort ----
