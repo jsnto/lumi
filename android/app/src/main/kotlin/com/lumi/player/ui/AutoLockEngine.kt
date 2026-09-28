@@ -203,7 +203,7 @@ class AutoLockEngine(
 
     /** Applies [delay] to the timer (or disarms it on zero) against the
      * current playback state: the stored-delay collector and the view
-     * model's [setAutoLockDelay] both go through it, so a running stretch
+     * model's [LumiViewModel.setAutoLockDelay] both go through it, so a running stretch
      * follows a new choice immediately. */
     fun applyAutoLockDelayToTimer(delay: AutoLockDelay) {
         val now = clock()

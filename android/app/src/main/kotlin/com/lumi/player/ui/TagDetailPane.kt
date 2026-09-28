@@ -297,9 +297,9 @@ internal fun TagDetailPane(
  * pointer, so a scroll started elsewhere on the page is untouched.
  */
 /**
- * The tag details page's "Save to NFC tag" section: the write/compare scan buttons and
- * holds, above the buttons, the in-sync indicator (DERIVED,
- * not event-driven): the tag's current system data (its name
+ * The tag details page's "Save to NFC tag" section: the write/compare scan
+ * buttons, plus - above them - the in-sync indicator (DERIVED, not
+ * event-driven): the tag's current system data (its name
  * + its ordered song display names - exactly what the write
  * path composes) against its last known tag state (its
  * per-uid saved memory: name + songs). InSync = the memory
