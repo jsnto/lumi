@@ -697,27 +697,12 @@ class MainActivity : ComponentActivity() {
                                 throw e
                             }
                         },
-                        onStillPresent = {
-                            presenceHandler.post {
-                                if (lastSeenUid == uid) {
-                                    lastSeenAt = SystemClock.elapsedRealtime()
-                                }
-                            }
-                        },
+                        onStillPresent = { refreshPresenceRecord(uid) },
                         onConfirmedRemoved = {
-                            Log.i(TAG, "generic fast path: removal CONFIRMED (two failed probes) uid=$uid")
-                            presenceHandler.post {
-                                if (lastSeenUid == uid) {
-                                    handleTagLost(uid)
-                                    // The fast path already reported the
-                                    // loss: clear the record so the
-                                    // fallback poll does not issue a second
-                                    // pause for the same removal (a re-read
-                                    // re-seeds the record via the normal
-                                    // activation path).
-                                    lastSeenUid = null
-                                }
-                            }
+                            confirmFastPathRemoval(
+                                uid,
+                                "generic fast path: removal CONFIRMED (two failed probes)",
+                            )
                         },
                     )
                 } finally {
@@ -793,26 +778,9 @@ class MainActivity : ComponentActivity() {
                             throw e
                         }
                     },
-                    onStillPresent = {
-                        presenceHandler.post {
-                            if (lastSeenUid == uid) {
-                                lastSeenAt = SystemClock.elapsedRealtime()
-                            }
-                        }
-                    },
+                    onStillPresent = { refreshPresenceRecord(uid) },
                     onConfirmedRemoved = {
-                        Log.i(TAG, "Mifare fast path: removal CONFIRMED (two failed reads) uid=$uid")
-                        presenceHandler.post {
-                            if (lastSeenUid == uid) {
-                                handleTagLost(uid)
-                                // The fast path already reported the loss:
-                                // clear the record so the fallback poll does
-                                // not issue a second pause for the same removal
-                                // (a re-read re-seeds the record via the normal
-                                // activation path).
-                                lastSeenUid = null
-                            }
-                        }
+                        confirmFastPathRemoval(uid, "Mifare fast path: removal CONFIRMED (two failed reads)")
                     },
                 )
             } finally {
@@ -822,6 +790,37 @@ class MainActivity : ComponentActivity() {
                 // superseded or rejected along the way were already closed
                 // by the wrapper.
                 session.close()
+            }
+        }
+    }
+
+    /**
+     * The presence refresh shared by both fast paths: the tick's read /
+     * probe succeeded, so the active tag's absence window refreshes (the
+     * absence-timeout fallback stays quiet while the tag answers).
+     */
+    private fun refreshPresenceRecord(uid: String) {
+        presenceHandler.post {
+            if (lastSeenUid == uid) {
+                lastSeenAt = SystemClock.elapsedRealtime()
+            }
+        }
+    }
+
+    /**
+     * The confirmed-removal handler shared by both fast paths (a read /
+     * probe that ALSO failed on a fresh session, twice over the debounce):
+     * the same [handleTagLost] route as the fallback, then clear the record
+     * so the fallback poll does not issue a second pause for the same
+     * removal (a re-read re-seeds the record via the normal activation
+     * path). [confirmedLog] is the fast path's own confirmation line.
+     */
+    private fun confirmFastPathRemoval(uid: String, confirmedLog: String) {
+        Log.i(TAG, "$confirmedLog uid=$uid")
+        presenceHandler.post {
+            if (lastSeenUid == uid) {
+                handleTagLost(uid)
+                lastSeenUid = null
             }
         }
     }
