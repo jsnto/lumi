@@ -3,6 +3,7 @@ package com.lumi.player.ui
 import android.net.Uri
 import androidx.activity.result.ActivityResultRegistry
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -70,14 +71,14 @@ class TagPickerDispatchUiTest {
     }
 
     /** Pumps the main looper until [cond] holds or fails. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the pick to land") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
             compose.waitForIdle()
             Thread.sleep(10)
         }
-        check(cond()) { "timed out waiting for the pick to land" }
+        check(cond()) { "timed out waiting for $message" }
     }
 
     /** The current content count, read off the database. */
@@ -168,8 +169,13 @@ class TagPickerDispatchUiTest {
         // pane) and must NOT be linked to the seeded tag - the pick was
         // for the content pane, not for a tag.
         idleUntil({ entryCount() == 1 })
-        compose.waitForIdle()
-        compose.onNodeWithText("Untitled").assertExists()
+        // The row renders through the Room round trip (the write's commit
+        // precedes the list flow's re-emission on the main looper): pump
+        // until the content pane has settled on it.
+        idleUntil(
+            { compose.onAllNodesWithText("Untitled").fetchSemanticsNodes().isNotEmpty() },
+            message = "the content pane's new row",
+        )
         val linked = tagLinks(tagId).map { it.entryId }
         assertEquals(
             "a Content-pane pick must not link the entry to any tag",

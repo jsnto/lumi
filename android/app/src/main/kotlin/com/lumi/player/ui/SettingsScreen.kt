@@ -23,9 +23,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.lumi.player.data.AutoLockDelay
+import com.lumi.player.data.AudioLevelMode
+import com.lumi.player.data.AudioLevelSettings
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
+import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
@@ -38,6 +41,7 @@ import com.lumi.player.player.PlayerStateHolder
 private enum class SettingsPane {
     Menu,
     PlayMode,
+    AudioLevel,
     Tags,
     Content,
     System,
@@ -88,6 +92,15 @@ fun SettingsScreen(
     val individualEntries by viewModel.observeIndividualEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.PROXIMITY)
+    // The audio level (the menu's "Audio level" row; the service reads the
+    // live value through the app's in-memory snapshot).
+    val audioLevelMode by viewModel.audioLevelMode.collectAsState(AudioLevelMode.OFF)
+    val audioLevelTargetLufs by viewModel.audioLevelTargetLufs
+        .collectAsState(AudioLevelSettings.DEFAULT_TARGET_LUFS)
+    // The audio level's measurement status (the pane's status row + the
+    // "Normalize now" pass's live progress).
+    val loudnessStatus by viewModel.loudnessStatus.collectAsState(LoudnessStatus(0, 0))
+    val normalizing by viewModel.normalizing.collectAsState(false)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(false)
     val scanActive by viewModel.scanActive.collectAsState(false)
     val pendingTagProfile by viewModel.pendingTagProfile.collectAsState(null)
@@ -251,7 +264,10 @@ fun SettingsScreen(
             isPlaying = playState.isPlaying,
             tags = tags,
             entries = entries,
+            audioLevelMode = audioLevelMode,
+            audioLevelTargetLufs = audioLevelTargetLufs,
             onPlayMode = { pane = SettingsPane.PlayMode },
+            onAudioLevel = { pane = SettingsPane.AudioLevel },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
             onSystem = { pane = SettingsPane.System },
@@ -272,6 +288,14 @@ fun SettingsScreen(
         SettingsPane.PlayMode -> PlayModePane(
             viewModel = viewModel,
             playMode = playMode,
+            onBack = { pane = SettingsPane.Menu },
+        )
+        SettingsPane.AudioLevel -> AudioLevelPane(
+            viewModel = viewModel,
+            mode = audioLevelMode,
+            targetLufs = audioLevelTargetLufs,
+            status = loudnessStatus,
+            normalizing = normalizing,
             onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.Appearance -> AppearancePane(

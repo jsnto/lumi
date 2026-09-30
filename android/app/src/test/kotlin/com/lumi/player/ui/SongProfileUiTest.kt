@@ -64,8 +64,13 @@ class SongProfileUiTest {
     private fun openContentPane(): Pair<MainActivity, LumiViewModel> {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         compose.waitForIdle()
+        // The top bar and the settings menu settle through async Room round
+        // trips: wait for the merged tree to have each node before clicking
+        // it (a click racing a mid-recomposition top bar misses the node).
+        idleUntil({ compose.onNodeWithContentDescription("Settings").isDisplayed() })
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
+        idleUntil({ compose.onAllNodesWithText("Content").fetchSemanticsNodes().isNotEmpty() })
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         val field = MainActivity::class.java.getDeclaredField("viewModel")

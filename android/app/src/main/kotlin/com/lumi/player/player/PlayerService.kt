@@ -19,6 +19,7 @@ import com.lumi.player.LumiApp
 import com.lumi.player.R
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagPositionEntity
+import com.lumi.player.data.gainFor
 import com.lumi.player.data.fingerprintOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,22 @@ class PlayerService : Service(), Player.Listener {
     private var player: ExoPlayer? = null
     private var queue: List<EntrySpec> = emptyList()
     private var position: Int = 0
+    /**
+     * The audio level's playback processor, installed in the ExoPlayer's
+     * sink chain by [renderersFactory] (the Media3 AudioProcessor hook): the
+     * per-track gain from the on-device loudness measurement, plus the
+     * soft-clip limiter on boosted tracks.
+     */
+    private val loudnessProcessor = LoudnessProcessor()
+    /**
+     * The renderers factory that installs [loudnessProcessor] in the sink.
+     * Lazy: the service is instantiated reflectively WITHOUT its context
+     * attached (the constructor must not touch [applicationContext] - it
+     * is only needed when the player is built).
+     */
+    private val renderersFactory by lazy {
+        LumiRenderersFactory(applicationContext, arrayOf(loudnessProcessor))
+    }
     /** Consecutive load/playback errors; guards against looping on a bad file. */
     private var consecutiveErrors: Int = 0
     /**
@@ -139,10 +156,33 @@ class PlayerService : Service(), Player.Listener {
     }
 
     private fun ensurePlayer(): ExoPlayer {
-        return player ?: ExoPlayer.Builder(this).build().also {
-            it.addListener(this)
-            player = it
-        }
+        return player ?: ExoPlayer.Builder(this)
+            .setRenderersFactory(renderersFactory)
+            .build().also {
+                it.addListener(this)
+                player = it
+            }
+    }
+
+    /**
+     * Applies the audio level's per-track level to the processor before the
+     * track's audio flows: the gain from the app's audio level setting and
+     * the entry's stored loudness (the [LumiApp]'s loudness snapshot - no
+     * database read on the playback path). OFF mode, an unmeasured entry, or
+     * a silent one all leave the processor at the exact pass-through.
+     */
+    private fun applyLoudness(spec: EntrySpec) {
+        val app = applicationContext as? LumiApp ?: return
+        val settings = app.audioLevel
+        val sample = app.loudnessStore.snapshot()[spec.payload]
+        val gainDb = gainFor(settings.mode, settings.targetLufs, sample)
+        loudnessProcessor.setLevel(gainDb, engageLimiter = gainDb > 0.0)
+        Log.i(
+            TAG,
+            "loudness: '${spec.label}' gain=${"%.2f".format(gainDb)} dB " +
+                "(mode=${settings.mode}, target=${settings.targetLufs} LUFS, " +
+                "measured=${sample?.lufs}, peak=${sample?.truePeakDbTp})",
+        )
     }
 
     private fun loadCurrent() {
@@ -156,6 +196,7 @@ class PlayerService : Service(), Player.Listener {
         }
         when (EntryType.fromStorage(spec.type)) {
             EntryType.AUDIO -> {
+                applyLoudness(spec)
                 p.setMediaItem(MediaItem.fromUri(spec.payload))
                 p.playWhenReady = wantsPlay
                 p.prepare()
@@ -289,6 +330,12 @@ class PlayerService : Service(), Player.Listener {
             Player.STATE_ENDED -> advance()
             else -> {
                 applyPendingSeek(p)
+                // A settings change that landed between [loadCurrent] and
+                // ready is picked up here: the per-track level is re-resolved
+                // once the item is ready.
+                if (state == Player.STATE_READY) {
+                    queue.getOrNull(position)?.let { applyLoudness(it) }
+                }
                 val status = when {
                     p.isPlaying -> PlaybackStatus.PLAYING
                     p.playbackState == Player.STATE_READY && !p.playWhenReady ->

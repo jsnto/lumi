@@ -6,6 +6,8 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -61,8 +63,15 @@ class FolderAddUiTest {
     private fun openContentPane(): LumiViewModel {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         compose.waitForIdle()
+        // The player screen's top bar and the settings menu both settle
+        // through async Room round trips: wait for the merged tree to have
+        // the node before clicking it (a click racing a mid-recomposition
+        // top bar misses the node), and for the menu's rows before clicking
+        // a menu row.
+        idleUntil({ compose.onNodeWithContentDescription("Settings").isDisplayed() })
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
+        idleUntil({ compose.onAllNodesWithText("Content").fetchSemanticsNodes().isNotEmpty() })
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         val field = MainActivity::class.java.getDeclaredField("viewModel")

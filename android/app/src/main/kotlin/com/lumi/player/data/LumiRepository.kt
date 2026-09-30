@@ -561,6 +561,82 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: audio level ----
+
+    /**
+     * The current audio level mode. Unset or invalid stored values fall back
+     * to OFF - the default: the app never applies a gain.
+     */
+    fun observeAudioLevelMode(): Flow<AudioLevelMode> =
+        dao.observeSettings().map { rows ->
+            AudioLevelMode.fromStorage(
+                rows.firstOrNull { it.key == SettingsEntity.AUDIO_LEVEL_MODE }?.value,
+            )
+        }
+
+    /**
+     * The target integrated loudness (LUFS) normalization aims for. Unset or
+     * invalid stored values fall back to the default target (-16 LUFS).
+     */
+    fun observeAudioLevelTargetLufs(): Flow<Double> =
+        dao.observeSettings().map { rows ->
+            audioLevelTargetLufsFromStored(
+                rows.firstOrNull { it.key == SettingsEntity.AUDIO_LEVEL_TARGET_LUFS }?.value,
+            )
+        }
+
+    /** The audio level setting (the mode + the target) in one flow. */
+    fun observeAudioLevelSettings(): Flow<AudioLevelSettings> =
+        combine(observeAudioLevelMode(), observeAudioLevelTargetLufs()) { mode, targetLufs ->
+            AudioLevelSettings(mode, targetLufs)
+        }
+
+    suspend fun setAudioLevelMode(mode: AudioLevelMode) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.AUDIO_LEVEL_MODE, mode.storageValue),
+        )
+    }
+
+    suspend fun setAudioLevelTargetLufs(targetLufs: Double) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.AUDIO_LEVEL_TARGET_LUFS, targetLufs.toInt().toString()),
+        )
+    }
+
+    // ---- per-entry loudness (the measurement cache) ----
+
+    /** The measurement for [entryId] (null when never measured). */
+    suspend fun loudnessForEntry(entryId: Long): EntryLoudnessEntity? =
+        dao.entryLoudness(entryId)
+
+    /**
+     * Records (or replaces) the measured loudness of [entryId].
+     */
+    suspend fun recordLoudness(
+        entryId: Long,
+        lufs: Double?,
+        truePeakDbTp: Double?,
+        fingerprint: String,
+    ) {
+        dao.upsertEntryLoudness(
+            EntryLoudnessEntity(entryId, lufs, truePeakDbTp, fingerprint, System.currentTimeMillis()),
+        )
+    }
+
+    /**
+     * The audio level's measurement status: how many of the app's audio
+     * entries carry a stored measurement (the settings pane's "N of M songs
+     * measured" row). A silent file's measurement (no loudness) still counts
+     * as measured: the read settled, there is just nothing to normalize.
+     */
+    fun observeLoudnessStatus(): Flow<LoudnessStatus> =
+        combine(dao.observeEntries(), dao.observeEntryLoudness()) { entries, measurements ->
+            val audioIds = entries
+                .filter { EntryType.fromStorage(it.type) == EntryType.AUDIO }
+                .mapTo(HashSet()) { it.id }
+            LoudnessStatus(measurements.count { it.entryId in audioIds }, audioIds.size)
+        }
+
     companion object {
         /** Default absence window (seconds) before a removed tag pauses playback. */
         const val NFC_REREAD_SECONDS_DEFAULT = 15L
