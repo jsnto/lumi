@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * The auto-lock engine (the System setting's "Auto-lock after idle"): the
+ * The auto-lock engine (the Advanced options page's "Auto-lock after idle"): the
  * [AutoLockTimer]'s decision logic (pure; the wall clock is fed in through
  * [clock]) driven from the shared player state so the idle time is unit-
  * testable and survives the settings screens' navigation: the stored delay
@@ -232,7 +232,7 @@ class AutoLockEngine(
             putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "lumi is asking for permission to lock the phone's screen after " +
-                    "music has stopped playing for the time you choose in the System setting.",
+                    "music has stopped playing for the time you choose in the Advanced options page.",
             )
         }
 

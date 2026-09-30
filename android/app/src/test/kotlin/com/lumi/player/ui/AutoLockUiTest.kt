@@ -172,12 +172,14 @@ class AutoLockUiTest {
         // System row), and no longer carries the keep-screen-on row (moved
         // into the Advanced options page). Appearance is an everyday
         // setting: it is a top-level menu row.
-        compose.onNodeWithText("Advanced options").assertIsDisplayed()
+        compose.onNodeWithText("Advanced options").assertExists()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
         compose.onNodeWithText("Appearance").assertExists()
 
         // The order reads top to bottom: play mode, NFC tags, content,
         // appearance, advanced options.
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top

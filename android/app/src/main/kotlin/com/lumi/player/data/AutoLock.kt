@@ -1,7 +1,7 @@
 package com.lumi.player.data
 
 /**
- * The auto-lock idle delay (the System setting's "Auto-lock after idle"):
+ * The auto-lock idle delay (the Advanced options page's "Auto-lock after idle"):
  * how many minutes of idle - no song actively playing (stopped or paused) -
  * count before the phone's screen is locked, so a phone left with the app
  * open does not drain its battery doing nothing. [OFF] is the default and

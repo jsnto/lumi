@@ -517,7 +517,7 @@ class LumiViewModel(
     }
 
     /**
-     * The auto-lock engine (the System setting's "Auto-lock after idle"): the
+     * The auto-lock engine (the Advanced options page's "Auto-lock after idle"): the
      * idle timer's decision logic (pure - the wall clock is fed in through
      * the engine's own [clock] seam) driven from the shared player state,
      * so the idle stretch outlives a settings pane leaving and coming back
