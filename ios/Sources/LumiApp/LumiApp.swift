@@ -130,7 +130,7 @@ struct RootView: View {
         case .content:
             ContentPane()
         case .system:
-            SystemPane()
+            AdvancedPane()
         case let .folderDetail(folderId):
             FolderDetailPane(folderId: folderId)
         case let .entryDetail(entryId):

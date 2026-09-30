@@ -1,6 +1,6 @@
 // The settings menu (the Android app's SettingsScreen menu): one MenuRow
-// card per sub-screen - play mode, NFC tags, content, system - in the
-// pinned order. Tapping a row pushes that setting's own sub-screen; the
+// card per sub-screen - play mode, NFC tags, content, advanced options -
+// in the pinned order. Tapping a row pushes that setting's own sub-screen; the
 // system back / in-pane chevron unwind one level (the NavigationStack's
 // own pop - the Android app's BackHandler semantics).
 
@@ -48,7 +48,7 @@ struct SettingsMenuPane: View {
 
                 LumiCard {
                     MenuRowView(
-                        title: "System",
+                        title: "Advanced options",
                         subtitle: "Tag re-read wait: \(model.nfcRereadSeconds) s",
                         onTap: { nav.path.append(Route.system) },
                     )
@@ -112,13 +112,13 @@ struct PlayModePane: View {
     }
 }
 
-/// The system sub-screen (the Android app's System page, reduced to what
-/// this platform allows): the tag re-read wait is shown (it has no
-/// settings UI on the Android app either - the value is persisted and
-/// read by the proximity monitor), and the platform-forced differences
-/// (screen lock / auto-lock / keep-screen-on / themes) are documented
-/// rather than offered.
-struct SystemPane: View {
+/// The advanced options sub-screen (the Android app's Advanced options
+/// page, reduced to what this platform allows): the tag re-read wait is
+/// shown (it has no settings UI on the Android app either - the value is
+/// persisted and read by the proximity monitor), and the platform-forced
+/// differences (screen lock / auto-lock / keep-screen-on / themes) are
+/// documented rather than offered.
+struct AdvancedPane: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -142,6 +142,6 @@ struct SystemPane: View {
             }
         }
         .background(LumiPalette.background)
-        .navigationTitle("System")
+        .navigationTitle("Advanced options")
     }
 }
