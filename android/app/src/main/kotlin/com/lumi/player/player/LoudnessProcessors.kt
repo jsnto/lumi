@@ -116,6 +116,9 @@ class LoudnessProcessor : BaseAudioProcessor() {
         when (format.encoding) {
             C.ENCODING_PCM_FLOAT -> transformFloat(copy, out)
             C.ENCODING_PCM_16BIT -> transformInt16(copy, out)
+            // The pipeline only ever delivers the two PCM encodings above;
+            // anything else is left as the (already positioned) output.
+            else -> Unit
         }
     }
 
