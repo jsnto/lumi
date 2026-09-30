@@ -170,7 +170,8 @@ class MainActivity : ComponentActivity() {
         refreshNfcState()
 
         // The keep-screen-on setting can change while the app is open (the
-        // System page's checkbox), so apply/clear the window flag on every
+        // Advanced options page's checkbox), so apply/clear the window flag
+        // on every
         // change of its EFFECTIVE value while the activity is started: the
         // user's choice AND the auto-lock not having claimed the screen (the
         // lock wins over keep-screen-on until music plays again). onResume

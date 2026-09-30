@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -29,19 +28,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.lumi.player.data.AutoLockDelay
-import com.lumi.player.data.LumiThemeMode
 
 /**
- * The System setting: the device/display settings grouped off the main
- * settings menu - the keep-screen-on toggle (moved here from the menu,
- * keeping its look and test tag), the new auto-lock-after-idle choice with
- * the phone's own screen-lock permission state, and the appearance row
- * (moved here from the menu, opening the same appearance sub-screen as
- * before).
+ * The Advanced options page: the less-everyday device/display/lock settings
+ * grouped off the main settings menu - the keep-screen-on toggle (keeping
+ * its look and test tag) and the auto-lock-after-idle choice with the
+ * phone's own screen-lock permission state.
+ *
+ * The page is a plain list of self-contained option sections, one per
+ * advanced option: adding a new advanced option is a plain addition of one
+ * more section (and its state wiring), not a reorganization of the page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SystemPane(
+internal fun AdvancedPane(
     viewModel: LumiViewModel,
     keepScreenOn: Boolean,
     onKeepScreenOnChange: (Boolean) -> Unit,
@@ -49,8 +49,6 @@ internal fun SystemPane(
     onAutoLockDelayChange: (AutoLockDelay) -> Unit,
     deviceAdminActive: Boolean,
     onEnableDeviceAdmin: () -> Unit,
-    themeMode: LumiThemeMode,
-    onAppearance: () -> Unit,
     onBack: () -> Unit,
 ) {
     // The phone can revoke the screen-lock permission behind the app's back
@@ -60,7 +58,7 @@ internal fun SystemPane(
         viewModel.refreshDeviceAdminState()
     }
     val scheme = MaterialTheme.colorScheme
-    Scaffold(topBar = { PaneTopAppBar("System", onBack) }) { padding ->
+    Scaffold(topBar = { PaneTopAppBar("Advanced options", onBack) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -130,18 +128,6 @@ internal fun SystemPane(
                     )
                 }
             }
-            MenuRow(
-                icon = Icons.Filled.Palette,
-                chipBackground = scheme.tertiaryContainer,
-                chipContent = scheme.onTertiaryContainer,
-                title = "Appearance",
-                subtitle = when (themeMode) {
-                    LumiThemeMode.FOLLOW_SYSTEM -> "Follow system"
-                    LumiThemeMode.LIGHT -> "Light"
-                    LumiThemeMode.DARK -> "Dark"
-                },
-                onClick = onAppearance,
-            )
         }
     }
 }
@@ -159,10 +145,9 @@ private fun AutoLockDelay.ladderDetail(): String =
     }
 
 /**
- * The keep-screen-on toggle (moved from the settings menu into the System
- * page, keeping its look and test tag): a checkbox row instead of a chevron
- * row, because the setting is a single on/off choice with no configuration
- * sub-screen.
+ * The keep-screen-on toggle (a checkbox row instead of a chevron row,
+ * because the setting is a single on/off choice with no configuration
+ * sub-screen), keeping its look and test tag.
  */
 @Composable
 private fun KeepScreenOnRow(

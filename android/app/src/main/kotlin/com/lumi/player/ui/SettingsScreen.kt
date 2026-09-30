@@ -44,7 +44,7 @@ private enum class SettingsPane {
     AudioLevel,
     Tags,
     Content,
-    System,
+    Advanced,
     TagDetail,
     FolderDetail,
     EntryDetail,
@@ -54,10 +54,11 @@ private enum class SettingsPane {
 /**
  * Parent-facing settings, laid out like the polex settings menu: the settings
  * screen is a list of buttons, one per setting (play mode, NFC tags, content,
- * system); clicking a row navigates into that setting's own configuration
- * screen. The System page groups the device/display settings - keep screen
- * on, auto-lock after idle, and appearance (the last a row into its own
- * sub-screen, a child of the System page).
+ * appearance, advanced options); clicking a row navigates into that setting's
+ * own configuration screen. The Advanced options page groups the less-
+ * everyday device/display settings - keep screen on and auto-lock after
+ * idle (with the phone's screen-lock permission state); appearance is an
+ * everyday setting and a top-level menu row into its own sub-screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
  * child of the NFC tags pane and the folder detail page is a child of the
@@ -109,14 +110,14 @@ fun SettingsScreen(
     // The content list's title sort direction (the content pane's sort
     // control; ascending by default).
     val contentSort by viewModel.contentSortDirection.collectAsState(ContentSortDirection.ASCENDING)
-    // The app's appearance mode (the System page's "Appearance" row; the
-    // theme follows it app-wide, effective immediately on change).
+    // The app's appearance mode (the menu's "Appearance" row; the theme
+    // follows it app-wide, effective immediately on change).
     val themeMode by viewModel.themeMode.collectAsState(LumiThemeMode.FOLLOW_SYSTEM)
-    // The auto-lock idle delay (the System page's "Auto-lock after idle"
-    // choice; off by default).
+    // The auto-lock idle delay (the Advanced options page's "Auto-lock
+    // after idle" choice; off by default).
     val autoLockDelay by viewModel.autoLockDelay.collectAsState(AutoLockDelay.OFF)
-    // Whether the app's screen-lock device admin is active (the System
-    // page's enable prompt).
+    // Whether the app's screen-lock device admin is active (the Advanced
+    // options page's enable prompt).
     val deviceAdminActive by viewModel.deviceAdminActive.collectAsState(false)
     // The song an assign-to-tag scan targets (the scan dialog's copy names
     // it; null for the NFC tags pane's plain scan).
@@ -224,10 +225,10 @@ fun SettingsScreen(
         if (uri != null) viewModel.addFolderEntry(uri)
     }
 
-    // The device-admin enable launcher (the System page's "Enable screen
-    // lock" action): launches the platform's own consent screen for the
-    // app's screen-lock admin. The result is fed back to the view model,
-    // which re-checks the admin's real state with the platform.
+    // The device-admin enable launcher (the Advanced options page's
+    // "Enable screen lock" action): launches the platform's own consent
+    // screen for the app's screen-lock admin. The result is fed back to the
+    // view model, which re-checks the admin's real state with the platform.
     val deviceAdminLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -237,16 +238,15 @@ fun SettingsScreen(
     // System back must unwind the settings screen itself (one level at a
     // time) before the host can pop settings away entirely: the tag detail
     // page unwinds to the NFC tags list it lives under, the folder detail
-    // page to the content pane it lives under, the appearance page to the
-    // System page it lives under, the song's profile to the pane it was
-    // opened from (the opener recorded when the row was tapped), and every
-    // other sub-screen to the menu; only when the menu is showing is the
-    // default back handler allowed through.
+    // page to the content pane it lives under, the song's profile to the
+    // pane it was opened from (the opener recorded when the row was
+    // tapped), and every other sub-screen - the appearance and advanced
+    // options pages included (both children of the menu) - to the menu; only
+    // when the menu is showing is the default back handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
-            SettingsPane.Appearance -> SettingsPane.System
             SettingsPane.EntryDetail -> {
                 val opener = entryDetailOpener
                 entryDetailOpener = null
@@ -266,14 +266,16 @@ fun SettingsScreen(
             entries = entries,
             audioLevelMode = audioLevelMode,
             audioLevelTargetLufs = audioLevelTargetLufs,
+            themeMode = themeMode,
             onPlayMode = { pane = SettingsPane.PlayMode },
             onAudioLevel = { pane = SettingsPane.AudioLevel },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
-            onSystem = { pane = SettingsPane.System },
+            onAppearance = { pane = SettingsPane.Appearance },
+            onAdvanced = { pane = SettingsPane.Advanced },
             onBack = onBack,
         )
-        SettingsPane.System -> SystemPane(
+        SettingsPane.Advanced -> AdvancedPane(
             viewModel = viewModel,
             keepScreenOn = keepScreenOn,
             onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
@@ -281,8 +283,6 @@ fun SettingsScreen(
             onAutoLockDelayChange = { viewModel.setAutoLockDelay(it) },
             deviceAdminActive = deviceAdminActive,
             onEnableDeviceAdmin = { deviceAdminLauncher.launch(viewModel.deviceAdminIntent()) },
-            themeMode = themeMode,
-            onAppearance = { pane = SettingsPane.Appearance },
             onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.PlayMode -> PlayModePane(
@@ -301,7 +301,7 @@ fun SettingsScreen(
         SettingsPane.Appearance -> AppearancePane(
             viewModel = viewModel,
             themeMode = themeMode,
-            onBack = { pane = SettingsPane.System },
+            onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.Tags -> TagsPane(
             viewModel = viewModel,

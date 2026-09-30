@@ -37,16 +37,16 @@ import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.TimeUnit
 
 /**
- * The System setting's new "Auto-lock after idle" (and the System page
- * itself, which the keep-screen-on and appearance rows moved into): the
- * menu's System row and the moved rows' new home, the picker's
- * persistence (the app's settings-table pattern), the back navigation's
- * one-level unwind, the idle timer end-to-end (a fake clock drives it
- * through the view model's tick seam), the lock winning over
- * keep-screen-on, the foreground gate (a backgrounded app holds the
- * elapsed stretch - no lock - and it fires on the return to the
- * foreground), and the admin-not-granted state (the setting stays
- * visible and prompts to enable; the app keeps working).
+ * The Advanced options page's "Auto-lock after idle" (and the Advanced
+ * options page itself, which the keep-screen-on row moved into - and which
+ * replaces the System page): the menu's Advanced options row and the moved
+ * row's new home, the picker's persistence (the app's settings-table
+ * pattern), the back navigation's one-level unwind, the idle timer
+ * end-to-end (a fake clock drives it through the view model's tick seam),
+ * the lock winning over keep-screen-on, the foreground gate (a
+ * backgrounded app holds the elapsed stretch - no lock - and it fires on
+ * the return to the foreground), and the admin-not-granted state (the
+ * setting stays visible and prompts to enable; the app keeps working).
  *
  * The actual screen lock goes through [LumiViewModel.lockDevice] (a test
  * seam for [DevicePolicyManager.lockNow]), and the admin's state through
@@ -83,9 +83,11 @@ class AutoLockUiTest {
         compose.waitForIdle()
         return activity
     }
-    /** Opens the System page from the settings menu. */
-    private fun openSystemPage(activity: MainActivity) {
-        compose.onNodeWithText("System").performClick()
+    /** Opens the Advanced options page from the settings menu. */
+    private fun openAdvancedPage(activity: MainActivity) {
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
         compose.waitForIdle()
     }
 
@@ -162,39 +164,41 @@ class AutoLockUiTest {
     // ---- the menu and the moved rows ----
 
     @Test
-    fun theMenuListsSystemAndNotTheMovedRows() {
+    fun theMenuListsAdvancedOptionsAndNotTheMovedRows() {
         openSettings()
 
         // The menu keeps the now-playing strip's home rows (play mode, NFC
-        // tags, content), gains the System row, and no longer carries the
-        // keep-screen-on row or the appearance row (both moved into the
-        // System page).
-        compose.onNodeWithText("System").assertIsDisplayed()
+        // tags, content), gains the Advanced options row (replacing the old
+        // System row), and no longer carries the keep-screen-on row (moved
+        // into the Advanced options page). Appearance is an everyday
+        // setting: it is a top-level menu row.
+        compose.onNodeWithText("Advanced options").assertIsDisplayed()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
-        compose.onNodeWithText("Appearance").assertDoesNotExist()
+        compose.onNodeWithText("Appearance").assertExists()
 
         // The order reads top to bottom: play mode, NFC tags, content,
-        // system.
+        // appearance, advanced options.
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
-        val systemTop = compose.onNodeWithText("System").fetchSemanticsNode().boundsInRoot.top
+        val appearanceTop = compose.onNodeWithText("Appearance").fetchSemanticsNode().boundsInRoot.top
+        val advancedTop = compose.onNodeWithText("Advanced options").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, NFC tags, content, system - in that order",
-            playModeTop < nfcTop && nfcTop < contentTop && contentTop < systemTop,
+            "the menu lists play mode, NFC tags, content, appearance, advanced options - in that order",
+            playModeTop < nfcTop && nfcTop < contentTop && contentTop < appearanceTop && appearanceTop < advancedTop,
         )
     }
 
     @Test
-    fun theSystemPageShowsTheMovedRowsAndTheAutoLockLadder() {
-        openSystemPage(openSettings())
+    fun theAdvancedPageShowsTheMovedRowAndTheAutoLockLadder() {
+        openAdvancedPage(openSettings())
 
         // The keep-screen-on row moved here from the menu, look and test
         // tag intact (unchecked by default).
         compose.onNodeWithText("Keep screen on").assertExists()
         compose.onNodeWithText("Keep the display on while the app is open.").assertExists()
 
-        // The new auto-lock setting: the section with its ladder (off by
+        // The auto-lock setting: the section with its ladder (off by
         // default) and the screen-lock permission's state (not enabled -
         // the app's admin has never been granted in a fresh test run).
         compose.onNodeWithText("Auto-lock after idle").assertExists()
@@ -206,10 +210,9 @@ class AutoLockUiTest {
         compose.onNodeWithText("Screen lock not enabled").assertExists()
         compose.onNodeWithText("Enable screen lock").assertExists()
 
-        // The appearance row moved here too (the same row the menu used to
-        // carry; it opens the appearance sub-screen).
-        compose.onNodeWithText("Appearance").assertExists()
-        compose.onNodeWithText("Follow system").assertExists()
+        // The appearance row is NOT on this page any more (it is a
+        // top-level menu row).
+        compose.onNodeWithText("Appearance").assertDoesNotExist()
     }
 
     // ---- the picker's persistence (the app's settings pattern) ----
@@ -221,7 +224,7 @@ class AutoLockUiTest {
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        openSystemPage(activity)
+        openAdvancedPage(activity)
 
         // Off is selected by default (fresh store).
         compose.onNode(selectedLadderRowContaining("Off")).assertExists()
@@ -249,7 +252,7 @@ class AutoLockUiTest {
         )
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        openSystemPage(restarted.get())
+        openAdvancedPage(restarted.get())
         compose.onNode(selectedLadderRowContaining("After 5 minutes")).assertExists()
     }
 
@@ -263,7 +266,7 @@ class AutoLockUiTest {
             )
         }
         val activity = openSettings()
-        openSystemPage(activity)
+        openAdvancedPage(activity)
         assertEquals(
             "the garbage stored value must resolve to off",
             AutoLockDelay.OFF,
@@ -280,49 +283,48 @@ class AutoLockUiTest {
     }
 
     @Test
-    fun backFromSystemUnwindsToTheMenuAndOnlyThenToThePlayer() {
+    fun backFromTheAdvancedPageUnwindsToTheMenuAndOnlyThenToThePlayer() {
         val activity = openSettings()
-        openSystemPage(activity)
+        openAdvancedPage(activity)
         compose.onNodeWithText("Keep screen on").assertExists()
 
-        // The first back leaves the System page for the menu (the moved
-        // rows are gone from view, the System row is back).
+        // The first back leaves the Advanced options page for the menu
+        // (the moved row is gone from view, the Advanced options row is
+        // back).
         systemBack(activity)
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
-        compose.onNodeWithText("System").assertExists()
+        compose.onNodeWithText("Advanced options").assertExists()
 
         // The second back leaves the menu entirely for the player screen.
         systemBack(activity)
         compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
-        compose.onNodeWithText("System").assertDoesNotExist()
+        compose.onNodeWithText("Advanced options").assertDoesNotExist()
     }
 
     @Test
-    fun backFromAppearanceUnwindsToSystemAndOnlyThenToTheMenu() {
+    fun backFromAppearanceUnwindsToTheMenuAndOnlyThenToThePlayer() {
         val activity = openSettings()
-        openSystemPage(activity)
-        // The appearance row is the page's bottommost element (below the
-        // viewport on the small screen): scroll it into view before
-        // clicking.
+        // The appearance row is a top-level menu row (below the viewport on
+        // the small screen): scroll it into view before clicking.
         compose.onNodeWithText("Appearance").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Appearance").performClick()
         compose.waitForIdle()
         // The appearance sub-screen (its choices are here, not on the
-        // System page).
+        // menu).
         compose.onNodeWithText("Uses the phone's own light or dark setting.").assertExists()
 
-        // The first back unwinds to the System page (the appearance row's
-        // new parent), not the menu...
+        // The first back unwinds to the menu (the appearance row's own
+        // row is back), not out of settings...
         systemBack(activity)
         compose.onNodeWithText("Uses the phone's own light or dark setting.").assertDoesNotExist()
         compose.onNodeWithText("Appearance").assertExists()
-        compose.onNodeWithText("Keep screen on").assertExists()
+        compose.onNodeWithText("Keep screen on").assertDoesNotExist()
 
-        // ...and the second leaves the System page for the menu.
+        // ...and the second leaves the menu for the player screen.
         systemBack(activity)
-        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
         compose.onNodeWithText("Appearance").assertDoesNotExist()
     }
 
@@ -588,8 +590,9 @@ class AutoLockUiTest {
         )
 
         // The setting stays visible and prompts to enable the permission:
-        // the System page shows the not-enabled state with its action.
-        openSystemPage(activity)
+        // the Advanced options page shows the not-enabled state with its
+        // action.
+        openAdvancedPage(activity)
         compose.onNodeWithText("Screen lock not enabled").assertExists()
         compose.onNodeWithText("Enable screen lock").assertExists()
         compose.onNodeWithText("Auto-lock after idle").assertExists()
@@ -601,7 +604,7 @@ class AutoLockUiTest {
         val vm = viewModelOf(activity)
         vm.isDeviceAdminActive = { false }
 
-        openSystemPage(activity)
+        openAdvancedPage(activity)
         compose.onNodeWithText("Screen lock not enabled").assertExists()
 
         // The enable action launches the platform's own consent screen:

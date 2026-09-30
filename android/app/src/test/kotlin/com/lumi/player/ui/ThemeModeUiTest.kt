@@ -42,16 +42,17 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The System page's "Appearance" option (the row moved there from the
- * settings menu): the row renders with the current mode (follow system
- * by default - an existing user is never switched unexpectedly), the row
- * opens the appearance sub-screen with the Light / Dark / Follow-system
- * choices, the choice persists through the app's existing settings
- * storage (a restarted app keeps it), and both themes apply app-wide
- * through the theme - the dark theme is the designed cocoa night palette,
- * not a grey fallback. The System choice follows the device's
- * own dark/light setting reactively: a flip of the device setting while the
- * app is open is reflected without a restart or re-entry.
+ * The settings menu's top-level "Appearance" row (promoted to the menu -
+ * the appearance sub-screen it opens already existed): the row renders with
+ * the current mode (follow system by default - an existing user is never
+ * switched unexpectedly), the row opens the appearance sub-screen with the
+ * Light / Dark / Follow-system choices, the choice persists through the
+ * app's existing settings storage (a restarted app keeps it), and both
+ * themes apply app-wide through the theme - the dark theme is the designed
+ * cocoa night palette, not a grey fallback. The follow-system choice
+ * tracks the device's own dark/light setting reactively: a flip of the
+ * device setting while the app is open is reflected without a restart or
+ * re-entry.
  *
  * Theme application is pinned by composing the app's [LumiTheme] with an
  * explicit mode on a bare activity and reading the live [MaterialTheme]
@@ -87,18 +88,10 @@ class ThemeModeUiTest {
         return activity
     }
 
-    /** Opens the System page from the settings menu. */
-    private fun openSystemPage(activity: MainActivity) {
-        compose.onNodeWithText("System").performClick()
-        compose.waitForIdle()
-    }
-
-    /** Opens the appearance sub-screen through the System page (the row's
-     * new home). The row is the System page's bottommost element (below
-     * the viewport on the small screen), so it is scrolled into view
-     * before the click. */
+    /** Opens the appearance sub-screen through the menu's own Appearance
+     * row (a top-level row). The row is below the viewport on the small
+     * screen, so it is scrolled into view before the click. */
     private fun openAppearancePane(activity: MainActivity) {
-        openSystemPage(activity)
         compose.onNodeWithText("Appearance").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Appearance").performClick()
@@ -189,15 +182,14 @@ class ThemeModeUiTest {
     private fun argb(color: Color): Long = color.value.toLong() ushr 32
 
     @Test
-    fun theSystemPageShowsTheAppearanceRowWithFollowSystemByDefault() {
+    fun theMenuShowsTheAppearanceRowWithFollowSystemByDefault() {
         val activity = openSettings()
-        openSystemPage(activity)
 
-        // The System page offers the Appearance row (moved here from the
-        // menu), and the default is follow system (the phone's own
-        // setting) - existing users are never switched to a forced mode.
-        // The row sits below the viewport on the small screen, so
-        // existence is the layout assertion.
+        // The menu offers the Appearance row (promoted to a top-level menu
+        // row), and the default is follow system (the phone's own setting)
+        // - existing users are never switched to a forced mode. The row
+        // sits below the viewport on the small screen, so existence is the
+        // layout assertion.
         compose.onNodeWithText("Appearance").assertExists()
         compose.onNodeWithText("Follow system").assertExists()
         // The setting starts unset in the database, so the view model
@@ -223,12 +215,12 @@ class ThemeModeUiTest {
         compose.onNodeWithText("Dark").assertExists()
         compose.onNodeWithText("Soft and easy on the eyes in the dark.").assertExists()
 
-        // Back to the System page (the row's new parent): the choices'
-        // details are gone, the row is back.
+        // Back to the menu (the row's own home): the choices' details are
+        // gone, the row is back.
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Appearance").assertExists()
-        compose.onNodeWithText("Keep screen on").assertExists()
+        compose.onNodeWithText("Keep screen on").assertDoesNotExist()
         compose.onNodeWithText("Uses the phone's own light or dark setting.")
             .assertDoesNotExist()
         compose.onNodeWithText("Bright and sunny, any time of day.")
@@ -243,9 +235,9 @@ class ThemeModeUiTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
 
-        // Pick Dark in the sub-screen (through the System page, where the
-        // appearance row now lives); the Room round trip makes it
-        // observable, and the System page row's subtitle now reads Dark.
+        // Pick Dark in the sub-screen (through the menu's Appearance row);
+        // the Room round trip makes it observable, and the menu row's
+        // subtitle now reads Dark.
         openAppearancePane(activity)
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
@@ -343,10 +335,10 @@ class ThemeModeUiTest {
         val originalVisibility = activity.window.decorView.systemUiVisibility
         val originalBackground = activity.window.decorView.background
 
-        // Pick Dark (through the System page): the window chrome follows
-        // the SAME resolved mode as the UI - the light status-bar icons
-        // off, and the dark window background (no near-white flash before
-        // the first dark frame).
+        // Pick Dark (through the menu's Appearance row): the window chrome
+        // follows the SAME resolved mode as the UI - the light status-bar
+        // icons off, and the dark window background (no near-white flash
+        // before the first dark frame).
         openAppearancePane(activity)
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
@@ -463,16 +455,15 @@ class ThemeModeUiTest {
     /**
      * The UI, not just the parse function, falls back: with a garbage
      * value in the settings table, a cold launch of the real app shows
-     * the Appearance row's subtitle (on the System page, where the row
-     * now lives) as "Follow system" - the resolved fallback - and never
-     * the raw stored value.
+     * the Appearance row's subtitle (on the menu, where the row lives)
+     * as "Follow system" - the resolved fallback - and never the raw
+     * stored value.
      */
     @Test
-    fun garbageStoredValueColdLaunchSystemPageShowsFollowSystem() {
+    fun garbageStoredValueColdLaunchMenuRowShowsFollowSystem() {
         runBlocking { seedStoredThemeMode("bogus-mode") }
         val activity = openSettings()
 
-        openSystemPage(activity)
         compose.onNodeWithText("Appearance").assertExists()
         // The row's subtitle is the RESOLVED mode: the garbage value
         // falls back to follow system in the UI, and the raw value never

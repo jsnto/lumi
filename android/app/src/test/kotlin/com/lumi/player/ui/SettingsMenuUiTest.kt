@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
@@ -25,11 +26,12 @@ import org.robolectric.shadows.ShadowLooper
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
  * is a list of buttons, one per setting (play mode, audio level, NFC tags,
- * content, system - in that order); clicking a row navigates into that
- * setting's own configuration screen, and the back arrow / system back
- * unwind it back to the menu (from the menu, to the player screen). The
- * device/display settings (keep screen on, auto-lock after idle,
- * appearance) live in the System page, not on the menu. The NFC
+ * content, appearance, advanced options - in that order); clicking a row
+ * navigates into that setting's own configuration screen, and the back
+ * arrow / system back unwind it back to the menu (from the menu, to the
+ * player screen). The device/display settings (keep screen on, auto-lock
+ * after idle, screen lock) live in the Advanced options page, not on the
+ * menu. The NFC
  * tags pane rows offer no row-level delete - deleting a tag happens from the
  * tag detail page's danger zone.
  */
@@ -72,27 +74,31 @@ class SettingsMenuUiTest {
         // Every setting is a button on the settings screen itself. The
         // "Tag to content" entry is gone: linking songs to a tag happens
         // from the tag detail page's add-song action, not from the menu.
-        // The keep-screen-on row and the appearance row are gone from the
-        // menu too: they moved into the System page.
+        // The keep-screen-on row is gone from the menu too: it moved into
+        // the Advanced options page. Appearance is an everyday setting and
+        // a top-level menu row.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("Audio level").assertExists()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
-        compose.onNodeWithText("System").assertExists()
+        compose.onNodeWithText("Appearance").assertExists()
+        compose.onNodeWithText("Advanced options").assertExists()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
-        compose.onNodeWithText("Appearance").assertDoesNotExist()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
 
         // The menu's order reads top to bottom: play mode, audio level,
-        // NFC tags, content, system.
+        // NFC tags, content, appearance, advanced options.
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
         val audioLevelTop = compose.onNodeWithText("Audio level").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
-        val systemTop = compose.onNodeWithText("System").fetchSemanticsNode().boundsInRoot.top
+        val appearanceTop = compose.onNodeWithText("Appearance").fetchSemanticsNode().boundsInRoot.top
+        val advancedTop = compose.onNodeWithText("Advanced options").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, audio level, NFC tags, content, system - in that order",
-            playModeTop < audioLevelTop && audioLevelTop < nfcTop && nfcTop < contentTop && contentTop < systemTop,
+            "the menu lists play mode, audio level, NFC tags, content, appearance, advanced options - in that order",
+            playModeTop < audioLevelTop && audioLevelTop < nfcTop && nfcTop < contentTop && contentTop < appearanceTop && appearanceTop < advancedTop,
         )
 
         // The menu only lists the settings - none of the configuration
@@ -166,16 +172,31 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithContentDescription("Add content").assertDoesNotExist()
 
-        // System: the device/display settings - the keep-screen-on row
-        // (moved here from the menu), the auto-lock-after-idle ladder, and
-        // the appearance row (moved here from the menu).
-        compose.onNodeWithText("System").performClick()
+        // Appearance: the sub-screen offers the mode choices.
+        compose.onNodeWithText("Appearance").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Appearance").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Bright and sunny, any time of day.")
+            .assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("Appearance").assertExists()
+        compose.onNodeWithText("Bright and sunny, any time of day.")
+            .assertDoesNotExist()
+
+        // Advanced options: the device/display settings - the keep-screen-on
+        // row, the auto-lock-after-idle ladder, and the screen-lock state.
+        // The appearance row is NOT here any more (it is a top-level menu
+        // row).
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Keep screen on").assertExists()
         compose.onNodeWithText("Auto-lock after idle").assertExists()
-        compose.onNodeWithText("Appearance").assertExists()
+        compose.onNodeWithText("Appearance").assertDoesNotExist()
         systemBack(activity)
-        compose.onNodeWithText("System").assertExists()
+        compose.onNodeWithText("Advanced options").assertExists()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
     }
 

@@ -97,8 +97,8 @@ class AutoLockEngine(
     /**
      * Whether the app's screen-lock device admin is active right now. The
      * lock can only happen while it is active; the setting stays visible
-     * and usable either way (the System page prompts to enable it when it
-     * is not, and the app keeps working without the admin).
+     * and usable either way (the Advanced options page prompts to enable it
+     * when it is not, and the app keeps working without the admin).
      */
     private val _deviceAdminActive =
         MutableStateFlow(isDeviceAdminActive(deviceAdminComponent))
@@ -213,8 +213,8 @@ class AutoLockEngine(
 
     /**
      * Re-checks the screen-lock admin's real state with the platform:
-     * called when the System page opens (a revocation can happen behind the
-     * app's back) and after the enable flow's result comes back.
+     * called when the Advanced options page opens (a revocation can happen
+     * behind the app's back) and after the enable flow's result comes back.
      */
     fun refreshDeviceAdminState() {
         _deviceAdminActive.value = isDeviceAdminActive(deviceAdminComponent)

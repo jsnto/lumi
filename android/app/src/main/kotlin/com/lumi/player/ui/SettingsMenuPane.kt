@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
@@ -41,15 +42,17 @@ import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
 import com.lumi.player.data.AudioLevelMode
 import com.lumi.player.data.EntryEntity
+import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 
 /**
  * The settings menu: one clickable row per setting plus an app-version
  * footer. Clicking a row navigates into that setting's configuration screen.
- * The now-playing strip (D-06) tops the list while an entry is loaded. The
- * device/display settings (keep screen on, auto-lock after idle,
- * appearance) live on the System page, not on the menu.
+ * The now-playing strip (D-06) tops the list while an entry is loaded.
+ * Appearance is an everyday setting and a top-level row; the less-everyday
+ * device/display settings (keep screen on, auto-lock after idle, screen
+ * lock) live in the Advanced options page, not on the menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,11 +65,13 @@ internal fun SettingsMenuPane(
     entries: List<EntryEntity>,
     audioLevelMode: AudioLevelMode,
     audioLevelTargetLufs: Double,
+    themeMode: LumiThemeMode,
     onPlayMode: () -> Unit,
     onAudioLevel: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
-    onSystem: () -> Unit,
+    onAppearance: () -> Unit,
+    onAdvanced: () -> Unit,
     onBack: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -138,12 +143,28 @@ internal fun SettingsMenuPane(
                 onClick = onContent,
             )
             MenuRow(
+                icon = Icons.Filled.Palette,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
+                title = "Appearance",
+                subtitle = when (themeMode) {
+                    LumiThemeMode.FOLLOW_SYSTEM -> "Follow system"
+                    LumiThemeMode.LIGHT -> "Light"
+                    LumiThemeMode.DARK -> "Dark"
+                },
+                onClick = onAppearance,
+            )
+            // The advanced options replace the old System row: the less-
+            // everyday device/display/lock settings live on their own page,
+            // and the page is a plain list of option sections, so a future
+            // advanced option is a plain addition there.
+            MenuRow(
                 icon = Icons.Filled.Lock,
                 chipBackground = scheme.secondaryContainer,
                 chipContent = scheme.onSecondaryContainer,
-                title = "System",
-                subtitle = "Display and screen lock settings",
-                onClick = onSystem,
+                title = "Advanced options",
+                subtitle = "Display and screen lock",
+                onClick = onAdvanced,
             )
             Text(
                 text = "lumi v${BuildConfig.VERSION_NAME}",
