@@ -34,7 +34,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * explicit "Normalize now" pass (every unmeasured or stale audio entry,
  * best-effort, with the pass's own events), the fingerprint check (an
  * unchanged file keeps its stored measurement - no re-read), a second pass
- * while one is running is ignored, a failure settles the entry to
+ * while one is running is ignored, the single measurement slot (one
+ * loudness decode at a time: on-add measurements queue behind each other
+ * and behind an in-flight pass), a failure settles the entry to
  * unmeasured with its own event (the pass keeps going), a silent
  * measurement still counts as measured, and a freshly added song is
  * measured right away (the on-add hook).
@@ -188,6 +190,76 @@ class LoudnessOrchestrationTest {
         idleUntil({ !viewModel.normalizing.value })
         idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(1, 1) })
         assertEquals("the single pass measured the song exactly once", 1, calls.get())
+        controller.destroy()
+    }
+
+    @Test
+    fun onAddMeasurementsQueueBehindTheInFlightOneAtATime() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        val viewModel = viewModelOf(activity)
+        val calls = AtomicInteger()
+        val inFlight = AtomicInteger(0)
+        val peakInFlight = AtomicInteger(0)
+        // The first measurement hangs until the test releases it - the
+        // second on-add measurement must queue behind it, not start beside
+        // it (a folder add's burst is the same shape at folder scale).
+        val firstGate = CompletableDeferred<Unit>()
+        viewModel.loudnessMeasurer = {
+            calls.incrementAndGet()
+            val now = inFlight.incrementAndGet()
+            peakInFlight.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+            if (calls.get() == 1) firstGate.await()
+            inFlight.decrementAndGet()
+            LoudnessResult(-16.0, -1.0)
+        }
+        val one = storeSong("One", "content://one")
+        val two = storeSong("Two", "content://two")
+
+        viewModel.measureEntry(one)
+        idleUntil({ calls.get() == 1 })
+        viewModel.measureEntry(two)
+        pumpMainLooper()
+        assertEquals("the queued on-add measurement does not start beside the in-flight one", 1, calls.get())
+
+        firstGate.complete(Unit)
+        idleUntil({ calls.get() == 2 })
+        idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(2, 2) })
+        assertEquals("at most one loudness decode runs at a time", 1, peakInFlight.get())
+        controller.destroy()
+    }
+
+    @Test
+    fun anOnAddMeasurementQueuesBehindAnInFlightPassInsteadOfRunningBesideIt() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        val viewModel = viewModelOf(activity)
+        val calls = AtomicInteger()
+        // The pass's first decode hangs until the test releases it.
+        val gate = CompletableDeferred<Unit>()
+        viewModel.loudnessMeasurer = {
+            calls.incrementAndGet()
+            if (calls.get() == 1) gate.await()
+            LoudnessResult(-16.0, -1.0)
+        }
+        storeSong("One", "content://one")
+        val two = storeSong("Two", "content://two")
+        idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(0, 2) })
+
+        // The explicit pass is mid-decode when the on-add hook fires for
+        // the same song the pass is about to measure: it must queue behind
+        // the pass's slot, and the pass's stored row makes its own read
+        // redundant (one decode for the entry, not two).
+        viewModel.normalizeNow()
+        idleUntil({ calls.get() == 1 })
+        viewModel.measureEntry(two)
+        pumpMainLooper()
+        assertEquals("the on-add measurement waits for the pass's slot", 1, calls.get())
+
+        gate.complete(Unit)
+        idleUntil({ !viewModel.normalizing.value && calls.get() == 2 })
+        idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(2, 2) })
+        assertEquals("two entries, two decodes - no parallel or duplicate read", 2, calls.get())
         controller.destroy()
     }
 

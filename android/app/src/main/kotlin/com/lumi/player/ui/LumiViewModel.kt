@@ -68,6 +68,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
@@ -753,6 +755,15 @@ class LumiViewModel(
     private var normalizeJob: Job? = null
 
     /**
+     * The single measurement slot: every loudness read - the on-add
+     * measurements and the explicit pass alike - holds it for the full
+     * read, so at most one entry decodes at a time; a folder add's burst
+     * of fresh songs queues behind the in-flight read, one decode at a
+     * time.
+     */
+    private val measurementLock = Mutex()
+
+    /**
      * The explicit "Normalize now" pass (the audio level settings pane's
      * action): measures every audio entry that has no measurement yet, or
      * whose content changed since the last measurement (the content
@@ -817,31 +828,34 @@ class LumiViewModel(
      * The measurement pass for [entry]: the content fingerprint check
      * first (an unchanged file keeps its stored measurement - no re-read),
      * then the best-effort read (off the main thread and time-limited - any
-     * failure settles to unmeasured, with an event when [reportEvent]).
-     * Returns whether the entry now has a stored measurement.
+     * failure settles to unmeasured, with an event when [reportEvent]). The
+     * whole pass holds the single [measurementLock], so on-add measurements
+     * and the explicit pass queue behind each other - never two decodes at
+     * once. Returns whether the entry now has a stored measurement.
      */
-    private suspend fun measureEntryBestEffort(entry: EntryEntity, reportEvent: Boolean): Boolean {
-        val fingerprint = fingerprintOf(listOf(entry.toSpec()))
-        val existing = repository.loudnessForEntry(entry.id)
-        if (existing != null && existing.fingerprint == fingerprint) return true
-        val result = try {
-            withTimeout(LoudnessMeasurer.MEASURE_TIMEOUT_MS) {
-                withContext(Dispatchers.IO) { loudnessMeasurer(Uri.parse(entry.payload)) }
+    private suspend fun measureEntryBestEffort(entry: EntryEntity, reportEvent: Boolean): Boolean =
+        measurementLock.withLock {
+            val fingerprint = fingerprintOf(listOf(entry.toSpec()))
+            val existing = repository.loudnessForEntry(entry.id)
+            if (existing != null && existing.fingerprint == fingerprint) return@withLock true
+            val result = try {
+                withTimeout(LoudnessMeasurer.MEASURE_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) { loudnessMeasurer(Uri.parse(entry.payload)) }
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(TAG, "Measuring the loudness of ${entry.label} timed out", e)
+                if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
+                return@withLock false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't measure the loudness of ${entry.label}", e)
+                if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
+                return@withLock false
             }
-        } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "Measuring the loudness of ${entry.label} timed out", e)
-            if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
-            return false
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Couldn't measure the loudness of ${entry.label}", e)
-            if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
-            return false
+            repository.recordLoudness(entry.id, result.lufs, result.truePeakDbTp, fingerprint)
+            true
         }
-        repository.recordLoudness(entry.id, result.lufs, result.truePeakDbTp, fingerprint)
-        return true
-    }
 
     /** Whether [entry]'s stored measurement (if any) matches its content now. */
     private suspend fun isStaleForLoudness(entry: EntryEntity): Boolean {

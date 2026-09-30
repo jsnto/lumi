@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.min
 import kotlin.math.pow
 
 /**
@@ -136,6 +137,24 @@ class LoudnessTest {
     }
 
     @Test
+    fun oneFullWindow_reportsLoudnessTheMomentItsLastSampleLands() {
+        // Exactly 400 ms at 48 kHz (19 200 samples): one complete window,
+        // and the window is evaluated once its full 400 ms has been
+        // consumed - a stream of 400-499 ms carries it.
+        val result = meter(sine(1_000.0, length = fs * 4 / 10))
+
+        assertTrue("a 400 ms stream carries one complete window", result.hasLoudness)
+        assertEquals(-10.92, result.lufs!!, 0.05)
+    }
+
+    @Test
+    fun oneSampleShortOfOneWindow_reportsNoLoudness() {
+        val result = meter(sine(1_000.0, length = fs * 4 / 10 - 1)) // 399.98 ms
+
+        assertNull("the window is not complete until its 400 ms is ingested", result.lufs)
+    }
+
+    @Test
     fun reset_restartsTheMeterOnTheSameConfiguration() {
         val oneSecond = DoubleArray(fs) { i ->
             Math.sin(2.0 * Math.PI * 1_000.0 * i / fs)
@@ -182,6 +201,49 @@ class LoudnessTest {
         val stereoResult = meter(stereo, channels = 2)
 
         assertEquals(monoResult.lufs!!, stereoResult.lufs!!, 0.05)
+    }
+
+    @Test
+    @Suppress("ktlint:standard:function-naming")
+    fun aToneInOnlyOneChannel_measuresAboutThreeLuBelowTheDuplicatedTone() {
+        // The block value is the LINEAR channel average of the per-channel
+        // block mean squares: a tone duplicated on both channels keeps the
+        // mono reading, while the same tone in only one of the two channels
+        // halves the mean square - 10 * log10(2) = 3.01 LU lower.
+        val tone = DoubleArray(seconds30) { i -> Math.sin(2.0 * Math.PI * 1_000.0 * i / fs) }
+        val duplicated = DoubleArray(seconds30 * 2)
+        val hardPanned = DoubleArray(seconds30 * 2)
+        for (i in 0 until seconds30) {
+            duplicated[i * 2] = tone[i]
+            duplicated[i * 2 + 1] = tone[i]
+            hardPanned[i * 2] = tone[i]
+            // The right channel stays silent.
+        }
+        val duplicatedLufs = meter(duplicated, channels = 2).lufs!!
+        val hardPannedLufs = meter(hardPanned, channels = 2).lufs!!
+
+        assertEquals("the duplicated tone keeps the mono reading", -10.92, duplicatedLufs, 0.05)
+        assertEquals("the single-channel tone lands at the combined-gate value", -13.93, hardPannedLufs, 0.05)
+        assertEquals(3.0103, duplicatedLufs - hardPannedLufs, 0.05)
+    }
+
+    @Test
+    fun chunkedFeeding_acrossManyCalls_matchesTheWholeStreamReading() {
+        // The measurement sink feeds the meter in small buffers, so the
+        // window schedule must hold across calls, not just within one.
+        val oneSecond = DoubleArray(fs) { i -> Math.sin(2.0 * Math.PI * 1_000.0 * i / fs) }
+        val whole = meter(oneSecond)
+
+        val chunked = LoudnessMeter()
+        chunked.configure(fs, 1)
+        var offset = 0
+        while (offset < oneSecond.size) {
+            val chunk = min(7_000, oneSecond.size - offset)
+            chunked.processInterleaved(oneSecond, offset, chunk)
+            offset += chunk
+        }
+
+        assertEquals(whole.lufs!!, chunked.result().lufs!!, 1e-9)
     }
 
     @Test

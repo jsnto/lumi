@@ -15,8 +15,10 @@ import kotlin.math.tanh
  *
  * The [LoudnessMeter] is a streaming meter: samples are K-weighted with
  * CONTINUOUS filter state across the 400 ms block windows (100 ms step,
- * 75% overlap), the block mean squares are gated (the absolute gate, then
- * the relative gate 10 LU below the ungated integrated value), and the
+ * 75% overlap), the per-channel block mean squares are combined into one
+ * value per block (the linear channel average - the BS.1770-4 block
+ * value), the combined blocks are gated (the absolute gate, then the
+ * relative gate 10 LU below the ungated integrated value), and the
  * integrated loudness lands in LUFS. The same module carries the gain
  * math (measure-to-target, headroom-capped) and the soft clip the playback
  * limiter uses on boosted tracks.
@@ -110,11 +112,13 @@ internal class KWeightFilter(a: DoubleArray, b: DoubleArray) {
  *
  * Samples are ingested interleaved ([processInterleaved]), K-weighted with
  * the per-channel continuous filter, and the 400 ms block mean squares
- * (100 ms step, 75% overlap) are gated when [result] is taken: the
- * absolute gate (-70 LUFS mean square), then the relative gate 10 LU below
- * the ungated integrated loudness. A stream shorter than one 400 ms window
- * (or silent) reports NO loudness ([LoudnessResult.lufs] null), never a
- * fake reading.
+ * (100 ms step, 75% overlap) are combined across the channels per block
+ * (the linear average - the BS.1770-4 block value) and gated when [result]
+ * is taken: the absolute gate (-70 LUFS mean square), then the relative
+ * gate 10 LU below the ungated integrated loudness. A block is evaluated
+ * once its full 400 ms has been ingested - a stream of exactly one 400 ms
+ * window already reports loudness; a shorter (or silent) stream reports NO
+ * loudness ([LoudnessResult.lufs] null), never a fake reading.
  */
 class LoudnessMeter {
 
@@ -126,7 +130,8 @@ class LoudnessMeter {
     private var filters: Array<KWeightFilter>? = null
     private var ring: Array<DoubleArray>? = null
     private var totals: LongArray? = null
-    private val blockMeans = ArrayList<Double>()
+    /** The channel-combined 400 ms block mean squares, one per evaluated block. */
+    private val windowMeans = ArrayList<Double>()
     private var truePeak = 0.0
     private var primed = false
 
@@ -146,7 +151,7 @@ class LoudnessMeter {
         filters = Array(channelCount) { KWeightFilter(a, b) }
         ring = Array(channelCount) { DoubleArray(blockLen) }
         totals = LongArray(channelCount)
-        blockMeans.clear()
+        windowMeans.clear()
         truePeak = 0.0
         primed = true
     }
@@ -163,7 +168,7 @@ class LoudnessMeter {
         filters = Array(channelCount) { KWeightFilter(a, b) }
         ring?.forEach { it.fill(0.0) }
         totals?.fill(0L)
-        blockMeans.clear()
+        windowMeans.clear()
         truePeak = 0.0
     }
 
@@ -175,11 +180,25 @@ class LoudnessMeter {
         val filters = filters ?: return
         val ring = ring ?: return
         val totals = totals ?: return
+        // The block windows that COMPLETE within this ingest (one per 100 ms
+        // step, the first once the full 400 ms has landed): each is
+        // evaluated the moment its last sample is ingested, while the ring
+        // still holds its samples.
+        val firstTotal = totals[0]
+        val endTotal = firstTotal + frameCount
+        val windows = ArrayList<Long>()
+        var window = (firstTotal / stepLen.toLong() + 1) * stepLen.toLong()
+        while (window <= endTotal) {
+            if (window >= blockLen) windows.add(window)
+            window += stepLen.toLong()
+        }
+        val channelMeans = Array(windows.size) { DoubleArray(channelCount) }
         for (ch in 0 until channelCount) {
             val filter = filters[ch]
             val channelRing = ring[ch]
             var total = totals[ch]
             var index = offset + ch
+            var windowPointer = 0
             for (frame in 0 until frameCount) {
                 val s = samples[index]
                 index += channelCount
@@ -187,11 +206,15 @@ class LoudnessMeter {
                 if (magnitude > truePeak) truePeak = magnitude
                 channelRing[(total % blockLen).toInt()] = s
                 total++
-                if (total >= blockLen && total % stepLen.toLong() == stepLen - 1L) {
-                    processWindow(filter, channelRing, total)
+                if (windowPointer < windows.size && total == windows[windowPointer]) {
+                    channelMeans[windowPointer][ch] = processWindow(filter, channelRing, total)
+                    windowPointer++
                 }
             }
             totals[ch] = total
+        }
+        for (means in channelMeans) {
+            windowMeans.add(means.average())
         }
     }
 
@@ -203,7 +226,7 @@ class LoudnessMeter {
      */
     fun result(): LoudnessResult {
         if (!primed) return LoudnessResult(null, null)
-        val absolutelyGated = blockMeans.filter { it > ABSOLUTE_GATE }
+        val absolutelyGated = windowMeans.filter { it > ABSOLUTE_GATE }
         val lufs = absolutelyGated.takeIf { it.isNotEmpty() }?.let {
             val ungated = it.average()
             val relativeGate = ungated / RELATIVE_GATE
@@ -214,7 +237,7 @@ class LoudnessMeter {
         return LoudnessResult(lufs, truePeakDbTp)
     }
 
-    private fun processWindow(filter: KWeightFilter, ringChannel: DoubleArray, total: Long) {
+    private fun processWindow(filter: KWeightFilter, ringChannel: DoubleArray, total: Long): Double {
         var slot = ((total - blockLen) % blockLen).toInt()
         var accumulator = 0.0
         for (k in 0 until blockLen) {
@@ -223,7 +246,7 @@ class LoudnessMeter {
             slot++
             if (slot == blockLen) slot = 0
         }
-        blockMeans.add(accumulator / blockLen)
+        return accumulator / blockLen
     }
 
     companion object {
