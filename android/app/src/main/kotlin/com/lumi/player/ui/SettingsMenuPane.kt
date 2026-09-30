@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
+import com.lumi.player.data.AudioLevelMode
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
@@ -47,7 +49,7 @@ import com.lumi.player.data.TagEntity
  * footer. Clicking a row navigates into that setting's configuration screen.
  * The now-playing strip (D-06) tops the list while an entry is loaded. The
  * device/display settings (keep screen on, auto-lock after idle,
- * appearance) live in the System page, not on the menu.
+ * appearance) live on the System page, not on the menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +60,10 @@ internal fun SettingsMenuPane(
     isPlaying: Boolean,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
+    audioLevelMode: AudioLevelMode,
+    audioLevelTargetLufs: Double,
     onPlayMode: () -> Unit,
+    onAudioLevel: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
     onSystem: () -> Unit,
@@ -104,6 +109,17 @@ internal fun SettingsMenuPane(
                     PlayMode.PROXIMITY -> "Proximity"
                 },
                 onClick = onPlayMode,
+            )
+            MenuRow(
+                icon = Icons.Filled.VolumeUp,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
+                title = "Audio level",
+                subtitle = when (audioLevelMode) {
+                    AudioLevelMode.OFF -> "Off"
+                    AudioLevelMode.NORMALIZE -> "Normalize to ${audioLevelTargetLufs.toInt()} LUFS"
+                },
+                onClick = onAudioLevel,
             )
             MenuRow(
                 icon = Icons.Filled.Nfc,

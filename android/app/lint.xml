@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The audio level's playback hook (the per-track gain + soft-clip
+         limiter in the ExoPlayer sink's processor chain) can only be
+         implemented through media3's AudioProcessor / AudioSink APIs, which
+         are marked @UnstableApi - the marker is the API's own opt-in flag
+         and the compiler build accepts these use sites without per-site
+         @OptIn. Accept the marker project-wide (the check's documented
+         `opt-in` option) so the intended extension point is not reported as
+         an error at every use site. -->
+    <issue id="UnsafeOptInUsageError">
+        <option name="opt-in" value="androidx.media3.common.util.UnstableApi" />
+    </issue>
+</lint>

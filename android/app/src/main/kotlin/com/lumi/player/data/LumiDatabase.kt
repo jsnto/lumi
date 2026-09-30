@@ -16,8 +16,9 @@ import android.content.Context
         SettingsEntity::class,
         TagPositionEntity::class,
         FolderEntity::class,
+        EntryLoudnessEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class LumiDatabase : RoomDatabase() {
@@ -94,15 +95,38 @@ abstract class LumiDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 -> v6: the per-entry loudness table (the on-device R128
+         * measurement cache behind the audio level: the stored LUFS / true
+         * peak the per-track gain is computed from, plus the content
+         * fingerprint so a changed file is re-measured and a stable one is
+         * not). The entry foreign key is CASCADE: the entry's removal takes
+         * its measurement with it.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE entry_loudness (" +
+                        "entry_id INTEGER NOT NULL PRIMARY KEY, " +
+                        "lufs REAL, " +
+                        "true_peak_db_tp REAL, " +
+                        "fingerprint TEXT NOT NULL, " +
+                        "measured_at INTEGER NOT NULL, " +
+                        "FOREIGN KEY(entry_id) REFERENCES entries(id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                )
+            }
+        }
+
         fun create(context: Context): LumiDatabase =
             Room.databaseBuilder(context, LumiDatabase::class.java, NAME)
-                // v3 -> v4 (the folder marker column) and v4 -> v5 (the
+                // v3 -> v4 (the folder marker column), v4 -> v5 (the
                 // tag_links entries foreign key dropped + the song-name
                 // snapshot + the per-card memory table - the link survives)
-                // are real migrations; the remembered-positions table (v2)
-                // and the folders table (v3) still have nothing worth
-                // migrating, so databases older than v3 stay destructive.
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                // and v5 -> v6 (the per-entry loudness table) are real
+                // migrations; the remembered-positions table (v2) and the
+                // folders table (v3) still have nothing worth migrating, so
+                // databases older than v3 stay destructive.
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build()
     }

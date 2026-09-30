@@ -164,8 +164,13 @@ class TagScanAssignUiTest {
 
     /** Stores one song, opens the content pane, and opens its profile. */
     private fun openSongProfile(label: String = "Second song") {
+        // The top bar and the settings menu settle through async Room round
+        // trips: wait for the merged tree to have each node before clicking
+        // it (a click racing a mid-recomposition top bar misses the node).
+        idleUntil({ compose.onNodeWithContentDescription("Settings").isDisplayed() })
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
+        idleUntil({ compose.onAllNodesWithText("Content").fetchSemanticsNodes().isNotEmpty() })
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         dbAndGet { app().repository.addEntryUnique(EntryType.AUDIO, label, "content://docs/$label") }

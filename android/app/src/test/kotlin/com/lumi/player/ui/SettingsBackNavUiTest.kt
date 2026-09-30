@@ -105,6 +105,8 @@ class SettingsBackNavUiTest {
      */
     private fun openTagPage(name: String): MainActivity {
         val activity = openSettings()
+        compose.onNodeWithText("NFC tags").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
         waitForText(name)
@@ -121,6 +123,8 @@ class SettingsBackNavUiTest {
      */
     private fun openFolderPage(label: String): MainActivity {
         val activity = openSettings()
+        compose.onNodeWithText("Content").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         waitForText(label)
@@ -172,7 +176,11 @@ class SettingsBackNavUiTest {
     fun systemBackUnwindsTheSubScreenAndOnlyThenTheMenu() {
         val activity = openSettings()
 
-        // Open the tags sub-screen from the (top) of the menu.
+        // Open the tags sub-screen from the (top) of the menu (the menu
+        // overflows the small test screen, so scroll the row into view
+        // first - the click only lands on a laid-out row).
+        compose.onNodeWithText("NFC tags").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
         // The pane's scan action is on screen (on the small test screen it
@@ -261,8 +269,12 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Music").assertExists()
         compose.onNodeWithText("Tap to view its songs").assertExists()
 
-        // The second system back leaves the content pane for the menu.
+        // The second system back leaves the content pane for the menu
+        // (the menu list keeps its scroll position, so bring the leading
+        // row back into view before asserting on it).
         systemBack(activity)
+        compose.onNodeWithText("Play mode").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
 
@@ -306,6 +318,8 @@ class SettingsBackNavUiTest {
             app().repository.markEntriesFromFolder(folder.id, setOf(song.payload))
         }
         val activity = openSettings()
+        compose.onNodeWithText("Content").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         // The page's walk goes through the faked seam (it lists the stored
@@ -343,8 +357,12 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Folder details").assertDoesNotExist()
         compose.onNodeWithText("Tap to view its songs").assertExists()
 
-        // ...and the third leaves the content pane for the menu.
+        // ...and the third leaves the content pane for the menu (the menu
+        // list keeps its scroll position, so bring the leading row back
+        // into view before asserting on it).
         systemBack(activity)
+        compose.onNodeWithText("Play mode").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
     }
 
@@ -370,6 +388,8 @@ class SettingsBackNavUiTest {
         dbAndGet { app().repository.addEntryUnique(EntryType.AUDIO, "Individual song", "content://docs/solo") }
 
         val activity = openSettings()
+        compose.onNodeWithText("Content").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
         waitForText("Individual song")
@@ -386,6 +406,10 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Individual content").assertExists()
         compose.onNodeWithText("Tap to view its songs").assertDoesNotExist()
         systemBack(activity)
+        // The menu list keeps its scroll position: bring the leading row
+        // back into view before asserting on it.
+        compose.onNodeWithText("Play mode").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
     }
 

@@ -98,6 +98,33 @@ choice always wins).
 In both modes, re-reading the tag that is playing while you have paused
 resumes playback — an NFC read overrides play/pause.
 
+## Audio level
+
+The **Audio level** row (top of the Settings menu) can bring every song
+to a common loudness. The choice is remembered on the device:
+
+- **Off** (the default) — songs play at the level they were recorded at;
+  no gain is applied. Off is the default, so an existing user's volume is
+  never changed.
+- **Normalize** — brings each measured song to the target level: quiet
+  songs up, loud songs down. The target is picked from -18, -16 (the
+  default) or -14 LUFS.
+
+Each audio file's loudness is measured on the device (ITU-R BS.1770 /
+EBU R128) when the file is added, and the result is stored with the file
+— the file itself is never modified, no normalized copies are made, and
+nothing leaves the phone. Measurement is best-effort: a file that can't
+be measured plays at its recorded level, and the pane's **Normalize now**
+action re-measures every unmeasured or changed file (one decode at a
+time), keeping going past a per-file failure.
+
+With Normalize on, the player applies a per-track gain (a custom Media3
+audio processor in the playback chain) so a measured song lands at the
+target level: a boost is capped by the track's peak headroom and
+soft-limited so it never clips, and a song with no measurement plays at
+its recorded level. A change to the mode or the target applies from the
+next track.
+
 ## Content types
 
 A tag links to an ordered list of entries. Each entry has a type:

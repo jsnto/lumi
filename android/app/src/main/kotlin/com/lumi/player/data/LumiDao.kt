@@ -202,4 +202,31 @@ interface LumiDao {
 
     @Query("DELETE FROM tag_positions WHERE tag_uid = :uid")
     suspend fun deletePosition(uid: String)
+
+    // ---- per-entry loudness (the R128 measurement cache) ----
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertEntryLoudness(entry: EntryLoudnessEntity): Long
+
+    @Query("SELECT * FROM entry_loudness WHERE entry_id = :entryId LIMIT 1")
+    suspend fun entryLoudness(entryId: Long): EntryLoudnessEntity?
+
+    /** The measurement rows, live (the audio level status row's measured count). */
+    @Query("SELECT * FROM entry_loudness")
+    fun observeEntryLoudness(): Flow<List<EntryLoudnessEntity>>
+
+    /**
+     * The measurement rows joined to their content rows' payload: the
+     * [LoudnessStore]'s service snapshot (keyed by the payload the player
+     * actually loads - a payload shared by two entries maps to the same
+     * measurement).
+     */
+    @Query(
+        "SELECT l.entry_id, l.lufs, l.true_peak_db_tp, l.fingerprint, l.measured_at, e.payload " +
+            "FROM entry_loudness l JOIN entries e ON e.id = l.entry_id",
+    )
+    fun observeEntryLoudnessWithPayload(): Flow<List<EntryLoudnessPayload>>
+
+    @Query("DELETE FROM entry_loudness WHERE entry_id = :entryId")
+    suspend fun deleteEntryLoudness(entryId: Long)
 }

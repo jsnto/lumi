@@ -14,9 +14,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
 import com.lumi.player.data.AutoLockDelay
+import com.lumi.player.data.AudioLevelMode
+import com.lumi.player.data.AudioLevelSettings
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.ContentSortDirection
+import com.lumi.player.data.LoudnessMeasurer
+import com.lumi.player.data.LoudnessResult
+import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
@@ -45,14 +50,16 @@ import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -61,6 +68,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
@@ -450,6 +459,42 @@ class LumiViewModel(
         viewModelScope.launch { repository.setThemeMode(mode) }
     }
 
+    // ---- settings: audio level ----
+
+    /**
+     * The audio level mode (OFF: every song plays at its recorded level;
+     * NORMALIZE: each measured song gets the per-track gain that brings its
+     * loudness to the target level). Off by default: no gain is applied
+     * until the user turns normalization on. The pick persists in the
+     * database (the service reads it live through the app's in-memory
+     * [com.lumi.player.LumiApp.audioLevel] snapshot, no database read on the
+     * playback path).
+     */
+    val audioLevelMode: StateFlow<AudioLevelMode> =
+        repository.observeAudioLevelMode()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, AudioLevelMode.OFF)
+
+    fun setAudioLevelMode(mode: AudioLevelMode) {
+        viewModelScope.launch { repository.setAudioLevelMode(mode) }
+    }
+
+    /**
+     * The target integrated loudness (LUFS) normalization aims for: one of
+     * the picker's targets (AudioLevelSettings.TARGETS - -18 / -16 / -14,
+     * the default -16). The pick persists in the database.
+     */
+    val audioLevelTargetLufs: StateFlow<Double> =
+        repository.observeAudioLevelTargetLufs()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                AudioLevelSettings.DEFAULT_TARGET_LUFS,
+            )
+
+    fun setAudioLevelTargetLufs(targetLufs: Double) {
+        viewModelScope.launch { repository.setAudioLevelTargetLufs(targetLufs) }
+    }
+
     // ---- settings: auto-lock after idle ----
 
     /**
@@ -690,6 +735,146 @@ class LumiViewModel(
         const val METADATA_READ_TIMEOUT_MS = 5_000L
     }
 
+    // ---- audio level: the measurement (loudness normalization) ----
+
+    /**
+     * The audio level's measurement status ("N of M songs measured", the
+     * settings pane's status row): the app's audio entries against the
+     * stored measurements (a silent file's measurement still counts as
+     * measured - the read settled, there is just nothing to normalize).
+     */
+    val loudnessStatus: StateFlow<LoudnessStatus> =
+        repository.observeLoudnessStatus()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, LoudnessStatus(0, 0))
+
+    /** True while an explicit "Normalize now" pass is running. */
+    private val _normalizing = MutableStateFlow(false)
+
+    val normalizing: StateFlow<Boolean> = _normalizing.asStateFlow()
+
+    private var normalizeJob: Job? = null
+
+    /**
+     * The single measurement slot: every loudness read - the on-add
+     * measurements and the explicit pass alike - holds it for the full
+     * read, so at most one entry decodes at a time; a folder add's burst
+     * of fresh songs queues behind the in-flight read, one decode at a
+     * time.
+     */
+    private val measurementLock = Mutex()
+
+    /**
+     * The explicit "Normalize now" pass (the audio level settings pane's
+     * action): measures every audio entry that has no measurement yet, or
+     * whose content changed since the last measurement (the content
+     * fingerprint no longer matches the stored one). Best-effort per entry:
+     * a failure leaves that entry unmeasured with its own event and the
+     * pass keeps going. A second pass while one is running is ignored, so
+     * a slow earlier pass can never run against a newer selection; the
+     * live progress is the [loudnessStatus] row, plus the pass's own
+     * start / completion events (the app's usual event language).
+     */
+    fun normalizeNow() {
+        if (normalizeJob?.isActive == true) return
+        normalizeJob = viewModelScope.launch {
+            _normalizing.value = true
+            try {
+                val pending = repository.observeEntries().first().filter {
+                    EntryType.fromStorage(it.type) == EntryType.AUDIO && isStaleForLoudness(it)
+                }
+                if (pending.isEmpty()) {
+                    event("Everything is already measured.")
+                    return@launch
+                }
+                event(
+                    if (pending.size == 1) {
+                        "Measuring 1 song for audio level…"
+                    } else {
+                        "Measuring ${pending.size} songs for audio level…"
+                    },
+                )
+                var failed = 0
+                for (entry in pending) {
+                    if (!measureEntryBestEffort(entry, reportEvent = true)) failed++
+                }
+                event(
+                    if (failed > 0) {
+                        "Audio level ready - $failed " +
+                            "${if (failed == 1) "song" else "songs"} couldn't be measured."
+                    } else {
+                        "Audio level ready."
+                    },
+                )
+            } finally {
+                _normalizing.value = false
+            }
+        }
+    }
+
+    /**
+     * Best-effort measurement of one freshly added audio entry (the
+     * on-add measurement: a song added to the content list is measured
+     * right away, so the audio level works the moment it is turned on).
+     * A failure leaves the entry unmeasured with its own event (the song
+     * plays at its recorded level; "Normalize now" can retry it).
+     */
+    fun measureEntry(entry: EntryEntity) {
+        viewModelScope.launch {
+            measureEntryBestEffort(entry, reportEvent = true)
+        }
+    }
+
+    /**
+     * The measurement pass for [entry]: the content fingerprint check
+     * first (an unchanged file keeps its stored measurement - no re-read),
+     * then the best-effort read (off the main thread and time-limited - any
+     * failure settles to unmeasured, with an event when [reportEvent]). The
+     * whole pass holds the single [measurementLock], so on-add measurements
+     * and the explicit pass queue behind each other - never two decodes at
+     * once. Returns whether the entry now has a stored measurement.
+     */
+    private suspend fun measureEntryBestEffort(entry: EntryEntity, reportEvent: Boolean): Boolean =
+        measurementLock.withLock {
+            val fingerprint = fingerprintOf(listOf(entry.toSpec()))
+            val existing = repository.loudnessForEntry(entry.id)
+            if (existing != null && existing.fingerprint == fingerprint) return@withLock true
+            val result = try {
+                withTimeout(LoudnessMeasurer.MEASURE_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) { loudnessMeasurer(Uri.parse(entry.payload)) }
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(TAG, "Measuring the loudness of ${entry.label} timed out", e)
+                if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
+                return@withLock false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't measure the loudness of ${entry.label}", e)
+                if (reportEvent) event("Couldn't measure “${entry.label}” for audio level.")
+                return@withLock false
+            }
+            repository.recordLoudness(entry.id, result.lufs, result.truePeakDbTp, fingerprint)
+            true
+        }
+
+    /** Whether [entry]'s stored measurement (if any) matches its content now. */
+    private suspend fun isStaleForLoudness(entry: EntryEntity): Boolean {
+        val row = repository.loudnessForEntry(entry.id)
+        return row == null || row.fingerprint != fingerprintOf(listOf(entry.toSpec()))
+    }
+
+    /**
+     * Test seam: the loudness measurement read, replaced in unit tests.
+     * The default decodes the file at decode speed (the [LoudnessMeasurer]:
+     * a background ExoPlayer with the meter's [LoudnessMeterProcessor] and
+     * the [MeterAudioSink] that discards the audio) and is time-limited
+     * (a stalled decode settles into a failure); a read failure surfaces as
+     * the exception the caller settles to unmeasured.
+     */
+    internal var loudnessMeasurer: suspend (Uri) -> LoudnessResult = { uri ->
+        LoudnessMeasurer(context).measure(uri)
+    }
+
     // ---- settings: tags ----
 
     /**
@@ -850,6 +1035,10 @@ class LumiViewModel(
                     "Content added"
                 },
             )
+            // Fresh audio is measured right away, best-effort (the audio
+            // level works the moment it is turned on; a failure leaves the
+            // song unmeasured at its recorded level).
+            if (added != null && type == EntryType.AUDIO) measureEntry(added)
         }
     }
 
@@ -898,21 +1087,23 @@ class LumiViewModel(
      * outcome.
      */
     private suspend fun storeFolderSongs(folder: FolderEntity, scanned: List<ScannedSong>) {
-        val fresh = scanned.count {
-            repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id) != null
+        val added = scanned.mapNotNull {
+            repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id)
         }
         event(
             when {
-                fresh == 0 ->
+                added.isEmpty() ->
                     if (scanned.size == 1) {
                         "The song from the folder is already in your content list."
                     } else {
                         "All ${scanned.size} songs from the folder are already in your content list."
                     }
-                fresh < scanned.size -> "Added $fresh of ${scanned.size} songs from the folder."
+                added.size < scanned.size -> "Added ${added.size} of ${scanned.size} songs from the folder."
                 else -> "Added ${scanned.size} ${if (scanned.size == 1) "song" else "songs"} from the folder."
             },
         )
+        // Freshly stored audio is measured right away, best-effort.
+        added.forEach { measureEntry(it) }
     }
 
     /**
@@ -936,7 +1127,7 @@ class LumiViewModel(
                 Log.e(TAG, "Failed to rescan folder ${folder.uri}", e)
                 emptyList()
             }
-            newSongs.forEach {
+            val added = newSongs.mapNotNull {
                 repository.addEntryUnique(EntryType.AUDIO, it.displayName, it.uri, folderId = folder.id)
             }
             event(
@@ -946,6 +1137,8 @@ class LumiViewModel(
                     else -> "Added ${newSongs.size} new songs from that folder."
                 },
             )
+            // Newly stored audio is measured right away, best-effort.
+            added.forEach { measureEntry(it) }
             // The folder page (if it is open on this folder) shows the new
             // songs.
             if (selectedFolder?.id == folder.id) refreshFolderSongs()

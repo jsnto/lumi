@@ -24,8 +24,8 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
- * is a list of buttons, one per setting (play mode, NFC tags, content,
- * system - in that order); clicking a row navigates into that
+ * is a list of buttons, one per setting (play mode, audio level, NFC tags,
+ * content, system - in that order); clicking a row navigates into that
  * setting's own configuration screen, and the back arrow / system back
  * unwind it back to the menu (from the menu, to the player screen). The
  * device/display settings (keep screen on, auto-lock after idle,
@@ -75,6 +75,7 @@ class SettingsMenuUiTest {
         // The keep-screen-on row and the appearance row are gone from the
         // menu too: they moved into the System page.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Audio level").assertExists()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithText("System").assertExists()
@@ -82,15 +83,16 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Appearance").assertDoesNotExist()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
 
-        // The menu's order reads top to bottom: play mode, NFC tags,
-        // content, system.
+        // The menu's order reads top to bottom: play mode, audio level,
+        // NFC tags, content, system.
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
+        val audioLevelTop = compose.onNodeWithText("Audio level").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
         val systemTop = compose.onNodeWithText("System").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, NFC tags, content, system - in that order",
-            playModeTop < nfcTop && nfcTop < contentTop && contentTop < systemTop,
+            "the menu lists play mode, audio level, NFC tags, content, system - in that order",
+            playModeTop < audioLevelTop && audioLevelTop < nfcTop && nfcTop < contentTop && contentTop < systemTop,
         )
 
         // The menu only lists the settings - none of the configuration
@@ -120,6 +122,19 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Play mode").assertExists()
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
             .assertDoesNotExist()
+
+        // Audio level: the sub-screen offers the mode selection (Off /
+        // Normalize), the target-level picker, the measurement status and
+        // the explicit "Normalize now" action.
+        compose.onNodeWithText("Audio level").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Off").assertExists()
+        compose.onNodeWithText("Normalize").assertExists()
+        compose.onNodeWithText("-16 LUFS").assertExists()
+        compose.onNodeWithText("Normalize now").assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("Audio level").assertExists()
+        compose.onNodeWithText("Normalize now").assertDoesNotExist()
 
         // NFC tags: the sub-screen offers the scan action (a prominent
         // button above the list, not a row of it) and the (empty) list;

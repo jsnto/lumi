@@ -148,5 +148,39 @@ data class SettingsEntity(
          * screen is locked; "0" (off) by default.
          */
         const val AUTO_LOCK_MINUTES = "auto_lock_minutes"
+
+        /** "off"/"normalize": whether the app normalizes playback loudness. */
+        const val AUDIO_LEVEL_MODE = "audio_level_mode"
+
+        /** "-18"/"-16"/"-14": the target integrated loudness (LUFS) for normalization. */
+        const val AUDIO_LEVEL_TARGET_LUFS = "audio_level_target_lufs"
     }
 }
+
+/**
+ * The measured loudness of one content entry (the on-device R128 read),
+ * keyed by the entry's id and CASCADEing off it (the entry's removal takes
+ * its measurement with it). [lufs] / [truePeakDbTp] are null when the audio
+ * carries NO loudness (it is silent, or shorter than one 400 ms window) -
+ * the row is still recorded: "measured, nothing to normalize" is a stable
+ * state, and a re-measure on a content change overwrites it.
+ */
+@Entity(
+    tableName = "entry_loudness",
+    foreignKeys = [
+        ForeignKey(
+            entity = EntryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["entry_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class EntryLoudnessEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "entry_id") val entryId: Long,
+    @ColumnInfo(name = "lufs") val lufs: Double?,
+    @ColumnInfo(name = "true_peak_db_tp") val truePeakDbTp: Double?,
+    val fingerprint: String,
+    @ColumnInfo(name = "measured_at") val measuredAt: Long,
+)
