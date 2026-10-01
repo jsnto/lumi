@@ -87,7 +87,10 @@ class FolderAddUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
+    // 15 s (the suite's convention for polling the async Room round trips;
+    // the pre-fix 5 s window timed out under full-suite JVM load - the host's
+    // swap was full - while the scan itself was still settling).
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
