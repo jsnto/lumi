@@ -6,8 +6,10 @@ import android.view.WindowManager
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -204,7 +206,10 @@ class AutoLockUiTest {
         // default) and the screen-lock permission's state (not enabled -
         // the app's admin has never been granted in a fresh test run).
         compose.onNodeWithText("Auto-lock after idle").assertExists()
-        compose.onNodeWithText("Off").assertExists()
+        // The ladder's "Off" row (the audio level section's row subtitle
+        // reads "Off" too while the mode is off - the reorganization moved
+        // the setting onto this page - so the count is two).
+        compose.onAllNodesWithText("Off").assertCountEquals(2)
         compose.onNodeWithText("After 5 minutes").assertExists()
         compose.onNodeWithText("After 10 minutes").assertExists()
         compose.onNodeWithText("After 15 minutes").assertExists()

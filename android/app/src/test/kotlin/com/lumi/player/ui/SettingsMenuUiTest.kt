@@ -25,13 +25,13 @@ import org.robolectric.shadows.ShadowLooper
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
- * is a list of buttons, one per setting (play mode, audio level, NFC tags,
- * content, appearance, advanced options - in that order); clicking a row
- * navigates into that setting's own configuration screen, and the back
+ * is a list of buttons, one per setting (play mode, NFC tags, content,
+ * appearance, advanced options - in that order); clicking a row navigates
+ * into that setting's own configuration screen, and the back
  * arrow / system back unwind it back to the menu (from the menu, to the
- * player screen). The device/display settings (keep screen on, auto-lock
- * after idle, screen lock) live in the Advanced options page, not on the
- * menu. The NFC
+ * player screen). The less-everyday settings (keep screen on, audio level,
+ * auto-lock after idle, screen lock) live in the Advanced options page, not
+ * on the menu. The NFC
  * tags pane rows offer no row-level delete - deleting a tag happens from the
  * tag detail page's danger zone.
  */
@@ -74,31 +74,30 @@ class SettingsMenuUiTest {
         // Every setting is a button on the settings screen itself. The
         // "Tag to content" entry is gone: linking songs to a tag happens
         // from the tag detail page's add-song action, not from the menu.
-        // The keep-screen-on row is gone from the menu too: it moved into
-        // the Advanced options page. Appearance is an everyday setting and
-        // a top-level menu row.
+        // The keep-screen-on and audio-level rows are gone from the menu
+        // too: they moved into the Advanced options page. Appearance is an
+        // everyday setting and a top-level menu row.
         compose.onNodeWithText("Play mode").assertIsDisplayed()
-        compose.onNodeWithText("Audio level").assertExists()
         compose.onNodeWithText("NFC tags").assertExists()
         compose.onNodeWithText("Content").assertExists()
         compose.onNodeWithText("Appearance").assertExists()
         compose.onNodeWithText("Advanced options").assertExists()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()
+        compose.onNodeWithText("Audio level").assertDoesNotExist()
         compose.onNodeWithText("Tag to content").assertDoesNotExist()
 
-        // The menu's order reads top to bottom: play mode, audio level,
-        // NFC tags, content, appearance, advanced options.
+        // The menu's order reads top to bottom: play mode, NFC tags,
+        // content, appearance, advanced options.
         compose.onNodeWithText("Advanced options").performScrollTo()
         compose.waitForIdle()
         val playModeTop = compose.onNodeWithText("Play mode").fetchSemanticsNode().boundsInRoot.top
-        val audioLevelTop = compose.onNodeWithText("Audio level").fetchSemanticsNode().boundsInRoot.top
         val nfcTop = compose.onNodeWithText("NFC tags").fetchSemanticsNode().boundsInRoot.top
         val contentTop = compose.onNodeWithText("Content").fetchSemanticsNode().boundsInRoot.top
         val appearanceTop = compose.onNodeWithText("Appearance").fetchSemanticsNode().boundsInRoot.top
         val advancedTop = compose.onNodeWithText("Advanced options").fetchSemanticsNode().boundsInRoot.top
         assertTrue(
-            "the menu lists play mode, audio level, NFC tags, content, appearance, advanced options - in that order",
-            playModeTop < audioLevelTop && audioLevelTop < nfcTop && nfcTop < contentTop && contentTop < appearanceTop && appearanceTop < advancedTop,
+            "the menu lists play mode, NFC tags, content, appearance, advanced options - in that order",
+            playModeTop < nfcTop && nfcTop < contentTop && contentTop < appearanceTop && appearanceTop < advancedTop,
         )
 
         // The menu only lists the settings - none of the configuration
@@ -128,19 +127,6 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Play mode").assertExists()
         compose.onNodeWithText("Keeps playing until you tap a different tag.")
             .assertDoesNotExist()
-
-        // Audio level: the sub-screen offers the mode selection (Off /
-        // Normalize), the target-level picker, the measurement status and
-        // the explicit "Normalize now" action.
-        compose.onNodeWithText("Audio level").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Off").assertExists()
-        compose.onNodeWithText("Normalize").assertExists()
-        compose.onNodeWithText("-16 LUFS").assertExists()
-        compose.onNodeWithText("Normalize now").assertExists()
-        systemBack(activity)
-        compose.onNodeWithText("Audio level").assertExists()
-        compose.onNodeWithText("Normalize now").assertDoesNotExist()
 
         // NFC tags: the sub-screen offers the scan action (a prominent
         // button above the list, not a row of it) and the (empty) list;
@@ -185,9 +171,9 @@ class SettingsMenuUiTest {
             .assertDoesNotExist()
 
         // Advanced options: the device/display settings - the keep-screen-on
-        // row, the auto-lock-after-idle ladder, and the screen-lock state.
-        // The appearance row is NOT here any more (it is a top-level menu
-        // row).
+        // row, the audio level row, the auto-lock-after-idle ladder, and the
+        // screen-lock state. The appearance row is NOT here any more (it is
+        // a top-level menu row).
         compose.onNodeWithText("Advanced options").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Advanced options").performClick()
@@ -195,6 +181,22 @@ class SettingsMenuUiTest {
         compose.onNodeWithText("Keep screen on").assertExists()
         compose.onNodeWithText("Auto-lock after idle").assertExists()
         compose.onNodeWithText("Appearance").assertDoesNotExist()
+
+        // Audio level: the setting moved here from the menu (the row's
+        // subtitle shows the stored choice). Its sub-screen offers the
+        // mode selection (Off / Normalize), the target-level picker, the
+        // measurement status and the explicit "Normalize now" action, and
+        // its back unwinds one level - to this page, not the menu.
+        compose.onNodeWithText("Audio level").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Off").assertExists()
+        compose.onNodeWithText("Normalize").assertExists()
+        compose.onNodeWithText("-16 LUFS").assertExists()
+        compose.onNodeWithText("Normalize now").assertExists()
+        systemBack(activity)
+        compose.onNodeWithText("Audio level").assertExists()
+        compose.onNodeWithText("Normalize now").assertDoesNotExist()
+        compose.onNodeWithText("Keep screen on").assertExists()
         systemBack(activity)
         compose.onNodeWithText("Advanced options").assertExists()
         compose.onNodeWithText("Keep screen on").assertDoesNotExist()

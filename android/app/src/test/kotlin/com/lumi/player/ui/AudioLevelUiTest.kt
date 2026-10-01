@@ -26,13 +26,13 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The "Audio level" settings pane (the top-level settings row): the mode
- * selection (Off / Normalize, Off the default - an existing user's volume is
- * never changed unexpectedly), the target-level picker (-18 / -16 / -14,
- * -16 the default), the measurement status row, and the explicit
- * "Normalize now" action. The choices persist through the app's existing
- * settings storage (a restarted app keeps them) and the menu row's
- * subtitle follows the stored choice.
+ * The "Audio level" settings pane (the Advanced options page's row): the
+ * mode selection (Off / Normalize, Off the default - an existing user's
+ * volume is never changed unexpectedly), the target-level picker (-18 /
+ * -16 / -14, -16 the default), the measurement status row, and the
+ * explicit "Normalize now" action. The choices persist through the app's
+ * existing settings storage (a restarted app keeps them) and the Advanced
+ * page's row subtitle follows the stored choice.
  *
  * Like SettingsBackNavUiTest, the tests intentionally leave their
  * activities up: a NATIVE-graphics teardown of a settings-screen activity
@@ -69,16 +69,32 @@ class AudioLevelUiTest {
     }
 
     /** Opens the audio level sub-screen (player -> settings menu -> the
-     *  "Audio level" row). The activity is left up - see the class
-     *  documentation. */
+     *  "Advanced options" row -> the "Audio level" row - the setting's
+     *  home since the reorganization). The activity is left up - see the
+     *  class documentation. */
     private fun openAudioLevel(): Pair<MainActivity, LumiViewModel> {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
+        compose.waitForIdle()
         compose.onNodeWithText("Audio level").performClick()
         compose.waitForIdle()
         return activity to viewModelOf(activity)
+    }
+
+    /** Opens the Advanced options page from a fresh settings menu (the
+     *  audio level row's home). */
+    private fun openAdvancedPage() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
+        compose.waitForIdle()
     }
 
     private fun <T> dbAndGet(block: suspend () -> T): T {
@@ -125,7 +141,7 @@ class AudioLevelUiTest {
     }
 
     @Test
-    fun aModePickPersistsAndTheMenuSubtitleFollows() {
+    fun aModePickPersistsAndTheAdvancedRowSubtitleFollows() {
         val (activity, viewModel) = openAudioLevel()
 
         compose.onNodeWithText("Off").assertIsDisplayed()
@@ -138,12 +154,12 @@ class AudioLevelUiTest {
         compose.waitForIdle()
 
         // The persisted state survives a restart (a fresh activity over the
-        // same store reads NORMALIZE back), and the menu row's subtitle
-        // follows the stored choice.
+        // same store reads NORMALIZE back), and the Advanced page's row
+        // subtitle follows the stored choice (the row moved there with the
+        // reorganization - it is no longer a top-level menu row).
         val restarted = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
+        openAdvancedPage()
         val vm2 = viewModelOf(restarted)
         idleUntil({ vm2.audioLevelMode.value == AudioLevelMode.NORMALIZE })
         compose.waitForIdle()
@@ -210,20 +226,31 @@ class AudioLevelUiTest {
     }
 
     @Test
-    fun systemBackUnwindsThePaneToTheMenu() {
+    fun systemBackUnwindsThePaneToTheAdvancedPageAndOnlyThenTheMenu() {
         val (activity, _) = openAudioLevel()
 
         // The sub-screen is up (the Normalize action is the pane's own).
         compose.onNodeWithText("Normalize now").assertExists()
 
-        // System back: one level back to the settings menu (the pane is a
-        // child of the menu - the same one-level unwind the other
-        // sub-screens get; the menu -> player hop is pinned by
-        // SettingsMenuUiTest.systemBackFromMenuReturnsToThePlayerScreen,
-        // the shared `pane == Menu` pop the pane's unwind lands on).
+        // System back: one level back to the Advanced options page the pane
+        // lives under (NOT the menu): the page's own sections are back and
+        // the pane's content is gone.
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
-        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Auto-lock after idle").assertExists()
+        compose.onNodeWithText("Audio level").assertExists()
         compose.onNodeWithText("Normalize now").assertDoesNotExist()
+
+        // The next back leaves the Advanced options page for the menu (the
+        // menu's scroll position is kept by the settings screen, so bring
+        // the leading row back into view before asserting on it; the
+        // menu -> player hop is pinned by
+        // SettingsMenuUiTest.systemBackFromMenuReturnsToThePlayerScreen).
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Auto-lock after idle").assertDoesNotExist()
     }
 }

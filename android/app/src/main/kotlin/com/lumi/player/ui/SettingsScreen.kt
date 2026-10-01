@@ -56,16 +56,17 @@ private enum class SettingsPane {
  * screen is a list of buttons, one per setting (play mode, NFC tags, content,
  * appearance, advanced options); clicking a row navigates into that setting's
  * own configuration screen. The Advanced options page groups the less-
- * everyday device/display settings - keep screen on and auto-lock after
+ * everyday settings - keep screen on, the audio level, and auto-lock after
  * idle (with the phone's screen-lock permission state); appearance is an
  * everyday setting and a top-level menu row into its own sub-screen.
  *
  * Back navigation unwinds one level at a time: the tag detail page is a
- * child of the NFC tags pane and the folder detail page is a child of the
- * content pane, so each one's system back and back arrow take it back to
- * the list it lives under (and its removed-while-open fallback lands there
- * too); the song's profile unwinds to the pane its row was tapped in (the
- * folder's own page when opened from a folder's tree, the content pane
+ * child of the NFC tags pane, the folder detail page is a child of the
+ * content pane, and the audio level page is a child of the Advanced options
+ * page, so each one's system back and back arrow take it back to the page
+ * it lives under (and the tag/folder's removed-while-open fallback lands
+ * there too); the song's profile unwinds to the pane its row was tapped in
+ * (the folder's own page when opened from a folder's tree, the content pane
  * when opened from content); every other sub-screen's system back and back
  * arrow go back to the menu, and from the menu the host's back handling (the
  * NavHost in [LumiRoot]) returns to the player screen. The
@@ -93,8 +94,8 @@ fun SettingsScreen(
     val individualEntries by viewModel.observeIndividualEntries().collectAsState(emptyList())
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val playMode by viewModel.playMode.collectAsState(PlayMode.PROXIMITY)
-    // The audio level (the menu's "Audio level" row; the service reads the
-    // live value through the app's in-memory snapshot).
+    // The audio level (the Advanced options page's "Audio level" row; the
+    // service reads the live value through the app's in-memory snapshot).
     val audioLevelMode by viewModel.audioLevelMode.collectAsState(AudioLevelMode.OFF)
     val audioLevelTargetLufs by viewModel.audioLevelTargetLufs
         .collectAsState(AudioLevelSettings.DEFAULT_TARGET_LUFS)
@@ -238,15 +239,17 @@ fun SettingsScreen(
     // System back must unwind the settings screen itself (one level at a
     // time) before the host can pop settings away entirely: the tag detail
     // page unwinds to the NFC tags list it lives under, the folder detail
-    // page to the content pane it lives under, the song's profile to the
-    // pane it was opened from (the opener recorded when the row was
-    // tapped), and every other sub-screen - the appearance and advanced
-    // options pages included (both children of the menu) - to the menu; only
-    // when the menu is showing is the default back handler allowed through.
+    // page to the content pane it lives under, the audio level page to the
+    // Advanced options page it lives under, the song's profile to the pane
+    // it was opened from (the opener recorded when the row was tapped), and
+    // every other sub-screen - the appearance and advanced options pages
+    // included (both children of the menu) - to the menu; only when the menu
+    // is showing is the default back handler allowed through.
     BackHandler(enabled = pane != SettingsPane.Menu) {
         pane = when (pane) {
             SettingsPane.TagDetail -> SettingsPane.Tags
             SettingsPane.FolderDetail -> SettingsPane.Content
+            SettingsPane.AudioLevel -> SettingsPane.Advanced
             SettingsPane.EntryDetail -> {
                 val opener = entryDetailOpener
                 entryDetailOpener = null
@@ -264,11 +267,8 @@ fun SettingsScreen(
             isPlaying = playState.isPlaying,
             tags = tags,
             entries = entries,
-            audioLevelMode = audioLevelMode,
-            audioLevelTargetLufs = audioLevelTargetLufs,
             themeMode = themeMode,
             onPlayMode = { pane = SettingsPane.PlayMode },
-            onAudioLevel = { pane = SettingsPane.AudioLevel },
             onTags = { pane = SettingsPane.Tags },
             onContent = { pane = SettingsPane.Content },
             onAppearance = { pane = SettingsPane.Appearance },
@@ -279,6 +279,9 @@ fun SettingsScreen(
             viewModel = viewModel,
             keepScreenOn = keepScreenOn,
             onKeepScreenOnChange = { viewModel.setKeepScreenOn(it) },
+            audioLevelMode = audioLevelMode,
+            audioLevelTargetLufs = audioLevelTargetLufs,
+            onAudioLevel = { pane = SettingsPane.AudioLevel },
             autoLockDelay = autoLockDelay,
             onAutoLockDelayChange = { viewModel.setAutoLockDelay(it) },
             deviceAdminActive = deviceAdminActive,
@@ -296,7 +299,9 @@ fun SettingsScreen(
             targetLufs = audioLevelTargetLufs,
             status = loudnessStatus,
             normalizing = normalizing,
-            onBack = { pane = SettingsPane.Menu },
+            // The pane is a child of the Advanced options page (its row
+            // opened it), so its back unwinds there, not to the menu.
+            onBack = { pane = SettingsPane.Advanced },
         )
         SettingsPane.Appearance -> AppearancePane(
             viewModel = viewModel,

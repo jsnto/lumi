@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -28,12 +29,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.lumi.player.data.AutoLockDelay
+import com.lumi.player.data.AudioLevelMode
 
 /**
- * The Advanced options page: the less-everyday device/display/lock settings
- * grouped off the main settings menu - the keep-screen-on toggle (keeping
- * its look and test tag) and the auto-lock-after-idle choice with the
- * phone's own screen-lock permission state.
+ * The Advanced options page: the less-everyday settings grouped off the
+ * main settings menu - the keep-screen-on toggle (keeping its look and
+ * test tag), the audio level row (the playback volume setting moved here
+ * from the top-level menu with the reorganization), and the
+ * auto-lock-after-idle choice with the phone's own screen-lock permission
+ * state.
  *
  * The page is a plain list of self-contained option sections, one per
  * advanced option: adding a new advanced option is a plain addition of one
@@ -45,6 +49,9 @@ internal fun AdvancedPane(
     viewModel: LumiViewModel,
     keepScreenOn: Boolean,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    audioLevelMode: AudioLevelMode,
+    audioLevelTargetLufs: Double,
+    onAudioLevel: () -> Unit,
     autoLockDelay: AutoLockDelay,
     onAutoLockDelayChange: (AutoLockDelay) -> Unit,
     deviceAdminActive: Boolean,
@@ -70,6 +77,21 @@ internal fun AdvancedPane(
             KeepScreenOnRow(
                 checked = keepScreenOn,
                 onCheckedChange = onKeepScreenOnChange,
+            )
+            // The audio level setting (moved here from the top-level menu
+            // with the reorganization): the row shows the stored choice,
+            // and the tap opens the audio level's own sub-screen (a child
+            // of this page - its back unwinds here, then to the menu).
+            MenuRow(
+                icon = Icons.Filled.VolumeUp,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
+                title = "Audio level",
+                subtitle = when (audioLevelMode) {
+                    AudioLevelMode.OFF -> "Off"
+                    AudioLevelMode.NORMALIZE -> "Normalize to ${audioLevelTargetLufs.toInt()} LUFS"
+                },
+                onClick = onAudioLevel,
             )
             SectionCard("Auto-lock after idle") {
                 // The minute ladder: off plus a few minutes of idle (no song

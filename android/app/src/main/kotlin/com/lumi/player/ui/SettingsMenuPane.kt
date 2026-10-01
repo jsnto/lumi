@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,7 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
-import com.lumi.player.data.AudioLevelMode
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
@@ -51,7 +49,7 @@ import com.lumi.player.data.TagEntity
  * footer. Clicking a row navigates into that setting's configuration screen.
  * The now-playing strip (D-06) tops the list while an entry is loaded.
  * Appearance is an everyday setting and a top-level row; the less-everyday
- * device/display settings (keep screen on, auto-lock after idle, screen
+ * settings (keep screen on, audio level, auto-lock after idle, screen
  * lock) live in the Advanced options page, not on the menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,11 +61,8 @@ internal fun SettingsMenuPane(
     isPlaying: Boolean,
     tags: List<TagEntity>,
     entries: List<EntryEntity>,
-    audioLevelMode: AudioLevelMode,
-    audioLevelTargetLufs: Double,
     themeMode: LumiThemeMode,
     onPlayMode: () -> Unit,
-    onAudioLevel: () -> Unit,
     onTags: () -> Unit,
     onContent: () -> Unit,
     onAppearance: () -> Unit,
@@ -116,17 +111,6 @@ internal fun SettingsMenuPane(
                 onClick = onPlayMode,
             )
             MenuRow(
-                icon = Icons.Filled.VolumeUp,
-                chipBackground = scheme.tertiaryContainer,
-                chipContent = scheme.onTertiaryContainer,
-                title = "Audio level",
-                subtitle = when (audioLevelMode) {
-                    AudioLevelMode.OFF -> "Off"
-                    AudioLevelMode.NORMALIZE -> "Normalize to ${audioLevelTargetLufs.toInt()} LUFS"
-                },
-                onClick = onAudioLevel,
-            )
-            MenuRow(
                 icon = Icons.Filled.Nfc,
                 chipBackground = scheme.secondaryContainer,
                 chipContent = scheme.onSecondaryContainer,
@@ -163,7 +147,7 @@ internal fun SettingsMenuPane(
                 chipBackground = scheme.secondaryContainer,
                 chipContent = scheme.onSecondaryContainer,
                 title = "Advanced options",
-                subtitle = "Display and screen lock",
+                subtitle = "Display, audio level, and screen lock",
                 onClick = onAdvanced,
             )
             Text(
