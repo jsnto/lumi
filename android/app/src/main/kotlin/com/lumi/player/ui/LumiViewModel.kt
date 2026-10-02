@@ -866,7 +866,8 @@ class LumiViewModel(
     /**
      * Test seam: the loudness measurement read, replaced in unit tests.
      * The default decodes the file at decode speed (the [LoudnessMeasurer]:
-     * a background ExoPlayer with the meter's [LoudnessMeterProcessor] and
+     * an ExoPlayer - driven on the player's application thread, the main
+     * looper; see its KDoc - with the meter's [LoudnessMeterProcessor] and
      * the [MeterAudioSink] that discards the audio) and is time-limited
      * (a stalled decode settles into a failure); a read failure surfaces as
      * the exception the caller settles to unmeasured.
