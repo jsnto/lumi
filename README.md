@@ -100,8 +100,8 @@ resumes playback — an NFC read overrides play/pause.
 
 ## Audio level
 
-The **Audio level** row (top of the Settings menu) can bring every song
-to a common loudness. The choice is remembered on the device:
+The **Audio level** row (Settings → Advanced options) can bring every
+song to a common loudness. The choice is remembered on the device:
 
 - **Off** (the default) — songs play at the level they were recorded at;
   no gain is applied. Off is the default, so an existing user's volume is
