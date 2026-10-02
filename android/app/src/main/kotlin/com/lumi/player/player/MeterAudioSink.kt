@@ -2,9 +2,12 @@ package com.lumi.player.player
 
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.AuxEffectInfo
+import androidx.media3.common.C
 import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.audio.AudioSink
 import java.nio.ByteBuffer
 
@@ -18,27 +21,88 @@ import java.nio.ByteBuffer
  *
  * The sink is synchronous: every queued buffer is drained through the
  * processor before [handleBuffer] returns, so the renderer never sees
- * pending data and the position is just the cumulative buffer duration.
+ * pending data.
+ *
+ * Format support is reported the way the platform's own sink reports it
+ * (see `DefaultAudioSink`): linear PCM (what the decoder emits) is
+ * supported DIRECTLY, compressed audio is supported only AFTER DECODE
+ * (the renderer inserts the decoder and feeds the decoded PCM to this
+ * sink), and anything else is unsupported. Claiming direct support for a
+ * compressed format would tell the renderer the stream can skip the
+ * decoder, and the meter would then see raw compressed frames (the
+ * processor is configured with the stream's format, whose encoding is
+ * unknown, and feeds the meter nothing).
  */
 class MeterAudioSink(
     private val processor: AudioProcessor,
 ) : AudioSink {
 
     private var listener: AudioSink.Listener? = null
-    private var positionUs = 0L
     private var ended = false
+
+    /**
+     * The position reported to the renderer ([getCurrentPositionUs]): the
+     * PRESENTATION TIME (the CCodec time base, in microsecond units) of the
+     * last decoded buffer of the current stream. [C.TIME_UNSET] until the
+     * first buffer.
+     *
+     * ExoPlayer's position model works in the renderer's PRESENTATION-TIME
+     * domain: on every seek it pins the period's renderer offset to
+     * 1_000_000_000_000 us (the CCodec time base) and maps the clock's
+     * position into the period domain by subtracting that offset. The
+     * platform's own sink honours the same domain:
+     * [androidx.media3.exoplayer.audio.DefaultAudioSink] anchors its position
+     * on `startMediaTimeUs = Math.max(0, firstBufferPresentationTimeUs)` and
+     * reports `startMediaTimeUs + the AudioTrack's played time`. Reporting a
+     * position in any other domain (the period domain, wall clock, ...) puts
+     * the player's position out of domain: after the offset subtraction it
+     * goes negative, the buffering checks and the end-of-stream transition
+     * stop making progress, and the player sits in BUFFERING forever (the
+     * decode is idle but alive, so a measurement on this sink would time
+     * out). The [handleBuffer] `bufferDurationUs` is exactly a
+     * presentation-time-domain coordinate (the decoder output buffer's
+     * presentationTimeUs), so the position is the last decoded buffer's
+     * presentation time: no sample arithmetic, and after a seek or a flush
+     * the stream's own next buffer re-anchors the position automatically
+     * (a degenerate non-positive time keeps the previous one).
+     */
+    private var positionUs: Long = C.TIME_UNSET
 
     override fun setListener(listener: AudioSink.Listener) {
         this.listener = listener
     }
 
-    override fun supportsFormat(format: Format): Boolean = true
+    override fun supportsFormat(format: Format): Boolean =
+        getFormatSupport(format) == AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
 
-    override fun getFormatSupport(format: Format): Int = AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
+    override fun getFormatSupport(format: Format): Int = when {
+        format.sampleMimeType == null || !MimeTypes.isAudio(format.sampleMimeType) ->
+            AudioSink.SINK_FORMAT_UNSUPPORTED
+        // What the decoder emits: consumed as-is.
+        Util.isEncodingLinearPcm(format.pcmEncoding) ->
+            AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
+        // Compressed audio: the renderer decodes it first (the honest
+        // contract - see the class KDoc).
+        else -> AudioSink.SINK_FORMAT_SUPPORTED_WITH_TRANSCODING
+    }
 
-    override fun getCurrentPositionUs(forceCommit: Boolean): Long = positionUs
+    override fun getCurrentPositionUs(forceCommit: Boolean): Long =
+        if (positionUs == C.TIME_UNSET) {
+            // No buffer of the current stream has been decoded yet: the
+            // renderer keeps the position its onPositionReset was given
+            // (the platform sink reports TIME_UNSET until its AudioTrack is
+            // up too, and the renderer honours a TIME_UNSET answer).
+            C.TIME_UNSET
+        } else {
+            // Renderer-domain position: the last decoded buffer's
+            // presentation time (see [positionUs]).
+            positionUs
+        }
 
     override fun configure(format: Format, channelCount: Int, channelMap: IntArray?) {
+        // A new stream: the position re-anchors on this stream's first
+        // buffer (see [positionUs]).
+        positionUs = C.TIME_UNSET
         try {
             processor.configure(AudioProcessor.AudioFormat(format))
         } catch (e: AudioProcessor.UnhandledAudioFormatException) {
@@ -58,7 +122,10 @@ class MeterAudioSink(
     override fun handleBuffer(buffer: ByteBuffer, bufferDurationUs: Long, flags: Int): Boolean {
         processor.queueInput(buffer)
         drainOutput()
-        positionUs += bufferDurationUs
+        // The buffer's presentation time is the position (see [positionUs]).
+        if (bufferDurationUs > 0) {
+            positionUs = bufferDurationUs
+        }
         if (flags and BUFFER_FLAG_EOS != 0) {
             finishStream()
         }
@@ -117,11 +184,14 @@ class MeterAudioSink(
 
     override fun flush() {
         processor.flush()
+        // The next buffer of the stream re-anchors the position (see
+        // [positionUs]).
+        positionUs = C.TIME_UNSET
     }
 
     override fun reset() {
         processor.reset()
-        positionUs = 0L
+        positionUs = C.TIME_UNSET
         ended = false
     }
 
