@@ -4,5 +4,5 @@
          what the platform shows on its consent screen when the user is
          about to grant the app the ability to lock the phone's screen. -->
     <string name="device_admin_label">lumi screen lock</string>
-    <string name="device_admin_description">When enabled, lumi can lock the phone\'s screen after music has stopped playing for the time you choose in the System setting.</string>
+    <string name="device_admin_description">When enabled, lumi can lock the phone\'s screen after music has stopped playing for the time you choose in the Advanced options page.</string>
 </resources>

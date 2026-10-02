@@ -256,12 +256,14 @@ class UiRevampUiTest {
         )
     }
 
-    // ---------- system page: keep-screen-on row (moved from the menu; icon chip, D-03) ----------
+    // ---------- advanced options page: keep-screen-on row (moved from the System page; icon chip, D-03) ----------
 
     @Test
-    fun systemPageKeepScreenOnRowRendersWithItsCheckbox() {
+    fun advancedPageKeepScreenOnRowRendersWithItsCheckbox() {
         openSettings()
-        compose.onNodeWithText("System").performClick()
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
         compose.waitForIdle()
 
         compose.onNodeWithText("Keep screen on").assertIsDisplayed()

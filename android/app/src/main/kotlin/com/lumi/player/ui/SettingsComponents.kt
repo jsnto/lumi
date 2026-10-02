@@ -235,7 +235,8 @@ internal fun SettingRow(
  * A settings button: a tonal icon chip, title, subtitle, chevron — a quiet
  * color-coding of the app's jobs (D-03): play = peach, tags = teal,
  * content = violet. 56+ dp min height, 48 dp targets (D-08). Shared by the
- * main settings menu and the System page's rows.
+ * main settings menu and any sub-pane that offers a row into another
+ * sub-screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

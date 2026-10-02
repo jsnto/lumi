@@ -4,7 +4,7 @@ import android.app.admin.DeviceAdminReceiver
 
 /**
  * The app's device-admin receiver: the consent and activation surface for
- * the System setting's "Auto-lock after idle" screen lock. A normal app
+ * the Advanced options page's "Auto-lock after idle" screen lock. A normal app
  * cannot lock the screen on its own (DEVICE_POWER is a signature|privileged
  * permission); the supported path is a device admin plus
  * [android.app.admin.DevicePolicyManager.lockNow]. The platform manages the

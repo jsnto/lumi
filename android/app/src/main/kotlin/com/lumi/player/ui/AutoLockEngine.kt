@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * The auto-lock engine (the System setting's "Auto-lock after idle"): the
+ * The auto-lock engine (the Advanced options page's "Auto-lock after idle"): the
  * [AutoLockTimer]'s decision logic (pure; the wall clock is fed in through
  * [clock]) driven from the shared player state so the idle time is unit-
  * testable and survives the settings screens' navigation: the stored delay
@@ -97,8 +97,8 @@ class AutoLockEngine(
     /**
      * Whether the app's screen-lock device admin is active right now. The
      * lock can only happen while it is active; the setting stays visible
-     * and usable either way (the System page prompts to enable it when it
-     * is not, and the app keeps working without the admin).
+     * and usable either way (the Advanced options page prompts to enable it
+     * when it is not, and the app keeps working without the admin).
      */
     private val _deviceAdminActive =
         MutableStateFlow(isDeviceAdminActive(deviceAdminComponent))
@@ -213,8 +213,8 @@ class AutoLockEngine(
 
     /**
      * Re-checks the screen-lock admin's real state with the platform:
-     * called when the System page opens (a revocation can happen behind the
-     * app's back) and after the enable flow's result comes back.
+     * called when the Advanced options page opens (a revocation can happen
+     * behind the app's back) and after the enable flow's result comes back.
      */
     fun refreshDeviceAdminState() {
         _deviceAdminActive.value = isDeviceAdminActive(deviceAdminComponent)
@@ -232,7 +232,7 @@ class AutoLockEngine(
             putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "lumi is asking for permission to lock the phone's screen after " +
-                    "music has stopped playing for the time you choose in the System setting.",
+                    "music has stopped playing for the time you choose in the Advanced options page.",
             )
         }
 

@@ -28,7 +28,8 @@ import org.robolectric.shadows.ShadowLooper
  * (driven through the real [androidx.activity.OnBackPressedDispatcher]) and
  * the in-pane back arrow unwind one level at a time - the tag detail page is
  * a child of the NFC tags pane, the folder detail page a child of the
- * content pane, and the song profile a child of the pane the song was
+ * content pane, the audio level page a child of the Advanced options page,
+ * and the song profile a child of the pane the song was
  * opened FROM (the folder's own page when opened from that folder's tree,
  * the content pane when opened from there), so each one's back lands on
  * the list it lives under and only the next back reaches the menu - and the
@@ -159,13 +160,14 @@ class SettingsBackNavUiTest {
 
         // The menu is back at the exact scroll position: the bottom rows are
         // still where they were and the leading row is still scrolled out of
-        // view - the list was not reset to the top. The System row (the
-        // menu's last row - the keep-screen-on row moved into the System
-        // page) is the position anchor: it is comfortably visible at the
-        // restored position and fully clipped at the top, while the very
-        // bottom (footer) sits within a few dp of the viewport edge on the
-        // small test screen, where its visibility is a marginal assertion.
-        compose.onNodeWithText("System").assertIsDisplayed()
+        // view - the list was not reset to the top. The Advanced options row
+        // (the menu's last row - the keep-screen-on row moved into the
+        // Advanced options page) is the position anchor: it is comfortably
+        // visible at the restored position and fully clipped at the top,
+        // while the very bottom (footer) sits within a few dp of the viewport
+        // edge on the small test screen, where its visibility is a marginal
+        // assertion.
+        compose.onNodeWithText("Advanced options").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertIsNotDisplayed()
         // The menu itself is intact (all setting buttons, not just the list).
         compose.onNodeWithText("NFC tags").assertExists()
@@ -411,6 +413,68 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Play mode").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
+    }
+
+    // ---------- the audio level page unwinds to the Advanced options page, not the menu ----------
+
+    /** Opens settings, the Advanced options page, and the audio level
+     *  sub-screen (the audio level setting's home since the reorganization;
+     *  it is no longer a top-level menu row). */
+    private fun openAudioLevelPage(): MainActivity {
+        val activity = openSettings()
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Audio level").performClick()
+        compose.waitForIdle()
+        return activity
+    }
+
+    @Test
+    fun systemBackFromTheAudioLevelPageUnwindsToTheAdvancedPageAndOnlyThenTheMenu() {
+        val activity = openAudioLevelPage()
+        // The sub-screen is showing (the Normalize action is the pane's
+        // own).
+        compose.onNodeWithText("Normalize now").assertExists()
+
+        // The first system back unwinds the page one level, to the Advanced
+        // options page it lives under - not the menu, and not out of
+        // settings (the page's own sections are back).
+        systemBack(activity)
+        compose.onNodeWithText("Normalize now").assertDoesNotExist()
+        compose.onNodeWithText("Auto-lock after idle").assertExists()
+        compose.onNodeWithText("Audio level").assertExists()
+
+        // The second system back leaves the Advanced options page for the
+        // menu (the menu list keeps its scroll position, so bring the
+        // leading row back into view before asserting on it).
+        systemBack(activity)
+        compose.onNodeWithText("Play mode").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Auto-lock after idle").assertDoesNotExist()
+
+        // The third back leaves the menu entirely and returns to the player
+        // screen (the two-level unwind, then the host's back handling).
+        systemBack(activity)
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
+    }
+
+    @Test
+    fun theInPaneBackArrowFromTheAudioLevelPageLandsOnTheAdvancedPage() {
+        openAudioLevelPage()
+        compose.onNodeWithText("Normalize now").assertExists()
+
+        // The pane's own back arrow (the top bar) lands on the Advanced
+        // options page, the page's parent - not the menu.
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Normalize now").assertDoesNotExist()
+        compose.onNodeWithText("Auto-lock after idle").assertExists()
+        // The menu is not showing either.
+        compose.onNodeWithText("Play mode").assertDoesNotExist()
     }
 
     companion object {

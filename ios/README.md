@@ -167,7 +167,7 @@ iOS forces to be different:
 - **No screen lock / device-admin auto-lock / themes.** Those are
   Android platform features (the device-admin lock, the window-chrome
   themes) with no iOS equivalent; the iOS app keeps the play-mode / NFC
-  / content / system settings menu and omits them.
+  / content / advanced options settings menu and omits them.
 - **Folder access = security-scoped bookmarks, not SAF.** Picking a file
   or folder grants access scoped to that pick; the bookmark is stored
   with the entry/folder and re-asserted when playback or a rescan needs

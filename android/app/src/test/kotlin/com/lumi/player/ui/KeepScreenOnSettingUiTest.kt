@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.lumi.player.LumiApp
 import java.util.concurrent.TimeUnit
 import org.junit.Before
@@ -25,12 +26,12 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * Verifies the keep-screen-on settings checkbox on the System page (the
- * row moved there from the settings menu, keeping its look and test tag):
- * the page shows the row unchecked by default (off is the new default -
- * the screen follows the system timeout while the app is open), and
- * toggling it persists the choice through the same settings mechanism as
- * the other settings.
+ * Verifies the keep-screen-on settings checkbox on the Advanced options
+ * page (the row moved there from the settings menu, keeping its look and
+ * test tag): the page shows the row unchecked by default (off is the
+ * default - the screen follows the system timeout while the app is open),
+ * and toggling it persists the choice through the same settings mechanism
+ * as the other settings.
  *
  * The pruned material3 [androidx.compose.material3.Checkbox] exposes its state
  * as the [SemanticsProperties.ToggleableState] semantic property (not the
@@ -55,18 +56,20 @@ class KeepScreenOnSettingUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun openSystemPage(): MainActivity {
+    private fun openAdvancedPage(): MainActivity {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller.get()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("System").performClick()
+        compose.onNodeWithText("Advanced options").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Advanced options").performClick()
         compose.waitForIdle()
         return activity
     }
 
-    /** The System page's keep-screen-on checkbox node in a given state. */
+    /** The Advanced options page's keep-screen-on checkbox node in a given state. */
     private fun checkboxIn(state: ToggleableState): SemanticsMatcher =
         SemanticsMatcher.expectValue(SemanticsProperties.TestTag, "keep-screen-on")
             .and(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, state))
@@ -90,8 +93,8 @@ class KeepScreenOnSettingUiTest {
     }
 
     @Test
-    fun systemPageShowsKeepScreenOnUncheckedByDefault() {
-        val activity = openSystemPage()
+    fun advancedPageShowsKeepScreenOnUncheckedByDefault() {
+        val activity = openAdvancedPage()
 
         compose.onNodeWithText("Keep screen on").assertIsDisplayed()
         compose.onNodeWithText("Keep the display on while the app is open.").assertExists()
@@ -111,7 +114,7 @@ class KeepScreenOnSettingUiTest {
 
     @Test
     fun checkingTheCheckboxPersistsTheSetting() {
-        val activity = openSystemPage()
+        val activity = openAdvancedPage()
 
         compose.onNode(checkboxIn(ToggleableState.Off)).performClick()
         // The click drives the view model, which persists to the database;
@@ -125,7 +128,7 @@ class KeepScreenOnSettingUiTest {
 
     @Test
     fun uncheckingTheCheckboxRestoresTheDefault() {
-        val activity = openSystemPage()
+        val activity = openAdvancedPage()
 
         // Check it, then uncheck it: the choice persists as off again.
         compose.onNode(checkboxIn(ToggleableState.Off)).performClick()
