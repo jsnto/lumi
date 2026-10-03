@@ -55,6 +55,7 @@ class SongProfileUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
@@ -86,7 +87,7 @@ class SongProfileUiTest {
         return result as T
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the profile to settle") {
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 120_000, message: String = "the profile to settle") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()

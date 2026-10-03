@@ -68,6 +68,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -402,6 +403,36 @@ class LumiViewModel(
 
     fun setKeepScreenOn(on: Boolean) {
         viewModelScope.launch { repository.setKeepScreenOn(on) }
+    }
+
+    // ---- settings: first-time setup ----
+
+    /**
+     * The stored gate, read synchronously at construction (the view model
+     * is created on the main thread, and the settings table read is a
+     * fast local query - the same pattern MainActivity's cold-launch
+     * seeds use). Seeding the StateFlow with it (instead of the "not
+     * complete" placeholder) keeps the app from composing the wizard for
+     * a frame on every returning user's launch, before Room's first
+     * emission lands - which would swap the whole tree over and back.
+     */
+    private val storedSetupComplete: Boolean = runCatching {
+        runBlocking { repository.observeSetupComplete().first() }
+    }.getOrDefault(false)
+
+    /**
+     * Whether the first-time setup wizard has been finished. Unset (a
+     * fresh install with cleared app data) is the wizard's gate: the app
+     * lands on the wizard instead of the player until it is finished.
+     */
+    val setupComplete: StateFlow<Boolean> =
+        repository.observeSetupComplete()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, storedSetupComplete)
+
+    /** Records the wizard's completion (it never un-does itself). */
+    fun completeSetup() {
+        if (setupComplete.value) return
+        viewModelScope.launch { repository.setSetupComplete(true) }
     }
 
     // ---- settings: nfc re-read wait ----

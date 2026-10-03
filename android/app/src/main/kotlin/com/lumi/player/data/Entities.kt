@@ -154,6 +154,9 @@ data class SettingsEntity(
 
         /** "-18"/"-16"/"-14": the target integrated loudness (LUFS) for normalization. */
         const val AUDIO_LEVEL_TARGET_LUFS = "audio_level_target_lufs"
+
+        /** "1" when the first-time setup wizard has been finished. */
+        const val SETUP_COMPLETE = "setup_complete"
     }
 }
 

@@ -7,9 +7,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -57,19 +58,30 @@ import org.robolectric.shadows.ShadowLooper
 class UiRevampUiTest {
 
     /**
-     * One rule for the whole class: it launches the real [MainActivity] (the
-     * product's entry point) for every test. The tests that drive the app's
-     * screens never call [setContent], so the activity keeps its real
-     * content; the theme probe composes a probe on top of the rule's own
-     * activity instead.
+     * One rule for the whole class, plus a manual [MainActivity] launch per
+     * test: the activity is created in the test body (after the @Before
+     * pre-seed landed in the store), so the setup gate's first frame is
+     * already the player's - an activity created before the pre-seed (the
+     * rule-created one) composes the wizard first and swaps to the player
+     * on the store write, and that swap widens the first-frame race where
+     * the merged semantics tree lags the layout by a frame.
      */
     @get:Rule
-    val compose = createAndroidComposeRule(MainActivity::class.java)
+    val compose = createEmptyComposeRule()
 
     private lateinit var activity: MainActivity
 
+    /** Creates and sets up the real [MainActivity] (idempotent per test). */
+    private fun setupActivity(): MainActivity {
+        if (!::activity.isInitialized) {
+            activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        }
+        return activity
+    }
+
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
@@ -100,7 +112,7 @@ class UiRevampUiTest {
     }
 
     private fun openSettings(): MainActivity {
-        activity = compose.activity
+        setupActivity()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
@@ -111,7 +123,7 @@ class UiRevampUiTest {
 
     @Test
     fun playerScreenTopRowHasWordmarkLockAndSettingsChipsAndIdleStopControl() {
-        compose.activity
+        setupActivity()
         compose.waitForIdle()
 
         // The player draws its own transparent top row: the "lumi" wordmark
@@ -136,7 +148,7 @@ class UiRevampUiTest {
                 currentType = "AUDIO",
             )
         }
-        compose.activity
+        setupActivity()
         compose.waitForIdle()
 
         // The entry type is a tonal chip (D-05) and the big control carries
@@ -155,12 +167,48 @@ class UiRevampUiTest {
                 currentType = "AUDIO",
             )
         }
-        compose.activity
+        setupActivity()
         compose.waitForIdle()
 
         compose.onNodeWithText("music").assertIsDisplayed()
         compose.onNodeWithText("Play").assertIsDisplayed()
         compose.onNodeWithText("Pause").assertDoesNotExist()
+    }
+
+    // ---------- front logo: the sunny record face, square-free ----------
+
+    /** The front (and wizard) logo's semantics tag. */
+    private val lumiLogo: SemanticsMatcher =
+        SemanticsMatcher.expectValue(SemanticsProperties.TestTag, "lumi-logo")
+
+    @Test
+    fun theFrontScreenShowsTheLumiLogoSquareFree() {
+        setupActivity()
+        compose.waitForIdle()
+
+        // The logo is the vector face (a Canvas-drawn sun with a face-like
+        // dot), tagged for tests - not the emoji blob, and with no
+        // rectangular background: the halo is a circle (drawCircle), so the
+        // mirrored brush fill can't reach the corners.
+        compose.onNode(lumiLogo).assertIsDisplayed()
+    }
+
+    @Test
+    fun theFrontLogoIsShownWhileASongPlays() {
+        PlayerStateHolder.update {
+            PlayerUiState(
+                status = PlaybackStatus.PLAYING,
+                currentLabel = "Twinkle",
+                currentType = "AUDIO",
+            )
+        }
+        setupActivity()
+        compose.waitForIdle()
+
+        // While a song plays the logo is on the spinning core (the spin and
+        // bob are frame-driven - the on-device verification item - but the
+        // logo itself must be present and shown while active).
+        compose.onNode(lumiLogo).assertIsDisplayed()
     }
 
     // ---------- settings menu: now-playing strip (D-06) ----------

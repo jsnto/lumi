@@ -93,6 +93,7 @@ class TagCardWriteUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }

@@ -54,6 +54,7 @@ class ManualPlayTagSwitchUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }

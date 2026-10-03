@@ -8,6 +8,7 @@ import com.lumi.player.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -36,6 +37,11 @@ import org.robolectric.annotation.Config
     shadows = [ShadowNfcAdapterForTest::class],
 )
 class DeviceAdminCopyTest {
+    @Before
+    fun setUp() {
+        markSetupCompleteForTests()
+    }
+
 
     private fun viewModelOf(activity: MainActivity): LumiViewModel {
         val field = MainActivity::class.java

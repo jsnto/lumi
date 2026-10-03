@@ -3,6 +3,7 @@ package com.lumi.player.ui
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.EaseInOutCubic
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -11,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -156,9 +158,12 @@ fun PlayerScreen(
                 active = playState.isPlaying,
                 color = blobColor,
             ) {
-                Text(
-                    text = type?.let(EntryPresentation::emoji) ?: "✨",
-                    fontSize = 96.sp,
+                // The app's lumi logo (the "sunny record face") instead of a
+                // generic emoji: the face sits in the blob's own tint, so the
+                // logo follows the loaded entry's accent.
+                LumiLogo(
+                    accent = blobColor,
+                    modifier = Modifier.testTag("lumi-logo"),
                 )
             }
 
@@ -318,6 +323,15 @@ private fun LockPromptDialog(
  * The big animated blob that "dances" while something is playing: a soft
  * halo (radial shading), a faint ring, and the core with a sun-like
  * highlight. The pulse (0.94 -> 1.06 over 900 ms) is kept exactly.
+ *
+ * The halo and the highlight are drawn as CIRCLES (a Canvas drawCircle with
+ * the radial brush): a plain square Box with a radial-gradient background
+ * leaves the brush's mirrored fill in the corners - a visible square around
+ * the blob on the device.
+ *
+ * While [active] the core slowly turns (the off-center sheen carries the
+ * spin) and its content bobs gently with the music; on pause or stop both
+ * settle back to rest.
  */
 @Composable
 fun PlayingVisual(
@@ -336,6 +350,24 @@ fun PlayingVisual(
         ),
         label = "lumi-pulse-scale",
     )
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 8_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "lumi-core-spin",
+    )
+    val bob by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "lumi-logo-bob",
+    )
     val scale = if (active) pulse else 1f
     val density = androidx.compose.ui.platform.LocalDensity.current
     val haloPx = with(density) { 296.dp.toPx() }
@@ -347,44 +379,58 @@ fun PlayingVisual(
             .graphicsLayer { scaleX = scale; scaleY = scale },
         contentAlignment = Alignment.Center,
     ) {
-        // Soft halo: the blob's tint fading out into the gradient.
-        Box(
-            modifier = Modifier
-                .size(296.dp)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(color.copy(alpha = 0.24f), color.copy(alpha = 0.1f), Color.Transparent),
-                        center = androidx.compose.ui.geometry.Offset(haloPx / 2f, haloPx / 2f),
-                        radius = haloPx / 2f,
-                    ),
+        // Soft halo: the blob's tint fading out into the gradient. Drawn as
+        // a circle, so the mirrored brush fill never reaches the corners
+        // (the square the old gradient Box left on the device).
+        Canvas(modifier = Modifier.size(296.dp)) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(color.copy(alpha = 0.24f), color.copy(alpha = 0.1f), Color.Transparent),
+                    center = androidx.compose.ui.geometry.Offset(haloPx / 2f, haloPx / 2f),
+                    radius = haloPx / 2f,
                 ),
-        )
+                radius = size.width / 2f,
+                center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f),
+            )
+        }
         // Faint ring just outside the core.
         Box(
             modifier = Modifier
                 .size(224.dp)
                 .background(color.copy(alpha = 0.16f), CircleShape),
         )
+        // The turning core: the entry's color, the sun-like sheen (drawn as
+        // a circle, for the same square-free reason), and the logo. The
+        // whole core rotates while playing - the off-center sheen makes the
+        // spin readable on the otherwise symmetric face.
         Box(
             modifier = Modifier
                 .size(200.dp)
+                .graphicsLayer { rotationZ = if (active) spin else 0f }
                 .shadow(18.dp, shape = CircleShape, clip = false)
                 .background(color, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             // Sun-like highlight toward the upper left.
-            Box(
-                modifier = Modifier
-                    .size(200.dp)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Color.White.copy(alpha = 0.38f), Color.Transparent),
-                            center = androidx.compose.ui.geometry.Offset(corePx * 0.38f, corePx * 0.32f),
-                            radius = corePx * 0.8f,
-                        ),
+            Canvas(modifier = Modifier.size(200.dp)) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.White.copy(alpha = 0.38f), Color.Transparent),
+                        center = androidx.compose.ui.geometry.Offset(corePx * 0.38f, corePx * 0.32f),
+                        radius = corePx * 0.8f,
                     ),
-            )
-            content()
+                    radius = corePx * 0.8f,
+                    center = androidx.compose.ui.geometry.Offset(corePx * 0.38f, corePx * 0.32f),
+                )
+            }
+            // The logo's gentle up-and-down while the music runs (it settles
+            // to rest when the playback pauses or stops).
+            Box(
+                modifier = Modifier.graphicsLayer { translationY = if (active) bob else 0f },
+                contentAlignment = Alignment.Center,
+            ) {
+                content()
+            }
         }
     }
 }

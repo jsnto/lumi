@@ -151,6 +151,15 @@ class MainActivity : ComponentActivity() {
         val initialThemeMode = runCatching {
             runBlocking { viewModel.repository.observeThemeMode().first() }
         }.getOrDefault(LumiThemeMode.FOLLOW_SYSTEM)
+        // The first-time setup's gate, seeded the same way: a cold launch on
+        // a fresh install must compose the wizard from the first frame, and
+        // a returning user's stored "complete" must not wait for Room's
+        // first emission (a failed read degrades to the wizard - the safe
+        // direction; the view model seeds its own StateFlow with the same
+        // stored value, so the seed only serves the first composition).
+        val initialSetupComplete = runCatching {
+            runBlocking { viewModel.repository.observeSetupComplete().first() }
+        }.getOrDefault(false)
         nfc = NfcAdapter.getDefaultAdapter(this)
 
         // The radio's state-changed broadcast (registered for the whole
@@ -196,6 +205,14 @@ class MainActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsState(
                 initial = initialThemeMode,
             )
+            // The setup gate follows the store live (a fresh install walks
+            // the wizard into the app; a returning user's seeded read lands
+            // the player on the first frame). Tests create the activity
+            // AFTER their pre-seed write (manual setup, see the test
+            // classes), so the store write never lands mid-composition.
+            val setupComplete by viewModel.setupComplete.collectAsState(
+                initial = initialSetupComplete,
+            )
             val darkTheme = resolvedDarkTheme(themeMode)
             // The window chrome (status bar, the light-status-bar icons,
             // and the window background the manifest's fixed-light theme
@@ -224,6 +241,7 @@ class MainActivity : ComponentActivity() {
                     showNfcPrompt = showNfcPrompt,
                     onEnableNfc = ::launchNfcSettings,
                     onDismissNfcPrompt = { showNfcPrompt = false },
+                    setupComplete = setupComplete,
                 )
             }
         }

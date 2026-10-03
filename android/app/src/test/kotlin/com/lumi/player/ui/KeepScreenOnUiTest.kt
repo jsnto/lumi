@@ -40,6 +40,7 @@ class KeepScreenOnUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }

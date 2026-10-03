@@ -47,6 +47,7 @@ class SoftLockUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { it.copy() }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon as a proper adaptive icon (background + foreground
+     layers): the app's lumi logo - the "sunny record face" - as foreground
+     over its own orange background, so the launcher masks it cleanly
+     (no visible square). minSdk is 26, so this anydpi-v26 variant applies
+     on every supported device. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

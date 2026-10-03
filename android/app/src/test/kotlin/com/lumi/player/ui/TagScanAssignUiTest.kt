@@ -68,6 +68,7 @@ class TagScanAssignUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
@@ -94,8 +95,8 @@ class TagScanAssignUiTest {
         return result as T
     }
 
-    /** Idles the main looper + compose until [cond] holds or fails. The budget is generous on purpose: the class JVM's first test pays the Robolectric/native-graphics cold start (~9 s even when green), and suite load has stretched a warm convergence to ~16 s - the loop exits on the first satisfied condition, so the margin costs nothing when green. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the condition") {
+    /** Idles the main looper + compose until [cond] holds or fails. The budget is generous on purpose: the class JVM's first test pays the Robolectric/native-graphics cold start (~9 s even when green), and suite load has stretched a warm convergence to ~16 s - once past the 60 s budget under a full-suite run, so the margin is 120 s - the loop exits on the first satisfied condition, so it costs nothing when green. */
+    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 120_000, message: String = "the condition") {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!cond() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
