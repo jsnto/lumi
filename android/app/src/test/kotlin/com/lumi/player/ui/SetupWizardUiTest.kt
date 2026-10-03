@@ -199,6 +199,26 @@ class SetupWizardUiTest {
     }
 
     @Test
+    fun aRecreationMidWizardKeepsTheStep() {
+        val controller = startMainActivity()
+        val activity = controller.get()
+        compose.waitForIdle()
+
+        // The required folder step, then the first optional step.
+        reachTheMusicStepDone(activity)
+        compose.onNodeWithText("Play with a tag").assertIsDisplayed()
+
+        // A config change (a rotation, a foldable unfolding, a dark-mode
+        // flip) recreates the activity: the wizard's flow must keep its
+        // step (the view model outlives the recreation) instead of
+        // restarting at the welcome.
+        controller.recreate()
+        waitForText("Play with a tag")
+        compose.onNodeWithText("Play with a tag").assertIsDisplayed()
+        compose.onNodeWithText("Welcome to lumi").assertDoesNotExist()
+    }
+
+    @Test
     fun theTagStepSetUpNowEndsIntoTheNfcTagsPane() {
         val controller = startMainActivity()
         val activity = controller.get()

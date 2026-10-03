@@ -28,9 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -50,17 +47,25 @@ import androidx.compose.ui.unit.dp
  * The completion is the view model's [LumiViewModel.setupComplete] (the
  * `setup_complete` setting): the host shows the wizard while it is false,
  * so a fresh install always lands here and a returned user never does.
+ *
+ * The flow state (the current step, the folder pick in flight) is the
+ * view model's [LumiViewModel.wizardStep] / [LumiViewModel.wizardFolderPickInFlight]:
+ * the view model outlives an activity recreation (a rotation, a foldable
+ * unfolding, a dark-mode, font-scale or locale change), so a recreation
+ * mid-wizard keeps the step instead of restarting the flow at the welcome.
  */
 @Composable
 fun SetupWizard(
     viewModel: LumiViewModel,
     onFinish: (openNfcTags: Boolean) -> Unit,
 ) {
-    var step by remember { mutableStateOf(SetupStep.Welcome) }
+    val step by viewModel.wizardStep.collectAsState(viewModel.wizardStep.value)
     val folders by viewModel.observeFolders().collectAsState(emptyList())
     val entries by viewModel.observeEntries().collectAsState(emptyList())
     val adminActive by viewModel.deviceAdminActive.collectAsState(false)
-    var folderPickInFlight by remember { mutableStateOf(false) }
+    val folderPickInFlight by viewModel.wizardFolderPickInFlight.collectAsState(
+        viewModel.wizardFolderPickInFlight.value,
+    )
 
     // The music folder's picker: the same OpenDocumentTree contract the
     // content pane's "Add folder" uses. The content pane is never composed
@@ -70,7 +75,7 @@ fun SetupWizard(
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
-        folderPickInFlight = false
+        viewModel.setWizardFolderPickInFlight(false)
         if (uri != null) viewModel.addFolderEntry(uri)
     }
 
@@ -128,7 +133,7 @@ fun SetupWizard(
             Spacer(Modifier.size(20.dp))
             when (step) {
                 SetupStep.Welcome -> WelcomeStep(
-                    onNext = { step = SetupStep.Music },
+                    onNext = { viewModel.setWizardStep(SetupStep.Music) },
                 )
                 SetupStep.Music -> MusicStep(
                     hasLibrary = hasLibrary,
@@ -136,20 +141,20 @@ fun SetupWizard(
                     songCount = songCount,
                     pickInFlight = folderPickInFlight,
                     onPickFolder = {
-                        folderPickInFlight = true
+                        viewModel.setWizardFolderPickInFlight(true)
                         folderPicker.launch(null)
                     },
-                    onNext = { step = SetupStep.Nfc },
+                    onNext = { viewModel.setWizardStep(SetupStep.Nfc) },
                 )
                 SetupStep.Nfc -> NfcStep(
                     onSetUpNow = { finish(true) },
-                    onSkip = { step = SetupStep.ScreenLock },
+                    onSkip = { viewModel.setWizardStep(SetupStep.ScreenLock) },
                 )
                 SetupStep.ScreenLock -> ScreenLockStep(
                     adminActive = adminActive,
                     onEnable = { deviceAdminLauncher.launch(viewModel.deviceAdminIntent()) },
-                    onSkip = { step = SetupStep.AllSet },
-                    onNext = { step = SetupStep.AllSet },
+                    onSkip = { viewModel.setWizardStep(SetupStep.AllSet) },
+                    onNext = { viewModel.setWizardStep(SetupStep.AllSet) },
                 )
                 SetupStep.AllSet -> AllSetStep(
                     onOpen = { finish(false) },
@@ -161,7 +166,7 @@ fun SetupWizard(
 }
 
 /** The wizard's screens, one state each. */
-private enum class SetupStep {
+enum class SetupStep {
     Welcome,
     Music,
     Nfc,
