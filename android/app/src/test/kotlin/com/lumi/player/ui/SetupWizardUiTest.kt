@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
 import com.lumi.player.data.FolderChild
+import com.lumi.player.player.PlayerStateHolder
+import com.lumi.player.player.PlayerUiState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -59,6 +61,7 @@ class SetupWizardUiTest {
     fun setUp() {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
+        PlayerStateHolder.update { PlayerUiState() }
     }
 
     private val TREE_URI = "content://com.android.documentsui/tree/primary:Music"
