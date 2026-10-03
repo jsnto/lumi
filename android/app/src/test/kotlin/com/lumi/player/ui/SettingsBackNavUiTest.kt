@@ -53,6 +53,7 @@ class SettingsBackNavUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
@@ -425,6 +426,11 @@ class SettingsBackNavUiTest {
         compose.onNodeWithText("Advanced options").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Advanced options").performClick()
+        compose.waitForIdle()
+        // The row is the page's last child - on the short test screen it
+        // sits below the fold, so scroll it into view before clicking (a
+        // zero-bounds click would land at the screen origin).
+        compose.onNodeWithText("Audio level").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Audio level").performClick()
         compose.waitForIdle()

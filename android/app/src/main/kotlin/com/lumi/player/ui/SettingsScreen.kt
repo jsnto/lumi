@@ -37,8 +37,12 @@ import com.lumi.player.data.sortedTree
 import com.lumi.player.data.tagSongPickerTree
 import com.lumi.player.player.PlayerStateHolder
 
-/** Which settings sub-screen the settings screen shows. */
-private enum class SettingsPane {
+/**
+ * Which settings sub-screen the settings screen shows. Internal (not
+ * private) so the first-time setup wizard's "set up now" can deep-link the
+ * screen straight into the NFC tags pane.
+ */
+internal enum class SettingsPane {
     Menu,
     PlayMode,
     AudioLevel,
@@ -76,11 +80,14 @@ private enum class SettingsPane {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     viewModel: LumiViewModel,
     onBack: () -> Unit,
+    initialPane: SettingsPane = SettingsPane.Menu,
 ) {
-    var pane by remember { mutableStateOf(SettingsPane.Menu) }
+    // [initialPane]: the first-time setup wizard's "set up now" deep-links
+    // the screen into the NFC tags pane instead of the menu.
+    var pane by remember { mutableStateOf(initialPane) }
     // The menu list's scroll position lives at this level so leaving for a
     // sub-screen and coming back preserves it.
     val menuScroll = remember { ScrollState(0) }

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon as a proper adaptive icon (background + foreground
+     layers): the app's lumi logo - the "sunny record face" - as foreground
+     over its own orange background, so the launcher masks it cleanly
+     (no visible square). The -v26 folder qualifier is REQUIRED, not a
+     minSdk convenience: aapt2 refuses an <adaptive-icon> in an
+     unversioned mipmap-anydpi (it needs a config of API 26 or higher),
+     so keep the file here despite minSdk being 26 (lint's ObsoleteSdkInt
+     "merge into mipmap-anydpi" would break the build). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <!-- The single-tint record face for Android 13+ themed launchers. -->
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

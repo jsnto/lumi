@@ -68,6 +68,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -402,6 +403,68 @@ class LumiViewModel(
 
     fun setKeepScreenOn(on: Boolean) {
         viewModelScope.launch { repository.setKeepScreenOn(on) }
+    }
+
+    // ---- settings: first-time setup ----
+
+    /**
+     * The stored gate, read synchronously at construction (the view model
+     * is created on the main thread, and the settings table read is a
+     * fast local query - the same pattern MainActivity's cold-launch
+     * seeds use). Seeding the StateFlow with it (instead of the "not
+     * complete" placeholder) keeps the app from composing the wizard for
+     * a frame on every returning user's launch, before Room's first
+     * emission lands - which would swap the whole tree over and back.
+     */
+    private val storedSetupComplete: Boolean = runCatching {
+        runBlocking { repository.observeSetupComplete().first() }
+    }.getOrDefault(false)
+
+    /**
+     * Whether the first-time setup wizard has been finished. Unset (a
+     * fresh install with cleared app data) is the wizard's gate: the app
+     * lands on the wizard instead of the player until it is finished.
+     */
+    val setupComplete: StateFlow<Boolean> =
+        repository.observeSetupComplete()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, storedSetupComplete)
+
+    /**
+     * Records the wizard's completion (it never un-does itself) and
+     * resets the wizard's flow to its start, so a later entry into it
+     * begins at the welcome again.
+     */
+    fun completeSetup() {
+        _wizardStep.value = SetupStep.Welcome
+        _wizardFolderPickInFlight.value = false
+        if (setupComplete.value) return
+        viewModelScope.launch { repository.setSetupComplete(true) }
+    }
+
+    /**
+     * The wizard's current step (the flow a fresh install walks). It
+     * lives here, not in the wizard's composition, because the view
+     * model outlives an activity recreation (a rotation, a foldable
+     * unfolding, a dark-mode, font-scale or locale change): a
+     * recreation mid-wizard keeps the step instead of bouncing the
+     * flow back to the welcome. A process death (a fresh view model)
+     * and [completeSetup] both start the flow at the welcome again.
+     */
+    private val _wizardStep = MutableStateFlow(SetupStep.Welcome)
+
+    val wizardStep: StateFlow<SetupStep> = _wizardStep.asStateFlow()
+
+    fun setWizardStep(step: SetupStep) {
+        _wizardStep.value = step
+    }
+
+    /** The wizard's folder pick in flight (its music step's button copy). */
+    private val _wizardFolderPickInFlight = MutableStateFlow(false)
+
+    val wizardFolderPickInFlight: StateFlow<Boolean> = _wizardFolderPickInFlight.asStateFlow()
+
+    fun setWizardFolderPickInFlight(inFlight: Boolean) {
+        _wizardFolderPickInFlight.value = inFlight
     }
 
     // ---- settings: nfc re-read wait ----

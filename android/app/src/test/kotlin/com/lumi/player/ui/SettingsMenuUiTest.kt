@@ -49,6 +49,7 @@ class SettingsMenuUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
@@ -171,9 +172,9 @@ class SettingsMenuUiTest {
             .assertDoesNotExist()
 
         // Advanced options: the device/display settings - the keep-screen-on
-        // row, the audio level row, the auto-lock-after-idle ladder, and the
-        // screen-lock state. The appearance row is NOT here any more (it is
-        // a top-level menu row).
+        // row, the auto-lock-after-idle ladder, the screen-lock state, and
+        // (last on the page) the audio level row. The appearance row is NOT
+        // here any more (it is a top-level menu row).
         compose.onNodeWithText("Advanced options").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Advanced options").performClick()
@@ -186,7 +187,12 @@ class SettingsMenuUiTest {
         // subtitle shows the stored choice). Its sub-screen offers the
         // mode selection (Off / Normalize), the target-level picker, the
         // measurement status and the explicit "Normalize now" action, and
-        // its back unwinds one level - to this page, not the menu.
+        // its back unwinds one level - to this page, not the menu. The row
+        // is the page's last child, so on the short test screen scroll it
+        // into view before clicking (a zero-bounds click lands at the
+        // screen origin and never opens the page).
+        compose.onNodeWithText("Audio level").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Audio level").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Off").assertExists()

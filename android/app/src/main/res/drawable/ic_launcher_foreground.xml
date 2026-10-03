@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The adaptive launcher icon's foreground layer: the app's lumi logo, the
+     "sunny record face" - the cream face and the orange spindle, in the
+     same proportions as the icon's own design. Kept inside the central
+     60 dp so every launcher mask (the safe zone is 66 dp) keeps the whole
+     face in view. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFF3E0"
+        android:pathData="M54,24a30,30 0 1,1 -0.01,0z" />
+    <path
+        android:fillColor="#FF8A50"
+        android:pathData="M54,45a9,9 0 1,1 -0.01,0z" />
+</vector>

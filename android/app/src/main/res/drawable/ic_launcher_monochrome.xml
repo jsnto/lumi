@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The adaptive launcher icon's monochrome layer: the same record face as
+     the color foreground (ic_launcher_foreground.xml) as a single solid
+     color - the face disk with the spindle cut out (evenOdd) so the mark
+     still reads as a record when a themed launcher tints it to one color.
+     Android 13+ themed launchers render this layer instead of the color
+     layers; on older devices the element is simply ignored. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFF3E0"
+        android:fillType="evenOdd"
+        android:pathData="M54,24a30,30 0 1,1 -0.01,0z M54,45a9,9 0 1,1 -0.01,0z" />
+</vector>

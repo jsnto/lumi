@@ -34,10 +34,10 @@ import com.lumi.player.data.AudioLevelMode
 /**
  * The Advanced options page: the less-everyday settings grouped off the
  * main settings menu - the keep-screen-on toggle (keeping its look and
- * test tag), the audio level row (the playback volume setting moved here
- * from the top-level menu with the reorganization), and the
- * auto-lock-after-idle choice with the phone's own screen-lock permission
- * state.
+ * test tag), the auto-lock-after-idle choice with the phone's own
+ * screen-lock permission state, and the audio level row (the playback
+ * volume setting moved here from the top-level menu with the
+ * reorganization).
  *
  * The page is a plain list of self-contained option sections, one per
  * advanced option: adding a new advanced option is a plain addition of one
@@ -77,21 +77,6 @@ internal fun AdvancedPane(
             KeepScreenOnRow(
                 checked = keepScreenOn,
                 onCheckedChange = onKeepScreenOnChange,
-            )
-            // The audio level setting (moved here from the top-level menu
-            // with the reorganization): the row shows the stored choice,
-            // and the tap opens the audio level's own sub-screen (a child
-            // of this page - its back unwinds here, then to the menu).
-            MenuRow(
-                icon = Icons.Filled.VolumeUp,
-                chipBackground = scheme.tertiaryContainer,
-                chipContent = scheme.onTertiaryContainer,
-                title = "Audio level",
-                subtitle = when (audioLevelMode) {
-                    AudioLevelMode.OFF -> "Off"
-                    AudioLevelMode.NORMALIZE -> "Normalize to ${audioLevelTargetLufs.toInt()} LUFS"
-                },
-                onClick = onAudioLevel,
             )
             SectionCard("Auto-lock after idle") {
                 // The minute ladder: off plus a few minutes of idle (no song
@@ -150,6 +135,22 @@ internal fun AdvancedPane(
                     )
                 }
             }
+            // The audio level setting (moved here from the top-level menu
+            // with the reorganization, now below the auto-lock section):
+            // the row shows the stored choice, and the tap opens the audio
+            // level's own sub-screen (a child of this page - its back
+            // unwinds here, then to the menu).
+            MenuRow(
+                icon = Icons.Filled.VolumeUp,
+                chipBackground = scheme.tertiaryContainer,
+                chipContent = scheme.onTertiaryContainer,
+                title = "Audio level",
+                subtitle = when (audioLevelMode) {
+                    AudioLevelMode.OFF -> "Off"
+                    AudioLevelMode.NORMALIZE -> "Normalize to ${audioLevelTargetLufs.toInt()} LUFS"
+                },
+                onClick = onAudioLevel,
+            )
         }
     }
 }

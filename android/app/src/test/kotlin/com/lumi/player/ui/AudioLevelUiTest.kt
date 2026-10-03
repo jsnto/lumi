@@ -56,6 +56,7 @@ class AudioLevelUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
@@ -80,6 +81,11 @@ class AudioLevelUiTest {
         compose.onNodeWithText("Advanced options").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Advanced options").performClick()
+        compose.waitForIdle()
+        // The row is the page's last child - on the short test screen it
+        // sits below the fold, so scroll it into view before clicking (a
+        // zero-bounds click would land at the screen origin).
+        compose.onNodeWithText("Audio level").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Audio level").performClick()
         compose.waitForIdle()
@@ -252,5 +258,29 @@ class AudioLevelUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         compose.onNodeWithText("Auto-lock after idle").assertDoesNotExist()
+    }
+
+    @Test
+    fun theAudioLevelRowSitsBelowTheAutoLockSection() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        compose.waitForIdle()
+        openAdvancedPage()
+        compose.waitForIdle()
+
+        // The Advanced page's order: keep-screen-on, then the auto-lock
+        // section, then the audio level row (the reorganization moved the
+        // row below the section). With the row scrolled into view on the
+        // small test screen, its top edge must sit below the auto-lock
+        // section's own screen-lock row.
+        compose.onNodeWithText("Audio level").performScrollTo()
+        compose.waitForIdle()
+        val audioLevelTop = compose.onNodeWithText("Audio level")
+            .fetchSemanticsNode().boundsInRoot.top
+        val enableLockTop = compose.onNodeWithText("Enable screen lock")
+            .fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "the audio level row must sit below the auto-lock section (row top $audioLevelTop, section row top $enableLockTop)",
+            audioLevelTop > enableLockTop,
+        )
     }
 }

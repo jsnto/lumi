@@ -8,6 +8,15 @@ account — everything is stored locally on the device. The Android app
 features to CoreNFC + AVFoundation + SwiftUI and builds its .ipa through
 Docker (see the Building section and the ios/ README).
 
+## First time
+
+A fresh install walks a short setup before the player: importing a music
+folder (the one required step — the same folder import the content pane
+uses), then two optional items, each skippable — playing with an NFC tag
+("Set up now" opens the settings screen's NFC tags pane straight away) and
+allowing the screen lock (the platform's own consent). Finishing is
+remembered on the device; a returning user goes straight to the player.
+
 ## How it works
 
 1. In **Settings**, register an NFC tag (hold the back of the phone against

@@ -80,6 +80,7 @@ class FolderDetailPageUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         // The playback holder is process-wide; the button-state tests set

@@ -9,6 +9,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
@@ -20,6 +26,11 @@ import androidx.navigation.compose.rememberNavController
  * the NFC-availability prompt layered on top. The prompt states are owned by
  * [MainActivity]; they are recomposed here so the dialog can appear over any
  * screen.
+ *
+ * A fresh install (the first-time setup not yet finished - [setupComplete])
+ * lands on the [SetupWizard] instead of the player; when the wizard ends,
+ * the app's screens take over (the player's front screen, or the settings
+ * screen's NFC tags pane when the tag setup was picked).
  *
  * The player screen draws its own transparent top row (wordmark + lock +
  * settings chips), so this host carries no top bar of its own; each screen
@@ -34,31 +45,79 @@ fun LumiRoot(
     showNfcPrompt: Boolean = false,
     onEnableNfc: () -> Unit = {},
     onDismissNfcPrompt: () -> Unit = {},
+    setupComplete: Boolean = true,
 ) {
     val navController = rememberNavController()
+
+    // Where the settings screen opens: the menu by default, or the NFC tags
+    // pane when the first-time wizard's "Set up now" ends into it (the flag
+    // is one-shot - a later open from the player starts at the menu).
+    var settingsStartPane by remember { mutableStateOf(SettingsPane.Menu) }
 
     Scaffold(
         modifier = modifier,
     ) { padding ->
-        NavHost(
-            navController = navController,
-            startDestination = "player",
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            composable("player") {
-                PlayerScreen(
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxSize(),
-                    onOpenSettings = { navController.navigate("settings") },
-                )
+        if (!setupComplete) {
+            SetupWizard(
+                viewModel = viewModel,
+                onFinish = { openNfcTags ->
+                    if (openNfcTags) {
+                        settingsStartPane = SettingsPane.Tags
+                    }
+                },
+            )
+        } else {
+            NavHost(
+                navController = navController,
+                startDestination = "player",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
+                composable("player") {
+                    PlayerScreen(
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize(),
+                        onOpenSettings = { navController.navigate("settings") },
+                    )
+                }
+                composable("settings") {
+                    // The one-shot deep link is also consumed the moment this
+                    // destination is disposed: the system back at the menu
+                    // goes through the nav host's default back handler, which
+                    // pops the destination without the in-pane arrow's onBack.
+                    // (The destination reads the flag at its own first
+                    // composition, so a dispose-time clear never races it.)
+                    DisposableEffect(Unit) {
+                        onDispose { settingsStartPane = SettingsPane.Menu }
+                    }
+                    SettingsScreen(
+                        viewModel = viewModel,
+                        initialPane = settingsStartPane,
+                        onBack = {
+                            // The wizard's one-shot deep link is consumed here:
+                            // a later open from the player starts at the menu.
+                            // (Clearing it before the destination composed -
+                            // in the navigation effect below - would race the
+                            // composition's read and lose the deep link.)
+                            settingsStartPane = SettingsPane.Menu
+                            navController.popBackStack()
+                        },
+                    )
+                }
             }
-            composable("settings") {
-                SettingsScreen(
-                    viewModel = viewModel,
-                    onBack = { navController.popBackStack() },
-                )
+
+            // The wizard's NFC "Set up now" records its deep link BEFORE the
+            // flag flips the tree over to the player, so this one-shot
+            // navigation lands the fresh back stack on the settings screen's
+            // NFC tags pane. The flag itself is cleared when the settings
+            // destination is left (its dispose, and the in-pane arrow's
+            // onBack), not here: the destination reads it at composition,
+            // a frame after this effect ran.
+            LaunchedEffect(Unit) {
+                if (settingsStartPane == SettingsPane.Tags) {
+                    navController.navigate("settings")
+                }
             }
         }
 

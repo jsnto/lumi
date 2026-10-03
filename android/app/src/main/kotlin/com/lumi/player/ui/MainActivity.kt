@@ -196,6 +196,17 @@ class MainActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsState(
                 initial = initialThemeMode,
             )
+            // The setup gate follows the store live (a fresh install walks
+            // the wizard into the app; a returning user's stored
+            // "complete" lands the player on the first frame - the view
+            // model reads the store synchronously at construction to seed
+            // this StateFlow, so its current value IS the seed). Tests
+            // create the activity AFTER their pre-seed write (manual
+            // setup, see the test classes), so the store write never
+            // lands mid-composition.
+            val setupComplete by viewModel.setupComplete.collectAsState(
+                initial = viewModel.setupComplete.value,
+            )
             val darkTheme = resolvedDarkTheme(themeMode)
             // The window chrome (status bar, the light-status-bar icons,
             // and the window background the manifest's fixed-light theme
@@ -224,6 +235,7 @@ class MainActivity : ComponentActivity() {
                     showNfcPrompt = showNfcPrompt,
                     onEnableNfc = ::launchNfcSettings,
                     onDismissNfcPrompt = { showNfcPrompt = false },
+                    setupComplete = setupComplete,
                 )
             }
         }

@@ -63,6 +63,7 @@ class FolderReaddUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         ShadowContentResolver.registerProviderInternal("docs", FakeDocumentsProvider())

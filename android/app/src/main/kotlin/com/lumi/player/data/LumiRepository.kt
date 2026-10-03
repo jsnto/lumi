@@ -561,6 +561,24 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: first-time setup ----
+
+    /**
+     * Whether the first-time setup wizard has been finished. Unset (a
+     * fresh install) means the wizard is due; the wizard itself records
+     * the completion.
+     */
+    fun observeSetupComplete(): Flow<Boolean> =
+        dao.observeSettings().map { rows ->
+            rows.any { it.key == SettingsEntity.SETUP_COMPLETE && it.value == "1" }
+        }
+
+    suspend fun setSetupComplete(complete: Boolean) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.SETUP_COMPLETE, if (complete) "1" else "0"),
+        )
+    }
+
     // ---- settings: audio level ----
 
     /**

@@ -66,6 +66,7 @@ class NfcAlwaysListeningUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }

@@ -21,7 +21,7 @@
     <application
         android:name=".LumiApp"
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="lumi"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"

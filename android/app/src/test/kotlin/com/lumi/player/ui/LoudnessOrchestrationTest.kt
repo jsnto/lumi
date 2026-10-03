@@ -58,6 +58,7 @@ class LoudnessOrchestrationTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }

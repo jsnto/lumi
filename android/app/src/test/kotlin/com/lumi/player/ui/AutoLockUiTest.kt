@@ -70,6 +70,7 @@ class AutoLockUiTest {
 
     @Before
     fun setUp() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         // The shared player state is process-wide: every test starts from

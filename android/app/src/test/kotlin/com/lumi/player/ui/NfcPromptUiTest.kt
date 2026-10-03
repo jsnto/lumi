@@ -43,6 +43,7 @@ class NfcPromptUiTest {
 
     @Before
     fun resetNfcState() {
+        markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.adapterExists = true
     }
