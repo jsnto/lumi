@@ -9,6 +9,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -81,6 +82,15 @@ fun LumiRoot(
                     )
                 }
                 composable("settings") {
+                    // The one-shot deep link is also consumed the moment this
+                    // destination is disposed: the system back at the menu
+                    // goes through the nav host's default back handler, which
+                    // pops the destination without the in-pane arrow's onBack.
+                    // (The destination reads the flag at its own first
+                    // composition, so a dispose-time clear never races it.)
+                    DisposableEffect(Unit) {
+                        onDispose { settingsStartPane = SettingsPane.Menu }
+                    }
                     SettingsScreen(
                         viewModel = viewModel,
                         initialPane = settingsStartPane,
@@ -101,8 +111,9 @@ fun LumiRoot(
             // flag flips the tree over to the player, so this one-shot
             // navigation lands the fresh back stack on the settings screen's
             // NFC tags pane. The flag itself is cleared when the settings
-            // screen is left (its onBack), not here: the destination reads
-            // it at composition, a frame after this effect ran.
+            // destination is left (its dispose, and the in-pane arrow's
+            // onBack), not here: the destination reads it at composition,
+            // a frame after this effect ran.
             LaunchedEffect(Unit) {
                 if (settingsStartPane == SettingsPane.Tags) {
                     navController.navigate("settings")

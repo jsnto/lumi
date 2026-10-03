@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ApplicationProvider
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
@@ -218,6 +220,50 @@ class SetupWizardUiTest {
         waitForText("Tap a tag to start!")
         compose.onNodeWithText("Welcome to lumi").assertDoesNotExist()
         compose.onNodeWithText("Tap a tag to start!").assertIsDisplayed()
+    }
+
+    @Test
+    fun theDeepLinkIsOneShot_aSystemBackExitStartsTheNextSettingsOpenAtTheMenu() {
+        val controller = startMainActivity()
+        val activity = controller.get()
+        compose.waitForIdle()
+
+        reachTheMusicStepDone(activity)
+        compose.onNodeWithText("Play with a tag").assertIsDisplayed()
+
+        // "Set up now" deep-links the app into the settings screen's NFC
+        // tags pane (the swap lands a frame or two after the click - see
+        // waitForText).
+        compose.onNodeWithText("Set up now").performClick()
+        waitForText("Scan NFC")
+        compose.onNodeWithText("Scan NFC").assertIsDisplayed()
+
+        // Exit the way the system back does: the tags pane unwinds to the
+        // menu (the settings screen's own back handler), and the back from
+        // the menu is the nav host's default pop - it disposes the settings
+        // destination without the in-pane arrow's onBack.
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitForIdle()
+        compose.onNodeWithText("Tap a tag to start!").assertIsDisplayed()
+
+        // The one-shot flag is consumed by the settings destination's
+        // disposal, so the next open from the player starts at the menu,
+        // not the tags pane. The chip can lag the post-swap merged tree by
+        // a frame, so pump until it is queryable before clicking.
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline &&
+            compose.onAllNodesWithContentDescription("Settings").fetchSemanticsNodes().isEmpty()
+        ) {
+            ShadowLooper.idleMainLooper()
+            compose.waitForIdle()
+            Thread.sleep(20)
+        }
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Play mode").assertIsDisplayed()
+        compose.onNodeWithText("Scan NFC").assertDoesNotExist()
     }
 
     @Test

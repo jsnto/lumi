@@ -152,7 +152,6 @@ fun SetupWizard(
                     onNext = { step = SetupStep.AllSet },
                 )
                 SetupStep.AllSet -> AllSetStep(
-                    songCount = songCount,
                     onOpen = { finish(false) },
                 )
             }
@@ -343,7 +342,7 @@ private fun ScreenLockStep(
 }
 
 @Composable
-private fun AllSetStep(songCount: Int, onOpen: () -> Unit) {
+private fun AllSetStep(onOpen: () -> Unit) {
     WizardHeading(
         title = "You're all set!",
         body = "Your music is in. You can change everything later in the " +
