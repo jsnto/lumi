@@ -129,6 +129,10 @@ internal fun SettingsScreen(
     // Advanced options page's "Remembered playback positions" stepper;
     // the hard-coded default until the user's pick arrives).
     val rememberedPositions by viewModel.rememberedPositions.collectAsState(MAX_REMEMBERED_TAGS)
+    // Whether that setting's write is still in flight (the stepper's
+    // buttons stay disabled for the round trip).
+    val rememberedPositionsWriteInFlight by
+        viewModel.rememberedPositionsWriteInFlight.collectAsState(false)
     // Whether the app's screen-lock device admin is active (the Advanced
     // options page's enable prompt).
     val deviceAdminActive by viewModel.deviceAdminActive.collectAsState(false)
@@ -297,6 +301,7 @@ internal fun SettingsScreen(
             autoLockDelay = autoLockDelay,
             onAutoLockDelayChange = { viewModel.setAutoLockDelay(it) },
             rememberedPositions = rememberedPositions,
+            rememberedPositionsWriteInFlight = rememberedPositionsWriteInFlight,
             onRememberedPositionsChange = { viewModel.setRememberedPositions(it) },
             deviceAdminActive = deviceAdminActive,
             onEnableDeviceAdmin = { deviceAdminLauncher.launch(viewModel.deviceAdminIntent()) },

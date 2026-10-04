@@ -2,6 +2,8 @@ package com.lumi.player.ui
 
 import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -9,10 +11,12 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.lumi.player.LumiApp
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.robolectric.Robolectric
@@ -27,8 +31,11 @@ import org.robolectric.shadows.ShadowLooper
  * options page's "Remembered playback positions" section): the page shows
  * the stepper defaulting to the hard-coded count (3), the stepper's
  * changes persist the count through the same settings mechanism as the
- * other settings (and survive an app restart), and an out-of-range pick
- * is clamped to the setting's bounds (1..20).
+ * other settings (and survive an app restart), a step issued while a
+ * write is in flight is not applied (the stepper's buttons are disabled
+ * for the write's round trip) and the next step then steps from the
+ * landed value, and an out-of-range pick is clamped to the setting's
+ * bounds (1..20).
  *
  * The setting's value is the number of songs' last played position the
  * per-tag LRU remembers: the player service evicts against it at the next
@@ -158,6 +165,59 @@ class RememberedPositionsSettingUiTest {
         awaitRememberedPositions(activity, 1)
         compose.waitForIdle()
         compose.onNodeWithText("1").assertExists()
+    }
+
+    @Test
+    fun aTapIssuedWhileTheWriteIsInFlightIsNotAppliedAndTheNextStepStepsFromTheLandedValue() {
+        val activity = openAdvancedPage()
+        showSection(activity)
+
+        // Hold the write's in-flight window open: the write persists its
+        // target only once the test releases the gate.
+        val vm = viewModelOf(activity)
+        val gate = CompletableDeferred<Unit>()
+        vm.rememberedPositionsWriter = { count ->
+            gate.await()
+            vm.repository.setRememberedPositions(count)
+        }
+
+        // Step up: the write is in flight and the round trip has not
+        // landed (the displayed value stays bound to the flow - still 3).
+        compose.onNodeWithContentDescription("Increase remembered positions").performClick()
+        compose.waitForIdle()
+
+        // While the write is in flight the stepper's buttons are
+        // disabled, so a tap issued now is not applied from the stale
+        // value - and not queued: the value stays 3 while the write is
+        // held.
+        compose.onNodeWithContentDescription("Increase remembered positions").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Decrease remembered positions").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Increase remembered positions").performClick()
+        compose.waitForIdle()
+        assertEquals(
+            "a tap issued while the write is in flight is not applied",
+            3,
+            vm.rememberedPositions.value,
+        )
+        assertTrue(
+            "the write is still in flight while the gate holds it",
+            vm.rememberedPositionsWriteInFlight.value,
+        )
+        compose.onNodeWithText("3").assertExists()
+
+        // The write lands: the value becomes 4 and the buttons come
+        // back.
+        gate.complete(Unit)
+        awaitRememberedPositions(activity, 4)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Increase remembered positions").assertIsEnabled()
+        compose.onNodeWithContentDescription("Decrease remembered positions").assertIsEnabled()
+
+        // The next step steps from the persisted value.
+        compose.onNodeWithContentDescription("Increase remembered positions").performClick()
+        awaitRememberedPositions(activity, 5)
+        compose.waitForIdle()
+        compose.onNodeWithText("5").assertExists()
     }
 
     @Test

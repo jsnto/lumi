@@ -60,6 +60,7 @@ internal fun AdvancedPane(
     autoLockDelay: AutoLockDelay,
     onAutoLockDelayChange: (AutoLockDelay) -> Unit,
     rememberedPositions: Int,
+    rememberedPositionsWriteInFlight: Boolean,
     onRememberedPositionsChange: (Int) -> Unit,
     deviceAdminActive: Boolean,
     onEnableDeviceAdmin: () -> Unit,
@@ -168,11 +169,14 @@ internal fun AdvancedPane(
                             // The stepper's bounds: the change callback
                             // clamps through the settings writer (1..20), so
                             // tapping at a bound is a no-op rather than an
-                            // escape.
+                            // escape. While a step's write is in flight the
+                            // buttons are disabled, so the next step always
+                            // computes from the value the write landed.
                             SoftIconButton(
                                 icon = Icons.Filled.Remove,
                                 contentDescription = "Decrease remembered positions",
                                 onClick = { onRememberedPositionsChange(rememberedPositions - 1) },
+                                enabled = !rememberedPositionsWriteInFlight,
                             )
                             Text(
                                 "$rememberedPositions",
@@ -184,6 +188,7 @@ internal fun AdvancedPane(
                                 icon = Icons.Filled.Add,
                                 contentDescription = "Increase remembered positions",
                                 onClick = { onRememberedPositionsChange(rememberedPositions + 1) },
+                                enabled = !rememberedPositionsWriteInFlight,
                             )
                         }
                     },

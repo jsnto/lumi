@@ -422,8 +422,29 @@ class LumiViewModel(
         repository.observeRememberedPositions()
             .stateIn(viewModelScope, SharingStarted.Eagerly, MAX_REMEMBERED_TAGS)
 
+    /**
+     * Whether the write of this setting is still in flight. The stepper
+     * disables its buttons for that duration, so a step never computes
+     * from a stale value.
+     */
+    private val _rememberedPositionsWriteInFlight = MutableStateFlow(false)
+    val rememberedPositionsWriteInFlight: StateFlow<Boolean> = _rememberedPositionsWriteInFlight
+
+    // Test seam for the write (the real repository write by default), so
+    // a test can hold the in-flight window open.
+    internal var rememberedPositionsWriter: suspend (Int) -> Unit =
+        { repository.setRememberedPositions(it) }
+
     fun setRememberedPositions(count: Int) {
-        viewModelScope.launch { repository.setRememberedPositions(count) }
+        if (_rememberedPositionsWriteInFlight.value) return
+        _rememberedPositionsWriteInFlight.value = true
+        viewModelScope.launch {
+            try {
+                rememberedPositionsWriter(count)
+            } finally {
+                _rememberedPositionsWriteInFlight.value = false
+            }
+        }
     }
 
     // ---- settings: first-time setup ----
