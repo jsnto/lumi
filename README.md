@@ -84,8 +84,9 @@ taps in quick succession (each within about half a second of the
 previous one); taps that are too far apart restart the count.
 
 If a tag has been played before, lumi resumes where that tag left off —
-the last played position is remembered per tag, for the three most
-recently played tags.
+the last played position is remembered per tag, for the most recently
+played tags (how many, three by default, is the "Remembered playback
+positions" option in Settings → Advanced options).
 
 If the NFC radio is off (or the device has no NFC hardware), lumi shows a
 prompt with a shortcut to the NFC settings screen.
