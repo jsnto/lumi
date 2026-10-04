@@ -30,6 +30,7 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiThemeMode
+import com.lumi.player.data.MAX_REMEMBERED_TAGS
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongRow
@@ -124,6 +125,14 @@ internal fun SettingsScreen(
     // The auto-lock idle delay (the Advanced options page's "Auto-lock
     // after idle" choice; off by default).
     val autoLockDelay by viewModel.autoLockDelay.collectAsState(AutoLockDelay.OFF)
+    // How many songs' last played position the per-tag LRU remembers (the
+    // Advanced options page's "Remembered playback positions" stepper;
+    // the hard-coded default until the user's pick arrives).
+    val rememberedPositions by viewModel.rememberedPositions.collectAsState(MAX_REMEMBERED_TAGS)
+    // Whether that setting's write is still in flight (the stepper's
+    // buttons stay disabled for the round trip).
+    val rememberedPositionsWriteInFlight by
+        viewModel.rememberedPositionsWriteInFlight.collectAsState(false)
     // Whether the app's screen-lock device admin is active (the Advanced
     // options page's enable prompt).
     val deviceAdminActive by viewModel.deviceAdminActive.collectAsState(false)
@@ -291,6 +300,9 @@ internal fun SettingsScreen(
             onAudioLevel = { pane = SettingsPane.AudioLevel },
             autoLockDelay = autoLockDelay,
             onAutoLockDelayChange = { viewModel.setAutoLockDelay(it) },
+            rememberedPositions = rememberedPositions,
+            rememberedPositionsWriteInFlight = rememberedPositionsWriteInFlight,
+            onRememberedPositionsChange = { viewModel.setRememberedPositions(it) },
             deviceAdminActive = deviceAdminActive,
             onEnableDeviceAdmin = { deviceAdminLauncher.launch(viewModel.deviceAdminIntent()) },
             onBack = { pane = SettingsPane.Menu },

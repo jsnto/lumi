@@ -5,8 +5,29 @@ import androidx.room.Entity
 import androidx.room.withTransaction
 import com.lumi.player.player.EntrySpec
 
-/** Maximum number of tags whose last played position is remembered (LRU). */
+/** Default number of tags whose last played position is remembered (LRU). */
 const val MAX_REMEMBERED_TAGS = 3
+
+/**
+ * Upper bound of the remembered-positions setting (the Advanced options
+ * page's "Remembered playback positions"): how many tags' last played
+ * position the LRU keeps. The setting clamps its count to 1..
+ * [MAX_REMEMBERED_POSITIONS]; [MAX_REMEMBERED_TAGS] (3) is its default.
+ */
+const val MAX_REMEMBERED_POSITIONS = 20
+
+/**
+ * Reads the stored remembered-positions count. Unset or invalid values -
+ * and a count outside the setting's 1..[MAX_REMEMBERED_POSITIONS] range -
+ * fall back to the default ([MAX_REMEMBERED_TAGS]).
+ */
+fun rememberedPositionsFromStored(value: String?): Int =
+    value?.trim()?.toIntOrNull()?.takeIf { it in 1..MAX_REMEMBERED_POSITIONS }
+        ?: MAX_REMEMBERED_TAGS
+
+/** The settings-table value a remembered-positions count stores under. */
+fun rememberedPositionsStoredValue(count: Int): String =
+    count.coerceIn(1, MAX_REMEMBERED_POSITIONS).toString()
 
 /**
  * The last played position of an NFC tag's content list.
@@ -92,10 +113,15 @@ class TagPositionStore(private val db: LumiDatabase) {
 
     private val dao: LumiDao get() = db.dao()
 
-    /** Records [entity], evicting the oldest rows so the capacity is never exceeded. */
-    suspend fun remember(entity: TagPositionEntity) {
+    /**
+     * Records [entity], evicting the oldest rows so at most [capacity] rows
+     * remain. The caller passes the user's configured remembered-positions
+     * count (the Advanced options page's setting); the default is the
+     * hard-coded capacity the setting replaces.
+     */
+    suspend fun remember(entity: TagPositionEntity, capacity: Int = MAX_REMEMBERED_TAGS) {
         db.withTransaction {
-            lruEvictions(dao.allPositions(), entity).forEach { dao.deletePosition(it) }
+            lruEvictions(dao.allPositions(), entity, capacity).forEach { dao.deletePosition(it) }
             dao.upsertPosition(entity)
         }
     }

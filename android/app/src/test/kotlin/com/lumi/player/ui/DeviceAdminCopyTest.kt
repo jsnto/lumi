@@ -2,6 +2,7 @@ package com.lumi.player.ui
 
 import android.app.admin.DevicePolicyManager
 import android.content.Context
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.R
@@ -9,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -37,6 +39,10 @@ import org.robolectric.annotation.Config
     shadows = [ShadowNfcAdapterForTest::class],
 )
 class DeviceAdminCopyTest {
+
+    @get:Rule
+    val compose = createEmptyComposeRule()
+
     @Before
     fun setUp() {
         markSetupCompleteForTests()

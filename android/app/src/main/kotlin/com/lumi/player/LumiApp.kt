@@ -1,6 +1,7 @@
 package com.lumi.player
 
 import android.app.Application
+import com.lumi.player.data.MAX_REMEMBERED_TAGS
 import com.lumi.player.data.AudioLevelSettings
 import com.lumi.player.data.LoudnessStore
 import com.lumi.player.data.LumiDatabase
@@ -35,6 +36,17 @@ class LumiApp : Application() {
     var audioLevel: AudioLevelSettings = AudioLevelSettings.DEFAULT
         private set
 
+    /**
+     * The current remembered-positions count (how many tags' last played
+     * position the LRU keeps - the Advanced options page's setting), live
+     * in memory: the position store reads it on every save without touching
+     * the database (the app-singleton seam, like [audioLevel]). Kept live
+     * from the settings table by the app-lifetime collector in [onCreate].
+     */
+    @Volatile
+    var rememberedPositions: Int = MAX_REMEMBERED_TAGS
+        private set
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate() {
@@ -42,6 +54,9 @@ class LumiApp : Application() {
         loudnessStore.attach(appScope)
         appScope.launch {
             repository.observeAudioLevelSettings().collect { audioLevel = it }
+        }
+        appScope.launch {
+            repository.observeRememberedPositions().collect { rememberedPositions = it }
         }
     }
 

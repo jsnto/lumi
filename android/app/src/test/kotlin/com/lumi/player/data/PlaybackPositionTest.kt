@@ -76,6 +76,65 @@ class PlaybackPositionTest {
         assertEquals(listOf("A"), lruEvictions(existing, position("B", 2_000), capacity = 1))
     }
 
+    @Test
+    fun shrinkingTheConfiguredCapacityEvictsTheOldestDownToTheNewCount() {
+        // Three rows remembered at the default capacity, then the user
+        // lowers the setting to two: the next store evicts the two oldest.
+        val existing = listOf(
+            position("A", 1_000),
+            position("B", 2_000),
+            position("C", 3_000),
+        )
+        assertEquals(listOf("A", "B"), lruEvictions(existing, position("D", 4_000), capacity = 2))
+    }
+
+    @Test
+    fun raisingTheConfiguredCapacityEvictsNothing() {
+        val existing = listOf(
+            position("A", 1_000),
+            position("B", 2_000),
+            position("C", 3_000),
+        )
+        assertTrue(lruEvictions(existing, position("D", 4_000), capacity = 5).isEmpty())
+    }
+
+    // ---- the remembered-positions setting ----
+
+    @Test
+    fun unsetAndInvalidStoredCountsFallBackToTheDefault() {
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored(null))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored(""))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("garbage"))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("2.5"))
+    }
+
+    @Test
+    fun outOfRangeStoredCountsFallBackToTheDefault() {
+        // Below the minimum or above the setting's bound the stored value
+        // is invalid (like the other settings' unset/invalid fallback).
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("0"))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("-1"))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored((MAX_REMEMBERED_POSITIONS + 1).toString()))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("1000"))
+    }
+
+    @Test
+    fun storedCountsInsideTheRangeAreHonored() {
+        assertEquals(1, rememberedPositionsFromStored("1"))
+        assertEquals(MAX_REMEMBERED_TAGS, rememberedPositionsFromStored("3"))
+        assertEquals(MAX_REMEMBERED_POSITIONS, rememberedPositionsFromStored("20"))
+        assertEquals(7, rememberedPositionsFromStored("  7  "))
+    }
+
+    @Test
+    fun theStoredValueClampsTheCountToTheSettingRange() {
+        assertEquals("1", rememberedPositionsStoredValue(0))
+        assertEquals("20", rememberedPositionsStoredValue(MAX_REMEMBERED_POSITIONS))
+        assertEquals("20", rememberedPositionsStoredValue(MAX_REMEMBERED_POSITIONS + 1))
+        assertEquals("1", rememberedPositionsStoredValue(-3))
+        assertEquals("5", rememberedPositionsStoredValue(5))
+    }
+
     // ---- restore decision ----
 
     @Test

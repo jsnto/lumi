@@ -55,6 +55,49 @@ class TagPositionStoreTest {
     }
 
     @Test
+    fun aConfiguredCapacityBelowTheDefaultIsHonored() = runBlocking {
+        val store = app().positionStore
+        store.remember(row("A", 1_000L), capacity = 1)
+        store.remember(row("B", 2_000L), capacity = 1)
+        val db = app().repository
+        assertNull("the configured capacity 1 must evict the older tag", db.positionFor("A"))
+        assertNotNull(db.positionFor("B"))
+    }
+
+    @Test
+    fun shrinkingTheConfiguredCapacityEvictsTheOldestAtTheNextStore() = runBlocking {
+        val store = app().positionStore
+        // Three rows remembered at the default capacity...
+        store.remember(row("A", 1_000L))
+        store.remember(row("B", 2_000L))
+        store.remember(row("C", 3_000L))
+        // ...then the user lowers the setting to two: the next stored
+        // position evicts the oldest remembered tags down to the new count.
+        store.remember(row("D", 4_000L), capacity = 2)
+        val db = app().repository
+        assertNull("the oldest remembered tag must be evicted", db.positionFor("A"))
+        assertNull(db.positionFor("B"))
+        assertNotNull(db.positionFor("C"))
+        assertNotNull(db.positionFor("D"))
+    }
+
+    @Test
+    fun raisingTheConfiguredCapacityKeepsAllExistingRows() = runBlocking {
+        val store = app().positionStore
+        // Three rows at the default capacity; the user raises the setting
+        // to five, so the next store evicts nothing.
+        store.remember(row("A", 1_000L))
+        store.remember(row("B", 2_000L))
+        store.remember(row("C", 3_000L))
+        store.remember(row("D", 4_000L), capacity = 5)
+        val db = app().repository
+        assertNotNull("the raised capacity must keep the existing rows", db.positionFor("A"))
+        assertNotNull(db.positionFor("B"))
+        assertNotNull(db.positionFor("C"))
+        assertNotNull(db.positionFor("D"))
+    }
+
+    @Test
     fun reRememberingAnExistingTagUpdatesItsRow() = runBlocking {
         val store = app().positionStore
         store.remember(row("A", 1_000L, index = 1, ms = 5_000L))

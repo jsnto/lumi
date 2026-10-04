@@ -484,6 +484,28 @@ class LumiRepository(private val db: LumiDatabase) {
         )
     }
 
+    // ---- settings: remembered playback positions ----
+
+    /**
+     * How many tags' last played position the LRU remembers (the Advanced
+     * options page's "Remembered playback positions"). Unset or invalid
+     * stored values - and a count outside the setting's range - fall back
+     * to the default ([MAX_REMEMBERED_TAGS]); a stored count is clamped to
+     * the setting's range.
+     */
+    fun observeRememberedPositions(): Flow<Int> =
+        dao.observeSettings().map { rows ->
+            rememberedPositionsFromStored(
+                rows.firstOrNull { it.key == SettingsEntity.REMEMBERED_POSITIONS }?.value,
+            )
+        }
+
+    suspend fun setRememberedPositions(count: Int) {
+        dao.upsertSetting(
+            SettingsEntity(SettingsEntity.REMEMBERED_POSITIONS, rememberedPositionsStoredValue(count)),
+        )
+    }
+
     // ---- settings: content sort direction ----
 
     /**

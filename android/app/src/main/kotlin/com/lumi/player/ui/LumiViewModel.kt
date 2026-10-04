@@ -23,6 +23,7 @@ import com.lumi.player.data.LoudnessMeasurer
 import com.lumi.player.data.LoudnessResult
 import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiThemeMode
+import com.lumi.player.data.MAX_REMEMBERED_TAGS
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.SongDownloadResult
@@ -403,6 +404,47 @@ class LumiViewModel(
 
     fun setKeepScreenOn(on: Boolean) {
         viewModelScope.launch { repository.setKeepScreenOn(on) }
+    }
+
+    // ---- settings: remembered playback positions ----
+
+    /**
+     * How many songs' last played position the per-tag LRU remembers (the
+     * Advanced options page's "Remembered playback positions" stepper).
+     * Defaults to the hard-coded [MAX_REMEMBERED_TAGS] behavior; the count
+     * is clamped to the setting's 1..20 range and persists in the database
+     * like the other settings (a restart reads the pick back). The player
+     * service evicts against this count at the next stored position: a
+     * lower count evicts the oldest remembered tags first, a higher one
+     * keeps the rows already remembered.
+     */
+    val rememberedPositions: StateFlow<Int> =
+        repository.observeRememberedPositions()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, MAX_REMEMBERED_TAGS)
+
+    /**
+     * Whether the write of this setting is still in flight. The stepper
+     * disables its buttons for that duration, so a step never computes
+     * from a stale value.
+     */
+    private val _rememberedPositionsWriteInFlight = MutableStateFlow(false)
+    val rememberedPositionsWriteInFlight: StateFlow<Boolean> = _rememberedPositionsWriteInFlight
+
+    // Test seam for the write (the real repository write by default), so
+    // a test can hold the in-flight window open.
+    internal var rememberedPositionsWriter: suspend (Int) -> Unit =
+        { repository.setRememberedPositions(it) }
+
+    fun setRememberedPositions(count: Int) {
+        if (_rememberedPositionsWriteInFlight.value) return
+        _rememberedPositionsWriteInFlight.value = true
+        viewModelScope.launch {
+            try {
+                rememberedPositionsWriter(count)
+            } finally {
+                _rememberedPositionsWriteInFlight.value = false
+            }
+        }
     }
 
     // ---- settings: first-time setup ----

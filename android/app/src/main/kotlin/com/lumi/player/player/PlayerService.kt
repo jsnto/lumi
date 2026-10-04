@@ -308,7 +308,8 @@ class PlayerService : Service(), Player.Listener {
         if (p.playbackState != Player.STATE_READY) return
         val spec = queue.getOrNull(position) ?: return
         if (EntryType.fromStorage(spec.type) != EntryType.AUDIO) return
-        val store = (applicationContext as? LumiApp)?.positionStore ?: return
+        val app = applicationContext as? LumiApp ?: return
+        val store = app.positionStore
         scope?.launch {
             store.remember(
                 TagPositionEntity(
@@ -318,6 +319,12 @@ class PlayerService : Service(), Player.Listener {
                     queueFingerprint = fingerprintOf(queue),
                     lastPlayedAt = System.currentTimeMillis(),
                 ),
+                // The user's configured remembered-positions count (the
+                // Advanced options page's setting, kept live on the app
+                // singleton like the audio level - no database read on the
+                // save path). A lower count evicts at the next store; a
+                // higher one keeps all the rows already remembered.
+                app.rememberedPositions,
             )
         }
     }

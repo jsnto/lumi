@@ -290,9 +290,10 @@ internal fun SoftIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
-    IconButton(onClick = onClick) {
+    IconButton(onClick = onClick, enabled = enabled) {
         Box(
             modifier = Modifier
                 .size(40.dp)
