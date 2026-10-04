@@ -1,7 +1,5 @@
 package com.lumi.player.nfc
 
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import java.io.IOException
 
@@ -38,20 +36,10 @@ interface GenericPresenceSession {
  * non-Mifare tag would look "removed" to the absence-timeout fallback.
  * Probing the tag with a real low-level read on every tick (like the
  * Mifare fast path's page-0 reads) refreshes the presence record as long
- * as the tag stays on the antenna:
- *
- * - a successful probe refreshes [onStillPresent] (the tag is still in
- *   range);
- * - a failed probe waits [retryDelayMs] and performs ONE retry probe (a
- *   two-strike debounce against single-occurrence blips): a successful
- *   retry means the tag is still there - the loop resets and continues; a
- *   failed retry confirms the removal - [onConfirmedRemoved] is called
- *   exactly once and the loop ends.
- *
- * The loop only probes and never touches playback itself; it must run on
- * a background dispatcher (each probe blocks for the duration of the NFC
- * command) and the callbacks are responsible for hopping to the main
- * thread.
+ * as the tag stays on the antenna; it runs the shared [PresencePollLoop]
+ * over the probe, and the loop's two-strike debounce semantics, its
+ * injectable delay and its background-dispatcher constraint are documented
+ * on [PresencePollLoop.loop].
  */
 object GenericPresencePoller {
     /** Cadence of the probes; matches the Mifare fast path. */
@@ -63,7 +51,9 @@ object GenericPresencePoller {
     /**
      * Runs the probe loop; returns when the removal is confirmed or the
      * coroutine is cancelled. [delayFn] is injectable so tests can advance
-     * time without a real clock.
+     * time without a real clock. The loop's body is the shared
+     * [PresencePollLoop.loop] (the Mifare fast path runs the same loop
+     * over its page read).
      */
     suspend fun loop(
         probe: () -> Unit,
@@ -73,29 +63,13 @@ object GenericPresencePoller {
         retryDelayMs: Long = RETRY_DELAY_MS,
         delayFn: suspend (Long) -> Unit = { delay(it) },
     ): Unit {
-        val job = currentCoroutineContext()[Job]
-        while (job?.isActive != false) {
-            val present = try {
-                probe()
-                true
-            } catch (e: IOException) {
-                false
-            }
-            if (!present) {
-                delayFn(retryDelayMs)
-                val stillPresent = try {
-                    probe()
-                    true
-                } catch (e: IOException) {
-                    false
-                }
-                if (!stillPresent) {
-                    onConfirmedRemoved()
-                    return
-                }
-            }
-            onStillPresent()
-            delayFn(readIntervalMs)
-        }
+        PresencePollLoop.loop(
+            read = probe,
+            onStillPresent = onStillPresent,
+            onConfirmedRemoved = onConfirmedRemoved,
+            readIntervalMs = readIntervalMs,
+            retryDelayMs = retryDelayMs,
+            delayFn = delayFn,
+        )
     }
 }

@@ -226,7 +226,4 @@ interface LumiDao {
             "FROM entry_loudness l JOIN entries e ON e.id = l.entry_id",
     )
     fun observeEntryLoudnessWithPayload(): Flow<List<EntryLoudnessPayload>>
-
-    @Query("DELETE FROM entry_loudness WHERE entry_id = :entryId")
-    suspend fun deleteEntryLoudness(entryId: Long)
 }
