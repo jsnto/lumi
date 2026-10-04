@@ -36,20 +36,10 @@ interface GenericPresenceSession {
  * non-Mifare tag would look "removed" to the absence-timeout fallback.
  * Probing the tag with a real low-level read on every tick (like the
  * Mifare fast path's page-0 reads) refreshes the presence record as long
- * as the tag stays on the antenna:
- *
- * - a successful probe refreshes [onStillPresent] (the tag is still in
- *   range);
- * - a failed probe waits [retryDelayMs] and performs ONE retry probe (a
- *   two-strike debounce against single-occurrence blips): a successful
- *   retry means the tag is still there - the loop resets and continues; a
- *   failed retry confirms the removal - [onConfirmedRemoved] is called
- *   exactly once and the loop ends.
- *
- * The loop only probes and never touches playback itself; it must run on
- * a background dispatcher (each probe blocks for the duration of the NFC
- * command) and the callbacks are responsible for hopping to the main
- * thread.
+ * as the tag stays on the antenna; it runs the shared [PresencePollLoop]
+ * over the probe, and the loop's two-strike debounce semantics, its
+ * injectable delay and its background-dispatcher constraint are documented
+ * on [PresencePollLoop.loop].
  */
 object GenericPresencePoller {
     /** Cadence of the probes; matches the Mifare fast path. */

@@ -35,20 +35,10 @@ fun interface PresenceReader {
 
 /**
  * The continuous-reading loop that gives a fast, reliable tag-lost signal
- * for the active tag. While the calling coroutine is active it repeatedly
- * performs a low-level field read:
- *
- * - a successful read refreshes [onStillPresent] (the tag is still in range);
- * - an [IOException] from a read waits [retryDelayMs] and performs ONE retry
- *   read (a two-strike debounce against single-occurrence blips): a
- *   successful retry means the tag is still there - the loop resets and
- *   continues; a failed retry confirms the removal - [onConfirmedRemoved]
- *   is called exactly once and the loop ends.
- *
- * The loop only reads and never touches playback itself; it must run on a
- * background dispatcher (each read blocks for the duration of the NFC
- * command) and the callbacks are responsible for hopping to the main
- * thread.
+ * for the active tag. It runs the shared [PresencePollLoop] over the Mifare
+ * page-0 read; the loop's two-strike debounce semantics, its injectable
+ * delay and its background-dispatcher constraint are documented on
+ * [PresencePollLoop.loop].
  */
 object MifarePresencePoller {
     /** Cadence of the continuous reads. */
