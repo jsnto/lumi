@@ -19,14 +19,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lumi.player.data.AutoLockDelay
 import com.lumi.player.data.AudioLevelMode
@@ -35,9 +39,10 @@ import com.lumi.player.data.AudioLevelMode
  * The Advanced options page: the less-everyday settings grouped off the
  * main settings menu - the keep-screen-on toggle (keeping its look and
  * test tag), the auto-lock-after-idle choice with the phone's own
- * screen-lock permission state, and the audio level row (the playback
- * volume setting moved here from the top-level menu with the
- * reorganization).
+ * screen-lock permission state, the remembered-playback-positions stepper
+ * (how many songs' last played position the per-tag LRU remembers), and
+ * the audio level row (the playback volume setting moved here from the
+ * top-level menu with the reorganization).
  *
  * The page is a plain list of self-contained option sections, one per
  * advanced option: adding a new advanced option is a plain addition of one
@@ -54,6 +59,8 @@ internal fun AdvancedPane(
     onAudioLevel: () -> Unit,
     autoLockDelay: AutoLockDelay,
     onAutoLockDelayChange: (AutoLockDelay) -> Unit,
+    rememberedPositions: Int,
+    onRememberedPositionsChange: (Int) -> Unit,
     deviceAdminActive: Boolean,
     onEnableDeviceAdmin: () -> Unit,
     onBack: () -> Unit,
@@ -134,6 +141,53 @@ internal fun AdvancedPane(
                         },
                     )
                 }
+            }
+            // The remembered playback positions setting: how many songs'
+            // last played position the per-tag LRU remembers (a count, 1 to
+            // the setting's upper bound of 20, defaulting to the hard-coded
+            // default of 3). The row's stepper changes the count one
+            // at a time; each change persists through the settings table and
+            // takes effect at the next stored position (a lower count evicts
+            // the oldest remembered tags first, a higher one keeps the rows
+            // already remembered).
+            SectionCard("Remembered playback positions") {
+                SettingRow(
+                    leading = {
+                        IconChip(
+                            icon = Icons.Filled.MusicNote,
+                            background = scheme.tertiaryContainer,
+                            content = scheme.onTertiaryContainer,
+                            size = 36.dp,
+                            iconSize = 18.dp,
+                        )
+                    },
+                    title = "Songs to remember",
+                    detail = "How many songs' last played position lumi remembers (per tag, newest first).",
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // The stepper's bounds: the change callback
+                            // clamps through the settings writer (1..20), so
+                            // tapping at a bound is a no-op rather than an
+                            // escape.
+                            SoftIconButton(
+                                icon = Icons.Filled.Remove,
+                                contentDescription = "Decrease remembered positions",
+                                onClick = { onRememberedPositionsChange(rememberedPositions - 1) },
+                            )
+                            Text(
+                                "$rememberedPositions",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("remembered-positions-value"),
+                            )
+                            SoftIconButton(
+                                icon = Icons.Filled.Add,
+                                contentDescription = "Increase remembered positions",
+                                onClick = { onRememberedPositionsChange(rememberedPositions + 1) },
+                            )
+                        }
+                    },
+                )
             }
             // The audio level setting (moved here from the top-level menu
             // with the reorganization, now below the auto-lock section):

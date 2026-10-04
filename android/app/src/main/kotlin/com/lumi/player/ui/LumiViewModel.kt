@@ -23,6 +23,7 @@ import com.lumi.player.data.LoudnessMeasurer
 import com.lumi.player.data.LoudnessResult
 import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiThemeMode
+import com.lumi.player.data.MAX_REMEMBERED_TAGS
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
 import com.lumi.player.data.SongDownloadResult
@@ -403,6 +404,26 @@ class LumiViewModel(
 
     fun setKeepScreenOn(on: Boolean) {
         viewModelScope.launch { repository.setKeepScreenOn(on) }
+    }
+
+    // ---- settings: remembered playback positions ----
+
+    /**
+     * How many songs' last played position the per-tag LRU remembers (the
+     * Advanced options page's "Remembered playback positions" stepper).
+     * Defaults to the hard-coded [MAX_REMEMBERED_TAGS] behavior; the count
+     * is clamped to the setting's 1..20 range and persists in the database
+     * like the other settings (a restart reads the pick back). The player
+     * service evicts against this count at the next stored position: a
+     * lower count evicts the oldest remembered tags first, a higher one
+     * keeps the rows already remembered.
+     */
+    val rememberedPositions: StateFlow<Int> =
+        repository.observeRememberedPositions()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, MAX_REMEMBERED_TAGS)
+
+    fun setRememberedPositions(count: Int) {
+        viewModelScope.launch { repository.setRememberedPositions(count) }
     }
 
     // ---- settings: first-time setup ----

@@ -155,6 +155,13 @@ data class SettingsEntity(
         /** "-18"/"-16"/"-14": the target integrated loudness (LUFS) for normalization. */
         const val AUDIO_LEVEL_TARGET_LUFS = "audio_level_target_lufs"
 
+        /**
+         * How many tags' last played position the LRU remembers (the
+         * Advanced options page's "Remembered playback positions"); "3"
+         * (the default) by default, clamped to 1..20.
+         */
+        const val REMEMBERED_POSITIONS = "remembered_positions"
+
         /** "1" when the first-time setup wizard has been finished. */
         const val SETUP_COMPLETE = "setup_complete"
     }
