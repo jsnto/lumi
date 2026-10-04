@@ -1,7 +1,5 @@
 package com.lumi.player.nfc
 
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import java.io.IOException
 
@@ -63,7 +61,9 @@ object GenericPresencePoller {
     /**
      * Runs the probe loop; returns when the removal is confirmed or the
      * coroutine is cancelled. [delayFn] is injectable so tests can advance
-     * time without a real clock.
+     * time without a real clock. The loop's body is the shared
+     * [PresencePollLoop.loop] (the Mifare fast path runs the same loop
+     * over its page read).
      */
     suspend fun loop(
         probe: () -> Unit,
@@ -73,29 +73,13 @@ object GenericPresencePoller {
         retryDelayMs: Long = RETRY_DELAY_MS,
         delayFn: suspend (Long) -> Unit = { delay(it) },
     ): Unit {
-        val job = currentCoroutineContext()[Job]
-        while (job?.isActive != false) {
-            val present = try {
-                probe()
-                true
-            } catch (e: IOException) {
-                false
-            }
-            if (!present) {
-                delayFn(retryDelayMs)
-                val stillPresent = try {
-                    probe()
-                    true
-                } catch (e: IOException) {
-                    false
-                }
-                if (!stillPresent) {
-                    onConfirmedRemoved()
-                    return
-                }
-            }
-            onStillPresent()
-            delayFn(readIntervalMs)
-        }
+        PresencePollLoop.loop(
+            read = probe,
+            onStillPresent = onStillPresent,
+            onConfirmedRemoved = onConfirmedRemoved,
+            readIntervalMs = readIntervalMs,
+            retryDelayMs = retryDelayMs,
+            delayFn = delayFn,
+        )
     }
 }
