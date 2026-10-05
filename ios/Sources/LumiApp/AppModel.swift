@@ -376,8 +376,9 @@ public final class AppModel: ObservableObject {
             return true // unchanged content: the stored measurement stands
         }
         do {
+            let url = URL(fileURLWithPath: playUrl(for: entry))
             let result = try await measurementSlot.run { [measurer = loudnessMeasurer] in
-                try await measurer(URL(fileURLWithPath: entry.payload))
+                try await measurer(url)
             }
             store.recordLoudness(
                 entryId: entry.id,
