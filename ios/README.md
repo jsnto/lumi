@@ -35,9 +35,13 @@ Android app's observable behavior for the five core features:
    category with the `audio` background mode declared: audio keeps
    playing with the screen locked or the app backgrounded. The engine
    is `AVAudioEngine`-backed (an `AVPlayerNode` schedules the queue's
-   items; a tap on its output applies the per-track loudness gain and
+   items; a custom `AVAudioSinkNode` on the engine's output path pulls
+   the main mixer's output and applies the per-track loudness gain and
    the peak limiter in the sample domain - the iOS counterpart of the
-   Android app's `LoudnessProcessor` in the playback processor chain),
+   Android app's `LoudnessProcessor` in the playback processor chain;
+   the engine's own taps are observation-only - Apple documents the tap
+   buffer as an analysis copy the audible output ignores - so the
+   sample-domain stage must sit on the delivery path itself),
    with the service's own observable behavior: the `wantsPlay` intent
    (a paused session stays paused while the bounded error walk
    completes) and the bad-file loop guard (an error on every entry of
@@ -112,7 +116,8 @@ ios/
   Sources/LumiApp/         the iOS-only app (SwiftUI + AVFoundation + CoreNFC)
     AppModel.swift         the orchestration (the Android view-model port)
     PlaybackEngine.swift   AVAudioEngine + the player node + the loudness
-                           tap + the session + the bad-file loop guard
+                           sink node (the gain + limiter on the delivery
+                           path) + the session + the bad-file loop guard
     LoudnessMeasurer.swift the decode-speed loudness read (AVAssetReader)
     NfcController.swift    the always-listening reader + presence monitor
     FolderAccess.swift     security-scoped bookmarks + the folder children

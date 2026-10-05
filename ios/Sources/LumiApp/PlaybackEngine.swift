@@ -1,9 +1,10 @@
 // The playback engine - the iOS counterpart of the Android app's
 // PlayerService. AVAudioEngine-backed (an AVPlayerNode schedules the
-// queue's items; a tap on its output applies the per-track loudness gain
-// and the peak limiter in the sample domain - the iOS counterpart of the
-// Android app's LoudnessProcessor in the playback processor chain), with
-// the service's own observable behavior ported one-for-one:
+// queue's items; a custom AVAudioSinkNode on the engine's output path
+// applies the per-track loudness gain and the peak limiter in the
+// sample domain - the iOS counterpart of the Android app's
+// LoudnessProcessor in the playback processor chain), with the
+// service's own observable behavior ported one-for-one:
 //
 // - a start is a QUEUE + optional remembered position (start index + seek):
 //   the remembered position applies only when it was saved against the
@@ -95,15 +96,32 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// stored loudness). nil = the pass-through (no gain, no limiter).
     public var loudnessProvider: ((EntrySpec) -> LoudnessLevel)?
     /// The sample-domain gain + soft-clip stage (the Android app's
-    /// player.LoudnessProcessor): applied in-place to the player node's
-    /// output buffers (the audio tap), on the audio thread.
+    /// player.LoudnessProcessor): applied in-place to the buffers the
+    /// loudness sink node pulls on the delivery path, on the audio
+    /// render thread.
     private let loudnessProcessor = LoudnessSampleProcessor()
 
     // The audio graph: the player node schedules the queue's items, the
-    // main mixer feeds the output. The tap on the player node's bus 0 is
-    // where the loudness level applies to the track's own audio.
+    // main mixer feeds the LOUDNESS SINK NODE (the engine's output node -
+    // a custom AVAudioSinkNode whose render block pulls the mixer's
+    // output and applies the per-track level before the samples reach
+    // the hardware). A tap would not work for this: Apple documents the
+    // tap's buffer as an analysis COPY - writing it does not alter the
+    // audible output - so the sample-domain stage must sit on the
+    // delivery path itself.
     private let engine = AVAudioEngine()
     private let playerNode = AVPlayerNode()
+    private var sinkNode: GainLimiterSinkNode?
+    /// The graph's render format (the mixer -> sink connection): a fixed
+    /// stereo float the mixer converts every track's own format into -
+    /// the engine converts the sink's output to the hardware's io format
+    /// itself, so per-track format differences never touch the graph.
+    private let renderFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 48_000,
+        channels: 2,
+        interleaved: true,
+    )!
 
     /// The queue (specs in play order) and the tag it belongs to.
     private var queue: [EntrySpec] = []
@@ -139,13 +157,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         configureAudioSession()
         engine.attach(playerNode)
         engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
-        // The loudness tap: the player node's own output, in place - the
-        // gain + the soft clip run on the track's samples before the
-        // mixer. A nil format lets the engine negotiate the node's own
-        // (standard float) format.
-        playerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [loudnessProcessor] buffer, _ in
-            loudnessProcessor.apply(to: buffer)
-        }
+        // The output path: the main mixer feeds the loudness sink node
+        // (the engine's output node) instead of the hardware directly -
+        // the per-track gain + the soft clip sit on the samples' own
+        // delivery (a tap would be observation-only: Apple documents the
+        // tap's buffer as an analysis copy the engine ignores for the
+        // audible output, so a tap-applied gain would be a silent no-op).
+        let sink = GainLimiterSinkNode(sourceNode: engine.mainMixerNode, processor: loudnessProcessor)
+        engine.attach(sink)
+        engine.connect(engine.mainMixerNode, to: sink, format: renderFormat)
+        sinkNode = sink
         observeHeartbeat()
         observeInterruptions()
     }
@@ -554,20 +575,65 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 }
 
-// MARK: - the sample-domain loudness stage
+// MARK: - the sample-domain loudness stage (the engine's output node)
+
+/**
+ * The engine's output node: a custom AVAudioSinkNode that pulls the
+ * main mixer's output every render cycle and applies the per-track
+ * loudness level before the samples reach the hardware (the iOS
+ * counterpart of the Android app's LoudnessProcessor in the playback
+ * processor chain).
+ *
+ * WHY a sink node and not a tap: Apple documents the engine's taps as
+ * observation-only - the tap's buffer is a COPY for analysis, and
+ * writing it does not alter the audible output. The sample-domain
+ * stage must therefore sit on the delivery path itself, and the sink
+ * node IS that path: the engine calls its render block on the audio
+ * render thread, and the data the block pulls from its input is what
+ * the engine delivers to the hardware.
+ *
+ * The render block is real-time: it does no allocation, takes only the
+ * processor's small level lock, and keeps the engine running on a
+ * transient no-data cycle (.paused - a .done would stop the engine).
+ */
+final class GainLimiterSinkNode: AVAudioSinkNode {
+    private let sourceNode: AVAudioNode
+    private let processor: LoudnessSampleProcessor
+
+    init(sourceNode: AVAudioNode, processor: LoudnessSampleProcessor) {
+        self.sourceNode = sourceNode
+        self.processor = processor
+        super.init()
+        self.renderBlock = { [weak sourceNode, weak processor] when, outHasData, _ in
+            guard let sourceNode, let processor else {
+                outHasData.pointee = false
+                return .done
+            }
+            guard let sampleBuffer = sourceNode.copyOutputSampleBuffer(fromBus: 0, toBus: 0, at: when.pointee) else {
+                // No data for this cycle (a transient between items):
+                // keep the engine running, the next cycle retries.
+                outHasData.pointee = false
+                return .paused
+            }
+            processor.apply(to: sampleBuffer)
+            outHasData.pointee = true
+            return .pulled
+        }
+    }
+}
 
 /**
  * The per-track gain + soft-clip peak limiter applied in the sample
  * domain (the iOS counterpart of the Android app's player.LoudnessProcessor,
  * which sits in the Android app's playback processor chain the same way
- * this sits in the audio tap). The math is LumiCore's [gainFor] /
- * [softClip]: [setLevel] takes the resolved per-track gain (dB) and the
- * limiter engagement (engaged for boosted tracks only - a gain of 0 with
- * no limiter is the EXACT pass-through, the OFF mode's contract), and
- * [apply] processes the tap's buffers in place.
+ * this sits on the engine's delivery path). The math is LumiCore's
+ * [gainFor] / [softClip]: [setLevel] takes the resolved per-track gain
+ * (dB) and the limiter engagement (engaged for boosted tracks only - a
+ * gain of 0 with no limiter is the EXACT pass-through, the OFF mode's
+ * contract), and [apply] processes the sink node's buffers in place.
  *
- * The level is read under a lock (the audio thread reads it while the
- * main thread sets it per track); the processing itself is stateless
+ * The level is read under a lock (the audio render thread reads it while
+ * the main thread sets it per track); the processing itself is stateless
  * with respect to the stream.
  */
 final class LoudnessSampleProcessor {
@@ -602,9 +668,14 @@ final class LoudnessSampleProcessor {
         self.engageLimiter = engageLimiter
     }
 
-    /// Processes the tap's buffer in place (the audio thread).
-    func apply(to buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData else { return }
+    /**
+     * Processes the delivery buffer in place (the audio render thread):
+     * the AVAudioSampleBuffer the sink node pulled from the main mixer -
+     * the C audio buffer list (a single INTERLEAVED buffer for the
+     * graph's interleaved render format, one buffer per channel when
+     * the format is deinterleaved).
+     */
+    func apply(to sampleBuffer: AVAudioSampleBuffer) {
         var gain = 1.0
         var limiter = false
         lock.lock()
@@ -613,30 +684,46 @@ final class LoudnessSampleProcessor {
         lock.unlock()
         guard gain != 1.0 || limiter else { return } // the exact pass-through
 
-        let frameLength = Int(buffer.frameLength)
-        let channels = Int(buffer.format.channelCount)
-        guard frameLength > 0, channels > 0 else { return }
-        let knee = LIMITER_KNEE_LINEAR
-        if buffer.format.isNonInterleaved {
-            for ch in 0..<channels {
-                guard let data = channelData[ch] else { continue }
-                for frame in 0..<frameLength {
-                    var s = data[frame] * gain
-                    if limiter, abs(s) > Float(knee) {
-                        s = Float(softClip(Double(s), knee: knee))
+        let format = sampleBuffer.format
+        let list = sampleBuffer.audioBufferList.pointee
+        let bufferCount = Int(list.mNumberBuffers)
+        guard bufferCount > 0 else { return }
+        let knee = Float(LIMITER_KNEE_LINEAR)
+
+        if format.isNonInterleaved {
+            // One buffer per channel, each with its own frames.
+            for i in 0..<bufferCount {
+                let buffer = list.mBuffers[i]
+                guard let data = buffer.mData else { continue }
+                let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+                guard count > 0 else { continue }
+                let samples = data.bindMemory(to: Float.self, capacity: count)
+                for frame in 0..<count {
+                    var s = samples[frame] * gain
+                    if limiter, abs(s) > knee {
+                        s = Float(softClip(Double(s), knee: LIMITER_KNEE_LINEAR))
                     }
-                    data[frame] = s
+                    samples[frame] = s
                 }
             }
         } else {
-            guard let data = channelData[0] else { return }
-            for frame in 0..<frameLength {
+            // The single interleaved buffer: every frame carries all
+            // the channels.
+            let buffer = list.mBuffers[0]
+            guard let data = buffer.mData else { return }
+            let channels = Int(format.channelCount)
+            guard channels > 0 else { return }
+            let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            let frames = sampleCount / channels
+            guard frames > 0 else { return }
+            let samples = data.bindMemory(to: Float.self, capacity: sampleCount)
+            for frame in 0..<frames {
                 for ch in 0..<channels {
-                    var s = data[frame * channels + ch] * gain
-                    if limiter, abs(s) > Float(knee) {
-                        s = Float(softClip(Double(s), knee: knee))
+                    var s = samples[frame * channels + ch] * gain
+                    if limiter, abs(s) > knee {
+                        s = Float(softClip(Double(s), knee: LIMITER_KNEE_LINEAR))
                     }
-                    data[frame * channels + ch] = s
+                    samples[frame * channels + ch] = s
                 }
             }
         }

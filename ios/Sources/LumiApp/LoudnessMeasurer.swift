@@ -136,16 +136,17 @@ public final class LoudnessMeasurer {
             }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             // The samples are interleaved float32 (the output settings'
-            // contract): feed the meter frame by frame (CMBlockBuffer's
-            // Swift-safe data accessor - withDataBytes).
-            let floatCountExpected = blockBuffer.dataLength / MemoryLayout<Float>.size
-            var doubles = [Double](repeating: 0.0, count: floatCountExpected)
+            // contract): feed the meter frame by frame. The read goes
+            // through the pointer-agnostic per-sample load (the data
+            // accessor hands a raw pointer: bindMemory's no-capacity
+            // overload does not exist on that shape).
+            var doubles = [Double](repeating: 0.0, count: blockBuffer.dataLength / MemoryLayout<Float>.size)
             let floatCount = blockBuffer.withDataBytes { raw -> Int in
-                let floats = raw.bindMemory(to: Float.self)
-                for i in 0..<floats.count {
-                    doubles[i] = Double(floats[i])
+                let count = blockBuffer.dataLength / MemoryLayout<Float>.size
+                for i in 0..<count {
+                    doubles[i] = Double(raw.load(fromByteOffset: i * MemoryLayout<Float>.size, as: Float.self))
                 }
-                return floats.count
+                return count
             }
             guard floatCount > 0 else { continue }
             meter.processInterleaved(doubles, offset: 0, frameCount: floatCount / channelCount)
