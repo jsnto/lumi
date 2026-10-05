@@ -1,10 +1,39 @@
-// Playback position remembering (per tag, LRU 3) - a port of the Android
-// app's com.lumi.player.data.PlaybackPosition.
+// Playback position remembering (per tag, LRU against the configured
+// count) - a port of the Android app's com.lumi.player.data.PlaybackPosition.
 
 import Foundation
 
-/// Maximum number of tags whose last played position is remembered (LRU).
+/// Default number of tags whose last played position is remembered (LRU).
 public let maxRememberedTags = 3
+
+/**
+ * Upper bound of the remembered-positions setting (the Advanced options
+ * page's "Remembered playback positions"): how many tags' last played
+ * position the LRU keeps. The setting clamps its count to 1...
+ * [maxRememberedPositions]; [maxRememberedTags] (3) is its default.
+ */
+public let maxRememberedPositions = 20
+
+/**
+ * Reads the stored remembered-positions count. Unset or invalid values -
+ * and a count outside the setting's 1...[maxRememberedPositions] range -
+ * fall back to the default ([maxRememberedTags]).
+ */
+public func rememberedPositionsFromStored(_ value: String?) -> Int {
+    guard let value else { return maxRememberedTags }
+    guard let raw = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        return maxRememberedTags
+    }
+    return (1...maxRememberedPositions).contains(raw) ? raw : maxRememberedTags
+}
+
+/**
+ * The settings-table value a remembered-positions count stores under:
+ * the count clamped to the setting's 1...[maxRememberedPositions] range.
+ */
+public func rememberedPositionsStoredValue(_ count: Int) -> String {
+    String(min(max(count, 1), maxRememberedPositions))
+}
 
 /// How a tag's content list should start.
 public enum PositionRestore: Equatable, Sendable {

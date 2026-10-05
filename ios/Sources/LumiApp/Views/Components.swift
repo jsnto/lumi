@@ -24,6 +24,10 @@ enum LumiPalette {
     static let onSurfaceVariant = Color(hex: 0x5B4B3F)
     static let error = Color(hex: 0xBA1A1A)
     static let errorContainer = Color(hex: 0xFFDAD6)
+    /// The loaded-entry accent (the Android app's EntryPresentation AUDIO
+    /// token): the front screen's visual tints to it while a song is
+    /// loaded, and falls back to the theme's primary while idle.
+    static let audioAccent = Color(hex: 0xFF8A3D)
 }
 
 extension Color {

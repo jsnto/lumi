@@ -112,9 +112,19 @@ if "NSNFCReaderUsageDescription" not in plist:
 caps = plist.get("UIRequiredDeviceCapabilities", [])
 if "nfc" not in caps:
     sys.exit("error: Info.plist does not require the nfc capability")
+# The launcher icons: every CFBundleIconFiles name must be a PNG in the
+# bundle (the pre-asset-catalog surface reads them straight from the top
+# level of the app).
+icons = plist.get("CFBundleIconFiles", [])
+if not icons:
+    sys.exit("error: Info.plist does not declare CFBundleIconFiles")
+missing_icons = [i for i in icons if "Payload/Lumi.app/" + i + ".png" not in names]
+if missing_icons:
+    sys.exit("error: the app bundle is missing the declared icons: " + ", ".join(missing_icons))
 
 print("    binary: Mach-O arm64 OK")
 print("    Info.plist: bundle %s, background audio, NFC declared" % plist["CFBundleIdentifier"])
+print("    icons: %d declared, all present" % len(icons))
 print("    entries: %d" % len(names))
 PY
 

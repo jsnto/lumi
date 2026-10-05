@@ -469,22 +469,92 @@ public final class Store {
         return mutate { d in d.memory.removeValue(forKey: uid) != nil }
     }
 
-    // MARK: - remembered positions (per tag, LRU 3)
+    // MARK: - remembered positions (per tag, LRU against the configured capacity)
 
     public func positionFor(_ uid: String) -> TagPosition? {
         doc.positions[uid.trimmingCharacters(in: .whitespacesAndNewlines)]
     }
 
-    /// Records [entity], evicting the oldest rows so the capacity is never
-    /// exceeded (LRU - see lruEvictions).
-    public func remember(_ entity: TagPosition) {
+    /// Records [entity], evicting the oldest rows so [capacity] is never
+    /// exceeded (LRU - see lruEvictions). The caller passes the configured
+    /// "remembered playback positions" count (the settings table's
+    /// remembered-positions setting, default [maxRememberedTags]).
+    public func remember(_ entity: TagPosition, capacity: Int = maxRememberedTags) {
         mutate { d in
-            for uid in lruEvictions(existing: Array(d.positions.values), incoming: entity) {
+            for uid in lruEvictions(existing: Array(d.positions.values), incoming: entity, capacity: capacity) {
                 d.positions.removeValue(forKey: uid)
             }
             d.positions[entity.tagUid] = entity
             return true
         }
+    }
+
+    // MARK: - loudness measurements (the audio level's per-entry rows)
+
+    /// The stored measurement for [entryId], if any (nil = unmeasured).
+    public func loudnessForEntry(_ entryId: Int) -> EntryLoudness? {
+        doc.loudness[entryId]
+    }
+
+    /// Records (or replaces) [entryId]'s measurement (the Android app's
+    /// loudnessStore.recordLoudness upsert): a re-measure overwrites the
+    /// row, a silent reading (lufs nil) is recorded too - "measured,
+    /// nothing to normalize" is a stable state.
+    public func recordLoudness(entryId: Int, lufs: Double?, truePeakDbTp: Double?, fingerprint: String) {
+        mutate { d in
+            d.loudness[entryId] = EntryLoudness(
+                entryId: entryId,
+                lufs: lufs,
+                truePeakDbTp: truePeakDbTp,
+                fingerprint: fingerprint,
+                measuredAt: nowMillis(),
+            )
+            return true
+        }
+    }
+
+    /// The player's per-payload loudness snapshot (the Android app's
+    /// loudnessStore.serviceSnapshot): the measured samples keyed by the
+    /// content payload (the identity the playback queue uses - an entry
+    /// deleted with its measurement simply drops out of the map).
+    public func loudnessSnapshot() -> [String: LoudnessSample] {
+        var snapshot: [String: LoudnessSample] = [:]
+        for entry in doc.entries {
+            guard let row = doc.loudness[entry.id] else { continue }
+            if snapshot[entry.payload] == nil {
+                snapshot[entry.payload] = LoudnessSample(
+                    lufs: row.lufs,
+                    truePeakDbTp: row.truePeakDbTp,
+                    fingerprint: row.fingerprint,
+                    measuredAt: row.measuredAt,
+                )
+            }
+        }
+        return snapshot
+    }
+
+    /// The audio level's status for the settings pane: how many of the
+    /// audio entries carry a stored measurement (the Android app's
+    /// loudnessStore.status).
+    public func loudnessStatus() -> LoudnessStatus {
+        var total = 0
+        var measured = 0
+        for entry in doc.entries where isAudioPayload(entry.payload) {
+            total += 1
+            if doc.loudness[entry.id] != nil { measured += 1 }
+        }
+        return LoudnessStatus(measured: measured, total: total)
+    }
+
+    /// Whether a content entry's payload is a supported audio file (the
+    /// extension check the app uses for the loudness status's "audio
+    /// entries" - the iOS counterpart of the Android app's
+    /// EntryType.AUDIO filter; the app is audio-only, so the loudness
+    /// rows' cascade is a no-op in practice).
+    func isAudioPayload(_ payload: String) -> Bool {
+        guard let dot = payload.lastIndex(of: ".") else { return false }
+        let ext = String(payload[payload.index(after: dot)...]).lowercased()
+        return supportedAudioExtensions.contains(ext)
     }
 
     // MARK: - settings

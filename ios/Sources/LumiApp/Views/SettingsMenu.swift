@@ -115,31 +115,109 @@ struct PlayModePane: View {
 /// The advanced options sub-screen (the Android app's Advanced options
 /// page, reduced to what this platform allows): the tag re-read wait is
 /// shown (it has no settings UI on the Android app either - the value is
-/// persisted and read by the proximity monitor), and the platform-forced
-/// differences (screen lock / auto-lock / keep-screen-on / themes) are
-/// documented rather than offered.
+/// persisted and read by the proximity monitor), the remembered-positions
+/// stepper (the Android app's own section, ported), and the audio level
+/// row opening its own sub-screen (the Android app's own page row, the
+/// page's last setting row); the platform-forced differences (screen
+/// lock / auto-lock / keep-screen-on / themes) are documented rather than
+/// offered.
 struct AdvancedPane: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var nav: NavState
 
     var body: some View {
         ScrollView {
-            SectionCard(title: "NFC") {
+            VStack(spacing: 16) {
+                SectionCard(title: "NFC") {
+                    LumiCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Tag re-read wait").font(.headline).foregroundStyle(LumiPalette.onSurface)
+                            Text("\(model.nfcRereadSeconds) seconds - how long a removed tag may be out of range before proximity mode pauses its list. (No in-app stepper on the Android app either; the value is persisted.)")
+                                .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // The remembered-positions section (the Android app's own
+                // section, ported one-for-one): the count of tags whose
+                // last played position the LRU remembers (per tag, newest
+                // first). The stepper changes the count one at a time;
+                // each change persists through the store and takes effect
+                // at the next stored position (a lower count evicts the
+                // oldest remembered tags first, a higher one keeps the
+                // rows already remembered). While a step's write is in
+                // flight the buttons are disabled, so the next step always
+                // computes from the value the write landed.
+                SectionCard(title: "Remembered playback positions") {
+                    LumiCard {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Songs to remember").font(.headline).foregroundStyle(LumiPalette.onSurface)
+                                Text("How many songs' last played position lumi remembers (per tag, newest first).")
+                                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+                            }
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Button {
+                                    model.setRememberedPositions(model.rememberedPositions - 1)
+                                } label: {
+                                    Image(systemName: "minus")
+                                        .font(.body.bold())
+                                        .foregroundStyle(LumiPalette.onPrimaryContainer)
+                                        .frame(width: 32, height: 32)
+                                        .background(Circle().fill(LumiPalette.primaryContainer))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.rememberedPositionsWriteInFlight)
+                                .accessibilityLabel("Decrease remembered positions")
+
+                                Text("\(model.rememberedPositions)")
+                                    .font(.title3).fontWeight(.bold)
+                                    .foregroundStyle(LumiPalette.onSurface)
+                                    .frame(minWidth: 24)
+                                    .accessibilityLabel("Remembered positions")
+
+                                Button {
+                                    model.setRememberedPositions(model.rememberedPositions + 1)
+                                } label: {
+                                    Image(systemName: "plus")
+                                        .font(.body.bold())
+                                        .foregroundStyle(LumiPalette.onPrimaryContainer)
+                                        .frame(width: 32, height: 32)
+                                        .background(Circle().fill(LumiPalette.primaryContainer))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.rememberedPositionsWriteInFlight)
+                                .accessibilityLabel("Increase remembered positions")
+                            }
+                        }
+                    }
+                }
+
+                // The audio level row (the Android app's own page row,
+                // opening the audio level's own sub-screen from the page,
+                // not the menu):
+                // the settled subtitle (Off / Normalize to the target).
                 LumiCard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Tag re-read wait").font(.headline).foregroundStyle(LumiPalette.onSurface)
-                        Text("\(model.nfcRereadSeconds) seconds - how long a removed tag may be out of range before proximity mode pauses its list. (No in-app stepper on the Android app either; the value is persisted.)")
-                            .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
+                    MenuRowView(
+                        title: "Audio level",
+                        subtitle: model.audioLevelMode == .off
+                            ? "Off"
+                            : "Normalize to \(Int(model.audioLevelTargetLufs)) LUFS",
+                        onTap: { nav.path.append(Route.audioLevel) },
+                    )
+                }
+
+                SectionCard(title: "Platform notes") {
+                    LumiCard {
+                        Text(
+                            "The Android app's screen-lock (auto-lock after idle, keep screen on) and appearance settings are not available: iOS apps cannot lock the device screen or override the system theme. See the ios/ README.",
+                        )
+                        .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
                     }
                 }
             }
-            SectionCard(title: "Platform notes") {
-                LumiCard {
-                    Text(
-                        "The Android app's screen-lock (auto-lock after idle, keep screen on) and appearance settings are not available: iOS apps cannot lock the device screen or override the system theme. See the ios/ README.",
-                    )
-                    .font(.footnote).foregroundStyle(LumiPalette.onSurfaceVariant)
-                }
-            }
+            .padding(16)
         }
         .background(LumiPalette.background)
         .navigationTitle("Advanced options")

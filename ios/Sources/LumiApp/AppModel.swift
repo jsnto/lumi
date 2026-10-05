@@ -42,6 +42,42 @@ public final class AppModel: ObservableObject {
     @Published public var playMode: PlayMode
     @Published public var contentSort: ContentSortDirection
     @Published public var nfcRereadSeconds: Int
+    /// The audio level's mode (Off / Normalize - the Android app's
+    /// audio_level_mode setting; unset/invalid reads as OFF).
+    @Published public private(set) var audioLevelMode: AudioLevelMode
+    /// The audio level's target (LUFS; unset/invalid/out-of-ladder reads
+    /// as the default -16).
+    @Published public private(set) var audioLevelTargetLufs: Double
+    /// The audio level's measurement status ("N of M songs measured" -
+    /// the settings pane's status row), kept live across measurements
+    /// (the store's change callback refreshes it).
+    @Published public private(set) var loudnessStatus: LoudnessStatus
+    /// True while an explicit "Normalize now" pass is running (the pass's
+    /// button is disabled for its duration).
+    @Published public private(set) var normalizing: Bool = false
+    /// How many tags' last played position the LRU remembers (the
+    /// Advanced options page's "Remembered playback positions": a count,
+    /// 1 to 20, defaulting to the hard-coded default of 3; unset/invalid
+    /// stored values read as the default).
+    @Published public private(set) var rememberedPositions: Int
+    /// True while a remembered-positions write is in flight (the
+    /// settings row's stepper controls are disabled for the write's
+    /// duration - the next step always computes from the value the
+    /// write landed).
+    @Published public private(set) var rememberedPositionsWriteInFlight: Bool = false
+    /// The first-time setup wizard's gate (the Android app's
+    /// setup_complete): the wizard shows until it is finished (the
+    /// model's completeSetup writes the stored flag), after which the
+    /// normal player UI shows (a flag written by an earlier run stays
+    /// read across launches).
+    @Published public private(set) var setupComplete: Bool
+
+    /// The wizard's "Set up now" route (the Android app's
+    /// onFinish(openNfcTags: true)): when the wizard finishes through the
+    /// NFC step's set-up-now, the app opens the settings menu's NFC tags
+    /// pane (the one-shot flag the root view consumes once the wizard's
+    /// gate flips to the player UI).
+    public var wizardOpenNfcTags: Bool = false
     /// The Android app's Toast: the last user-facing event (the UI shows
     /// it as a transient banner).
     @Published public var uiEvent: String? = nil
@@ -108,10 +144,29 @@ public final class AppModel: ObservableObject {
         self.playMode = PlayMode.fromStorage(store.setting("play_mode") ?? "")
         self.contentSort = contentSortDirectionFromStored(store.setting("content_sort_direction"))
         self.nfcRereadSeconds = Self.rereadSeconds(from: store.setting("nfc_reread_seconds"))
+        self.audioLevelMode = AudioLevelMode.fromStorage(store.setting("audio_level_mode"))
+        self.audioLevelTargetLufs = audioLevelTargetLufsFromStored(store.setting("audio_level_target_lufs"))
+        self.loudnessStatus = store.loudnessStatus()
+        self.rememberedPositions = rememberedPositionsFromStored(store.setting("remembered_positions"))
+        self.setupComplete = store.setting("setup_complete") == "1"
         self.policy = PlaybackPolicy(mode: self.playMode)
         self.isNfcSupported = nfc.isSupported
 
         engine.delegate = self
+        // The per-track loudness level seam (the Android service's
+        // applyLoudness resolution): the entry's stored loudness (the
+        // app's per-payload snapshot - no store read beyond the snapshot
+        // on the playback path) against the audio level setting. OFF
+        // mode, an unmeasured entry, or a silent one all resolve to the
+        // pass-through (the gain's own contract).
+        engine.loudnessProvider = { [weak self] spec in
+            guard let self else { return .passThrough }
+            let sample = self.store.loudnessSnapshot()[spec.payload]
+            let gain = gainFor(mode: self.audioLevelMode, targetLufs: self.audioLevelTargetLufs, sample: sample)
+            // The limiter engages only for boosted tracks (the Android
+            // service's engageLimiter = gainDb > 0.0).
+            return LoudnessLevel(gainDb: gain, engageLimiter: gain > 0.0)
+        }
         nfc.eventListener = self
         nfc.tagByUid = { [store] uid in store.tagByUid(uid) }
         nfc.nfcRereadSeconds = { [weak self] in
@@ -193,6 +248,9 @@ public final class AppModel: ObservableObject {
         tags = store.tags
         entries = store.entries
         folders = store.folders
+        // The audio level's status follows the store (a measurement that
+        // lands - or an entry's removal - refreshes the pane's row).
+        loudnessStatus = store.loudnessStatus()
     }
 
     // MARK: - play mode / settings
@@ -224,6 +282,181 @@ public final class AppModel: ObservableObject {
     public func setNfcRereadSeconds(_ seconds: Int) {
         nfcRereadSeconds = Self.rereadSeconds(from: String(seconds))
         store.setSetting("nfc_reread_seconds", String(nfcRereadSeconds))
+    }
+
+    // MARK: - audio level (the loudness normalization setting)
+
+    public func setAudioLevelMode(_ mode: AudioLevelMode) {
+        audioLevelMode = mode
+        store.setSetting("audio_level_mode", mode.storageValue)
+    }
+
+    public func setAudioLevelTargetLufs(_ targetLufs: Double) {
+        audioLevelTargetLufs = targetLufs
+        // The settings table stores the target as an int LUFS string (the
+        // Android app's setAudioLevelTargetLufs: targetLufs.toInt()).
+        store.setSetting("audio_level_target_lufs", String(Int(targetLufs)))
+    }
+
+    /// The audio level's measurement status for the pane is the published
+    /// [loudnessStatus] (refreshSnapshots tracks the store).
+
+    /// The single measurement slot: every loudness read - the on-add
+    /// measurements and the explicit pass alike - runs inside it, so at
+    /// most one entry decodes at a time; a folder add's burst of fresh
+    /// songs queues behind the in-flight read, one decode at a time (the
+    /// Android app's measurementLock: a Mutex held for the full read).
+    private let measurementSlot = SerialQueue()
+
+    /**
+     * The explicit "Normalize now" pass (the audio level settings pane's
+     * action): measures every audio entry that has no measurement yet, or
+     * whose content changed since the last measurement (the content
+     * fingerprint no longer matches the stored one). Best-effort per
+     * entry: a failure leaves that entry unmeasured with its own event
+     * and the pass keeps going. A second pass while one is running is
+     * ignored, so a slow earlier pass can never run against a newer
+     * selection; the live progress is the [loudnessStatus] row, plus the
+     * pass's own start / completion events (the app's usual event
+     * language).
+     */
+    public func normalizeNow() {
+        guard !normalizing else { return }
+        normalizing = true
+        Task { @MainActor [self] in
+            defer { normalizing = false }
+            let pending = store.entries.filter { $0.typeIsAudio() && isStaleForLoudness($0) }
+            if pending.isEmpty {
+                uiEvent("Everything is already measured.")
+                return
+            }
+            uiEvent(
+                pending.count == 1
+                    ? "Measuring 1 song for audio level…"
+                    : "Measuring \(pending.count) songs for audio level…",
+            )
+            var failed = 0
+            for entry in pending {
+                if !(await measureEntryBestEffort(entry, reportEvent: true)) { failed += 1 }
+            }
+            uiEvent(
+                failed > 0
+                    ? "Audio level ready - \(failed) \(failed == 1 ? "song" : "songs") couldn't be measured."
+                    : "Audio level ready.",
+            )
+        }
+    }
+
+    /**
+     * Best-effort measurement of one freshly added audio entry (the
+     * on-add measurement: a song added to the content list is measured
+     * right away, so the audio level works the moment it is turned on).
+     * A failure leaves the entry unmeasured with its own event (the song
+     * plays at its recorded level; "Normalize now" can retry it).
+     */
+    public func measureEntry(_ entry: Entry) {
+        Task { @MainActor [self] in
+            await measureEntryBestEffort(entry, reportEvent: true)
+        }
+    }
+
+    /**
+     * The measurement pass for [entry]: the content fingerprint check
+     * first (an unchanged file keeps its stored measurement - no
+     * re-read), then the best-effort read (off the main actor and
+     * time-limited - any failure settles to unmeasured, with an event
+     * when [reportEvent]). The read itself runs in the single
+     * [measurementSlot], so on-add measurements and the explicit pass
+     * queue behind each other - never two decodes at once. Returns
+     * whether the entry now has a stored measurement.
+     */
+    private func measureEntryBestEffort(_ entry: Entry, reportEvent: Bool) async -> Bool {
+        let fingerprint = fingerprintOf([EntrySpec(type: "audio", label: entry.label, payload: entry.payload)])
+        if let existing = store.loudnessForEntry(entry.id), existing.fingerprint == fingerprint {
+            return true // unchanged content: the stored measurement stands
+        }
+        do {
+            let result = try await measurementSlot.run { [measurer = loudnessMeasurer] in
+                try await measurer(URL(fileURLWithPath: entry.payload))
+            }
+            store.recordLoudness(
+                entryId: entry.id,
+                lufs: result.lufs,
+                truePeakDbTp: result.truePeakDbTp,
+                fingerprint: fingerprint,
+            )
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            Self.fileLog.warning("Couldn't measure the loudness of \(entry.label): \(error)")
+            if reportEvent { uiEvent("Couldn't measure “\(entry.label)” for audio level.") }
+            return false
+        }
+    }
+
+    /** Whether [entry]'s stored measurement (if any) matches its content now. */
+    private func isStaleForLoudness(_ entry: Entry) -> Bool {
+        let fingerprint = fingerprintOf([EntrySpec(type: "audio", label: entry.label, payload: entry.payload)])
+        guard let row = store.loudnessForEntry(entry.id) else { return true }
+        return row.fingerprint != fingerprint
+    }
+
+    /// Test seam: the loudness measurement read, replaced in tests.
+    /// The default decodes the file at decode speed (the
+    /// [LoudnessMeasurer]: an AVAssetReader with the meter's LINEAR PCM
+    /// output and the meter configured for the file's own stream
+    /// parameters) and is time-limited (a stalled decode settles into a
+    /// failure); a read failure surfaces as the exception the caller
+    /// settles to unmeasured.
+    internal var loudnessMeasurer: @Sendable (URL) async throws -> LoudnessResult = { url in
+        try await LoudnessMeasurer().measure(url: url)
+    }
+
+    // MARK: - remembered playback positions (the Advanced options setting)
+
+    /// The remembered-positions write (the Android app's
+    /// rememberedPositionsWriter seam): the settings-table upsert. A
+    /// test can hold the in-flight window open by replacing it.
+    internal var rememberedPositionsWriter: (Int) -> Void = { [store] count in
+        store.setSetting("remembered_positions", rememberedPositionsStoredValue(count))
+    }
+
+    /// The Advanced options page's stepper: changes the count one at a
+    /// time (the clamp through [rememberedPositionsStoredValue] makes a
+    /// tap at a bound a no-op rather than an escape), persists through
+    /// the settings table, and takes effect at the next stored position
+    /// (a lower count evicts the oldest remembered tags first, a higher
+    /// one keeps the rows already remembered). While a step's write is in
+    /// flight the next step is refused, so the write always lands from
+    /// the value it computed against.
+    public func setRememberedPositions(_ count: Int) {
+        guard !rememberedPositionsWriteInFlight else { return }
+        let stored = rememberedPositionsStoredValue(count) ?? rememberedPositions
+        rememberedPositionsWriteInFlight = true
+        Task { @MainActor [self] in
+            // The write hops off the main actor for the write itself
+            // (the Android app's Room write is an off-main suspend
+            // call), so the stepper's disabled window is the write's own
+            // duration, the same observable behavior the Android app's
+            // in-flight flag has.
+            await Task.yield()
+            rememberedPositionsWriter(stored)
+            rememberedPositions = stored
+            rememberedPositionsWriteInFlight = false
+        }
+    }
+
+    // MARK: - first-time setup
+
+    /**
+     * The wizard's finish (the Android app's markSetupComplete): writes
+     * the stored gate so the normal player UI shows from the next launch
+     * (and flips the gate live for this run).
+     */
+    public func completeSetup() {
+        store.setSetting("setup_complete", "1")
+        setupComplete = true
     }
 
     // MARK: - playback commands
@@ -277,6 +510,10 @@ public final class AppModel: ObservableObject {
                 saved: store.positionFor(uid),
                 queueFingerprint: fingerprintOf(specs),
                 queueSize: specs.count,
+                // The app's remembered-positions setting (the Android
+                // repository's remember capacity: the default only when
+                // unset - the configured count 1 to 20 otherwise).
+                remember: rememberedPositions,
             ) {
             case .startFresh:
                 break
@@ -517,19 +754,28 @@ public final class AppModel: ObservableObject {
     /// read grant), and a file already stored adds no duplicate row.
     public func addFileEntries(urls: [URL]) -> Int {
         var added = 0
+        var addedEntries: [Entry] = []
         for url in urls {
             let bookmark = FolderAccess.bookmarkData(for: url)
             let payload = url.path
-            if store.addEntryUnique(
+            if let entry = store.addEntryUnique(
                 label: url.lastPathComponent,
                 payload: payload,
                 folderId: nil,
                 bookmark: bookmark,
-            ) != nil {
+            ) {
                 added += 1
+                addedEntries.append(entry)
             }
         }
         uiEvent(added == 0 ? "Already in the content list." : "Added \(added) song\(added == 1 ? "" : "s").")
+        // The on-add measurement (the Android app's measureEntry on the
+        // add paths): a song added to the content list is measured for
+        // the audio level right away - queued behind the in-flight read
+        // in the single measurement slot, one decode at a time.
+        for entry in addedEntries where entry.typeIsAudio() {
+            measureEntry(entry)
+        }
         return added
     }
 
@@ -549,6 +795,7 @@ public final class AppModel: ObservableObject {
         var addedTotal = 0
         var emptyNames: [String] = []
         var failedNames: [String] = []
+        var addedEntries: [Entry] = []
         for url in urls {
             let label = url.lastPathComponent
             guard let bookmark = FolderAccess.bookmarkData(for: url) else {
@@ -575,11 +822,23 @@ public final class AppModel: ObservableObject {
                 label: label,
                 songs: new,
             )
+            // The rows this add stored: the walked songs' paths (they
+            // were absent before, so the payload match is exact).
+            let newPaths = Set(new.map { $0.path })
+            addedEntries += store.entries.filter { newPaths.contains($0.payload) }
             if added == 0 {
                 emptyNames.append(label)
             } else {
                 addedTotal += added
             }
+        }
+        // The on-add measurement (the Android app's measureEntry on the
+        // add paths): the freshly stored songs are measured for the audio
+        // level right away, queued behind the in-flight read in the
+        // single measurement slot - a folder's burst never decodes two at
+        // once.
+        for entry in addedEntries where entry.typeIsAudio() {
+            measureEntry(entry)
         }
         if !failedNames.isEmpty {
             uiEvent("Couldn't read \(failedNames.joined(separator: ", ")).")
@@ -609,6 +868,13 @@ public final class AppModel: ObservableObject {
             return
         }
         store.addFolderEntry(uri: folder.uri, bookmark: folder.bookmark, label: folder.label, songs: new)
+        // The on-add measurement: the freshly stored songs are measured
+        // for the audio level right away (queued in the single
+        // measurement slot, one decode at a time).
+        let newPaths = Set(new.map { $0.path })
+        for entry in store.entries where newPaths.contains(entry.payload) && entry.typeIsAudio() {
+            measureEntry(entry)
+        }
         uiEvent("Added \(new.count) new song\(new.count == 1 ? "" : "s") to \(folder.label).")
     }
 
@@ -901,7 +1167,43 @@ extension AppModel: PlaybackEngineDelegate {
                     queueFingerprint: queueFingerprint,
                     lastPlayedAt: Int64(Date().timeIntervalSince1970 * 1000),
                 ),
+                // The app's remembered-positions setting, live (a step on
+                // the Advanced options page changes the LRU capacity at
+                // the next saved position).
+                capacity: self.rememberedPositions,
             )
         }
+    }
+}
+
+/// The app's single measurement slot (the Android app's measurementLock -
+/// a Mutex held for the duration of the full read, including its await):
+/// serializes async work so at most one runs at a time, in submission
+/// order. A folder add's burst of fresh songs queues behind the
+/// in-flight read - one decode at a time.
+public final class SerialQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var chain: Task<Void, Never> = Task { }
+
+    public init() {}
+
+    /**
+     * Runs [work] after every previously chained work has settled, and
+     * chains this work for the next caller (a throwing work settles - it
+     * does not break the chain). Returns [work]'s result (rethrowing its
+     * error to the caller).
+     */
+    public func run<T: Sendable>(_ work: @Sendable () async throws -> T) async rethrows -> T {
+        let previous: Task<Void, Never>
+        let resultTask: Task<T, Error>
+        lock.lock()
+        previous = chain
+        resultTask = Task { try await work() }
+        chain = Task { [previous, resultTask] in
+            await previous.value
+            _ = try? await resultTask.value
+        }
+        lock.unlock()
+        return try await resultTask.value
     }
 }

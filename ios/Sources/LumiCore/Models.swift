@@ -196,6 +196,28 @@ public struct StoreDoc: Codable, Sendable {
     public var memory: [String: TagMemoryRecord] = [:]
     public var positions: [String: TagPosition] = [:]
     public var settings: [String: String] = [:]
+    /// Measured loudness per content entry id (upserted; a re-measure
+    /// replaces the row, an entry's removal takes its measurement with it -
+    /// the Android app's entry_loudness table).
+    public var loudness: [Int: EntryLoudness] = [:]
 
     public init() {}
+
+    /// Decodes a persisted document. Every field is decoded strictly as
+    /// before, EXCEPT [loudness]: documents persisted before the loudness
+    /// table existed carry no such key, and the app's corrupt-file policy
+    /// moves the whole document aside on a strict decode failure - so the
+    /// new key decodes leniently (absent = empty) while a document missing
+    /// any OLDER key still takes the corrupt-file route.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tags = try c.decode([Tag].self, forKey: .tags)
+        entries = try c.decode([Entry].self, forKey: .entries)
+        folders = try c.decode([Folder].self, forKey: .folders)
+        links = try c.decode([TagLink].self, forKey: .links)
+        memory = try c.decode([String: TagMemoryRecord].self, forKey: .memory)
+        positions = try c.decode([String: TagPosition].self, forKey: .positions)
+        settings = try c.decode([String: String].self, forKey: .settings)
+        loudness = try c.decodeIfPresent([Int: EntryLoudness].self, forKey: .loudness) ?? [:]
+    }
 }

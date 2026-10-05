@@ -12,6 +12,27 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>lumi</string>
+	<!-- The launcher icons (the pre-asset-catalog surface): the app's own
+	     "sunny record face" (the Android adaptive icon's own artwork, full-
+	     bleed over the face's own orange, so iOS's squircle mask leaves no
+	     visible square). Every size is its own file (the ios/packaging
+	     generator renders them from the icon's own 108-grid vector spec);
+	     the Docker build copies them into the bundle. -->
+	<key>CFBundleIconFiles</key>
+	<array>
+		<string>Icon20x20</string>
+		<string>Icon29x29</string>
+		<string>Icon40x40</string>
+		<string>Icon58x58</string>
+		<string>Icon60x60</string>
+		<string>Icon76x76</string>
+		<string>Icon80x80</string>
+		<string>Icon87x87</string>
+		<string>Icon120x120</string>
+		<string>Icon152x152</string>
+		<string>Icon180x180</string>
+		<string>Icon1024x1024</string>
+	</array>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
