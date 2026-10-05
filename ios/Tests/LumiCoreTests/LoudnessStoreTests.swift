@@ -73,6 +73,52 @@ private func pos(_ uid: String, _ at: Int64) -> TagPosition {
     let a = store.addEntry(label: "A", payload: "/a.mp3")
     store.recordLoudness(entryId: a.id, lufs: -10.0, truePeakDbTp: 0.0, fingerprint: "fa")
     store.deleteEntry(a)
+    // The ROW itself is gone (not just the snapshot projection): the
+    // entry id is reused by the next add, so a stale row would land on
+    // the replacement song's first playback (the Android FK's
+    // ON DELETE CASCADE).
+    #expect(store.loudnessForEntry(a.id) == nil)
+    #expect(store.loudnessSnapshot().isEmpty)
+}
+
+@Test func removeFolder_aPartialWalkKeepsTheSurvivorsMeasurements() {
+    let store = makeStore()
+    let folder = store.rememberFolder(uri: "/Music", bookmark: Data([1]), label: "Music")
+    for name in ["x", "y"] {
+        let entry = store.addEntry(label: name, payload: "/Music/\(name).mp3", folderId: folder.id)
+        store.recordLoudness(entryId: entry.id, lufs: -12.0, truePeakDbTp: -1.0, fingerprint: "f-\(name)")
+    }
+    let kept = store.addEntry(label: "k", payload: "/Music/k.mp3", folderId: folder.id)
+    store.recordLoudness(entryId: kept.id, lufs: -13.0, truePeakDbTp: -3.0, fingerprint: "fk")
+
+    // A removal whose walk identifies only the two imported rows
+    // deletes them and their measurements; the survivor (unmarked, not
+    // in the walk) keeps its row.
+    let removed = store.removeFolder(
+        folder: folder,
+        importedPayloads: ["/Music/x.mp3", "/Music/y.mp3"],
+    )
+    #expect(removed == 2)
+    #expect(store.loudnessForEntry(kept.id) != nil)
+    #expect(store.loudnessSnapshot().count == 1)
+}
+
+@Test func removeFolder_aWalkThatNamesEveryRowCascadesAllTheirMeasurements() {
+    let store = makeStore()
+    let folder = store.rememberFolder(uri: "/Music", bookmark: Data([1]), label: "Music")
+    var ids: [Int] = []
+    for name in ["x", "y"] {
+        let entry = store.addEntry(label: name, payload: "/Music/\(name).mp3", folderId: folder.id)
+        store.recordLoudness(entryId: entry.id, lufs: -12.0, truePeakDbTp: -1.0, fingerprint: "f-\(name)")
+        ids.append(entry.id)
+    }
+    store.removeFolder(
+        folder: folder,
+        importedPayloads: ["/Music/x.mp3", "/Music/y.mp3"],
+    )
+    for id in ids {
+        #expect(store.loudnessForEntry(id) == nil)
+    }
     #expect(store.loudnessSnapshot().isEmpty)
 }
 

@@ -170,6 +170,11 @@ public final class Store {
         mutate { d in
             guard let i = d.entries.firstIndex(where: { $0.id == entry.id }) else { return false }
             d.entries.remove(at: i)
+            // The measurement row cascades with the entry (the Android
+            // FK's ON DELETE CASCADE) - the entry id is reused by the
+            // next add, so a stale row would otherwise land on the
+            // replacement song's first playback.
+            d.loudness.removeValue(forKey: entry.id)
             return true
         }
     }
@@ -429,8 +434,12 @@ public final class Store {
     public func removeFolder(folder: Folder, importedPayloads: Set<String>) -> Int {
         var removed = 0
         mutate { d in
+            let gone = d.entries.filter { importedPayloads.contains($0.payload) }
             var kept = d.entries.filter { !importedPayloads.contains($0.payload) }
             removed = d.entries.count - kept.count
+            // The deleted rows' measurements cascade with them (the
+            // Android FK's ON DELETE CASCADE).
+            for entry in gone { d.loudness.removeValue(forKey: entry.id) }
             for i in kept.indices where kept[i].folderId == folder.id {
                 kept[i].folderId = nil // unmark the survivors
             }

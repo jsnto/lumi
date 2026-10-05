@@ -389,7 +389,7 @@ public final class AppModel: ObservableObject {
         } catch is CancellationError {
             return false
         } catch {
-            Self.fileLog.warning("Couldn't measure the loudness of \(entry.label): \(error)")
+            storeLog.warning("Couldn't measure the loudness of \(entry.label): \(error)")
             if reportEvent { uiEvent("Couldn't measure “\(entry.label)” for audio level.") }
             return false
         }
@@ -432,7 +432,6 @@ public final class AppModel: ObservableObject {
     /// the value it computed against.
     public func setRememberedPositions(_ count: Int) {
         guard !rememberedPositionsWriteInFlight else { return }
-        let stored = rememberedPositionsStoredValue(count) ?? rememberedPositions
         rememberedPositionsWriteInFlight = true
         Task { @MainActor [self] in
             // The write hops off the main actor for the write itself
@@ -441,8 +440,11 @@ public final class AppModel: ObservableObject {
             // duration, the same observable behavior the Android app's
             // in-flight flag has.
             await Task.yield()
-            rememberedPositionsWriter(stored)
-            rememberedPositions = stored
+            rememberedPositionsWriter(count)
+            // The published value is what the write landed: the writer's
+            // clamp through the settings-table value (a tap at a bound is
+            // a no-op rather than an escape).
+            rememberedPositions = rememberedPositionsFromStored(rememberedPositionsStoredValue(count))
             rememberedPositionsWriteInFlight = false
         }
     }
@@ -510,10 +512,6 @@ public final class AppModel: ObservableObject {
                 saved: store.positionFor(uid),
                 queueFingerprint: fingerprintOf(specs),
                 queueSize: specs.count,
-                // The app's remembered-positions setting (the Android
-                // repository's remember capacity: the default only when
-                // unset - the configured count 1 to 20 otherwise).
-                remember: rememberedPositions,
             ) {
             case .startFresh:
                 break
@@ -1198,11 +1196,14 @@ public final class SerialQueue: @unchecked Sendable {
         let resultTask: Task<T, Error>
         lock.lock()
         previous = chain
-        resultTask = Task { try await work() }
-        chain = Task { [previous, resultTask] in
+        // The work starts only once every previously chained work has
+        // settled (the serial slot's contract: one decode at a time),
+        // and the next caller chains onto THIS work the same way.
+        resultTask = Task {
             await previous.value
-            _ = try? await resultTask.value
+            return try await work()
         }
+        chain = Task { _ = try? await resultTask.value }
         lock.unlock()
         return try await resultTask.value
     }

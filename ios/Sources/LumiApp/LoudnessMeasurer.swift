@@ -128,6 +128,10 @@ public final class LoudnessMeasurer {
                 throw LoudnessMeasurementError.timedOut
             }
             guard output.isReadyForMoreData, let sampleBuffer = output.copyNextSampleBuffer() else {
+                // Not ready (a stalled decode, or the output drained
+                // ahead of the decoder): yield the cooperative pool
+                // thread instead of spinning on it.
+                await Task.yield()
                 continue
             }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }

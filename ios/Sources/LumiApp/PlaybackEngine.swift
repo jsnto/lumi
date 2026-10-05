@@ -528,7 +528,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // unready or failed item reports a NaN time (Int64(NaN) is a
         // fatal trap) - it settles to 0, the position the Android
         // service reports before the player is ready.
-        let seconds = currentBox?.item.currentTime().seconds ?? 0
+        let seconds = currentBox?.item.currentTime.seconds ?? 0
         let ms = seconds.isFinite ? Int64(max(0, seconds) * 1000) : 0
         lastPositionSaveMs = Date().timeIntervalSinceReferenceDate
         delegate?.playbackEngineSavePosition(
