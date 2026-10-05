@@ -58,13 +58,35 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        // The first-time setup wizard's gate (the Android app's
+        // setup_complete): a fresh install (cleared app data) lands on
+        // the wizard before the player; a returned user never does. The
+        // wizard stands IN for the app's screens (the content pane is
+        // never composed while it is up), so the player UI is composed
+        // only once the gate flips.
+        Group {
+            if model.setupComplete {
+                playerStack
+            } else {
+                SetupWizardView()
+            }
+        }
+        .environmentObject(nav)
+    }
+
+    /// The player UI: the front screen, with the settings stack pushed
+    /// from it. Navigation is value-based (NavigationLink(value:) anywhere
+    /// in the stack + the destinations here), so every pane pushes
+    /// without shared state, and the system back / in-pane chevron unwind
+    /// one level at a time (the Android app's BackHandler semantics,
+    /// satisfied by the NavigationStack's own pop).
+    private var playerStack: some View {
         NavigationStack(path: $nav.path) {
             PlayerScreenView()
                 .navigationDestination(for: Route.self) { route in
                     routeView(route)
                 }
         }
-        .environmentObject(nav)
         // The unified scan's in-progress dialog (the Android
         // SettingsScreen's scan AlertDialog, at the SCREEN level so it
         // overlays any pane - the card-write and compare scans are armed
@@ -95,6 +117,18 @@ struct RootView: View {
             guard let newValue else { return }
             model.scannedTagId = nil
             nav.path.append(Route.tagDetail(newValue))
+        }
+        // The wizard's set-up-now route (the Android app's
+        // onFinish(openNfcTags: true)): once the gate flipped to the
+        // player UI (the wizard finished through the NFC step's set-up-
+        // now), land on the settings menu's NFC tags pane - consumed
+        // here (one-shot) when the player stack first composes.
+        .onAppear {
+            if model.wizardOpenNfcTags {
+                model.wizardOpenNfcTags = false
+                nav.path.append(.menu)
+                nav.path.append(.tags)
+            }
         }
     }
 
@@ -131,6 +165,8 @@ struct RootView: View {
             ContentPane()
         case .system:
             AdvancedPane()
+        case .audioLevel:
+            AudioLevelPane()
         case let .folderDetail(folderId):
             FolderDetailPane(folderId: folderId)
         case let .entryDetail(entryId):
@@ -149,6 +185,7 @@ enum Route: Hashable {
     case tagDetail(Int)
     case content
     case system
+    case audioLevel
     case folderDetail(Int)
     case entryDetail(Int)
 }

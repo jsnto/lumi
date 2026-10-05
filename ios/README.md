@@ -1,7 +1,7 @@
 # lumi (iOS)
 
 The iOS/iPhone port of the lumi NFC music player. It replicates the
-Android app's observable behavior for the five core features:
+Android app's observable behavior for the core features:
 
 1. **Folder music ingestion** — add a whole folder (its subfolders too)
    with the system folder picker; the access is persisted as a
@@ -33,15 +33,62 @@ Android app's observable behavior for the five core features:
    clears it).
 5. **Background-capable playback** — `AVAudioSession` in the `.playback`
    category with the `audio` background mode declared: audio keeps
-   playing with the screen locked or the app backgrounded.
+   playing with the screen locked or the app backgrounded. The engine
+   is `AVAudioEngine`-backed (an `AVPlayerNode` schedules the queue's
+   items; a custom `AVAudioSinkNode` on the engine's output path pulls
+   the main mixer's output and applies the per-track loudness gain and
+   the peak limiter in the sample domain - the iOS counterpart of the
+   Android app's `LoudnessProcessor` in the playback processor chain;
+   the engine's own taps are observation-only - Apple documents the tap
+   buffer as an analysis copy the audible output ignores - so the
+   sample-domain stage must sit on the delivery path itself),
+   with the service's own observable behavior: the `wantsPlay` intent
+   (a paused session stays paused while the bounded error walk
+   completes) and the bad-file loop guard (an error on every entry of
+   the queue stops the session; the counter resets only on actual
+   audio, so an all-bad queue never loops file-to-file).
+6. **Loudness normalization (audio level)** — per-track loudness is
+   measured on-device at decode speed (an `AVAssetReader` feeding the
+   BS.1770 K-weighted meter, the Android app's meter ported one-for-one,
+   including its window schedule and the pinned fixture values) when a
+   song is added, or on demand from the "Normalize now" action. With
+   Normalize on (a target of -18 / -16 / -14 LUFS, default -16), each
+   measured song is brought to the target (a gain of up to the target
+   difference, the very loud ones staying a little above it via the
+   soft-clip peak limiter at the -1 dBTP knee, so they never clip); OFF
+   mode and unmeasured/silent songs are the exact pass-through. The
+   measurement is time-limited (a stalled decode settles into a
+   failure) and serialized (one decode at a time - a folder add's burst
+   queues behind the in-flight read).
+7. **First-time setup wizard** — a fresh install (cleared app data)
+   lands on the wizard before the player: welcome, the one required
+   step (add a music folder, through the app's own folder import), the
+   optional NFC step ("Set up now" lands on the NFC tags pane), and
+   the all-set screen. The completion is the stored `setup_complete`
+   gate, so a returned user never sees it again.
+8. **The app's own identity** — the "sunny record face" logo (the
+   launcher icon's own concentric design, drawn flat as circles so no
+   square shows) heads the wizard and sits in the front screen's
+   animated visual; the visual pulses and spins while something plays
+   and sits still on the theme's primary accent while idle (it tints to
+   the entry's accent once a song is loaded). The launcher icons are
+   the adaptive icon's own artwork (full-bleed over the face's own
+   orange, so iOS's squircle mask leaves no visible square), rendered
+   from the icon's own 108-grid vector spec at every standard size.
+9. **Remembered playback positions setting** — the Advanced options
+   page's "Remembered playback positions" stepper: how many tags' last
+   played position the LRU remembers (1-20, default 3; unset/invalid
+   stored values read as the default). A lower count evicts the oldest
+   remembered tags first; the stepper's controls are disabled while a
+   step's write is in flight.
 
 Plus the supporting surface the features need: tag registration (the
 "Scan NFC" button in the NFC tags pane, a naming dialog with the card's
 name/song list pre-filled when it carries a lumi payload or remembered
 data), tag↔song links (the in-app content picker with check + save),
 the two play modes (continuous / proximity, remembered on the device),
-and per-tag playback position memory (LRU 3 tags; a tag whose linked
-list changed restarts fresh).
+and per-tag playback position memory (LRU, the configured count -
+default 3 tags; a tag whose linked list changed restarts fresh).
 
 ## Layout
 
@@ -53,7 +100,11 @@ ios/
     Store.swift            the local store (JSON in Application Support)
     NdefCodec.swift        the application/x-lumi payload (Android-compatible)
     PlaybackPolicy.swift   the play-mode decision logic
-    PlaybackPosition.swift the per-tag position memory (decideRestore, LRU 3)
+    PlaybackPosition.swift the per-tag position memory (decideRestore, LRU
+                           against the configured count 1-20)
+    Loudness.swift         the BS.1770 K-weighted meter (the Android
+                           app's meter, ported one-for-one), the
+                           gain/limiter math, the mode/target settings
     ContentSort.swift      the title sort (A-Z / Z-A)
     PlayMode.swift         the play-mode parse (stored values)
     TagSync.swift          the save section's in-sync state (the derived
@@ -64,14 +115,23 @@ ios/
                            rescan diff, the self-listing-folder guard)
   Sources/LumiApp/         the iOS-only app (SwiftUI + AVFoundation + CoreNFC)
     AppModel.swift         the orchestration (the Android view-model port)
-    PlaybackEngine.swift   AVPlayer + the session + the bad-file loop guard
+    PlaybackEngine.swift   AVAudioEngine + the player node + the loudness
+                           sink node (the gain + limiter on the delivery
+                           path) + the session + the bad-file loop guard
+    LoudnessMeasurer.swift the decode-speed loudness read (AVAssetReader)
     NfcController.swift    the always-listening reader + presence monitor
     FolderAccess.swift     security-scoped bookmarks + the folder children
     MetadataReader.swift   the best-effort file metadata read
-    LumiApp.swift          the @main app + navigation
-    Views/                 the SwiftUI screens
+    LumiApp.swift          the @main app + navigation + the wizard gate
+    Views/                 the SwiftUI screens (incl. AudioLevelPane,
+                           SetupWizardView, the front screen's
+                           PlayingVisual + LumiLogoView)
   Tests/LumiCoreTests/     the observable-behavior pins (plain `swift test`)
-  packaging/Info.plist     the app's Info.plist (background audio, NFC)
+  packaging/Info.plist     the app's Info.plist (background audio, NFC,
+                           the launcher icons)
+  packaging/AppIcon/       the generated launcher icons (one PNG per size)
+  packaging/generate_icons.py  the icon generator (renders every size
+                           from the icon's own 108-grid vector spec)
   Dockerfile               the IPA builder (pinned swift:6.4.0-jammy)
   scripts/build-ipa-docker.sh  the build script (-> dist/lumi-ios.ipa)
 ```
@@ -118,8 +178,8 @@ Overrides: `LUMI_IOS_SDK_DIR=<dir>` (default `ios/sdk`),
 `LUMI_DOCKER_IMAGE=<image>` (default `lumi-ipa-builder:1`),
 `OUT_DIR=<dir>` (default `dist`). The script verifies the .ipa's
 structure before finishing: `Payload/Lumi.app` with the arm64 Mach-O
-binary and an Info.plist that declares the background-audio mode and the
-NFC usage.
+binary, an Info.plist that declares the background-audio mode and the
+NFC usage, and the declared launcher icons all present in the bundle.
 
 The result is **unsigned**: iOS requires a code signature to install an
 app, and the signature must come from the person installing it. The
@@ -167,7 +227,9 @@ iOS forces to be different:
 - **No screen lock / device-admin auto-lock / themes.** Those are
   Android platform features (the device-admin lock, the window-chrome
   themes) with no iOS equivalent; the iOS app keeps the play-mode / NFC
-  / content / advanced options settings menu and omits them.
+  / content / advanced options settings menu and omits them (the
+  advanced options page still offers the remembered-positions stepper
+  and the audio level row - both platform-independent).
 - **Folder access = security-scoped bookmarks, not SAF.** Picking a file
   or folder grants access scoped to that pick; the bookmark is stored
   with the entry/folder and re-asserted when playback or a rescan needs
@@ -179,10 +241,12 @@ iOS forces to be different:
   the v1 iOS app does not offer the download affordance.
 - **Persistence is a JSON file** (Application Support) rather than
   Room/SQLite: same data shapes (entries, folders, tags, links,
-  settings, per-card memory, position memory), same invariants
-  (payload-deduped adds, the dense renumbering on removal, the LRU-3
-  position memory), a file-backed store that the app re-reads/rewrites
-  atomically.
+  settings, per-card memory, position memory, per-entry loudness),
+  same invariants (payload-deduped adds, the dense renumbering on
+  removal, the LRU position memory against the configured count), a
+  file-backed store that the app re-reads/rewrites atomically. An old
+  `store.json` without the loudness key still decodes (the new field is
+  optional; the whole-file corrupt-file policy is unchanged).
 - **The soft lock is out of scope** for v1 (a UI overlay with no
   platform dependency; the triple-tap logic is small and ported as
   `LumiCore`-ready if asked).

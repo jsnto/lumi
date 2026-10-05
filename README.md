@@ -12,9 +12,10 @@ Docker (see the Building section and the ios/ README).
 
 A fresh install walks a short setup before the player: importing a music
 folder (the one required step — the same folder import the content pane
-uses), then two optional items, each skippable — playing with an NFC tag
-("Set up now" opens the settings screen's NFC tags pane straight away) and
-allowing the screen lock (the platform's own consent). Finishing is
+uses), then the optional items, each skippable — playing with an NFC tag
+("Set up now" opens the settings screen's NFC tags pane straight away) and,
+on Android only, allowing the screen lock (the platform's own consent —
+iOS's wizard offers the NFC step as its only optional item). Finishing is
 remembered on the device; a returning user goes straight to the player.
 
 ## How it works
@@ -164,7 +165,8 @@ the video/URL actions later does not require reworking storage.
   ~0.4 s (see `MainActivity`, `MifarePresencePoller`, `GenericPresencePoller`)
 - iOS: Swift (SwiftPM) — a pure `LumiCore` layer (the ported logic: the NDEF
   payload codec, the play-mode policy, the position memory, the content
-  sort, the folder walk, the JSON store) + a `LumiApp` target (SwiftUI +
+  sort, the folder walk, the loudness meter and gain math, the JSON store)
+  + a `LumiApp` target (SwiftUI +
   AVFoundation + CoreNFC, iOS-only) + `LumiCoreTests` (the
   observable-behavior pins). The NFC payload on the card is byte-compatible
   with the Android app (an `application/x-lumi` MIME NDEF record), so tags
@@ -248,9 +250,8 @@ Overrides: `LUMI_IOS_SDK_DIR=<dir>` (default `ios/sdk`),
 `LUMI_DOCKER_IMAGE=<image>` (default `lumi-ipa-builder:1`), `OUT_DIR=<dir>`
 (default `dist`). The image (pinned `swift:6.4.0-jammy`) builds the
 arm64-apple-ios release executable and assembles the structurally valid
-`Payload/Lumi.app` .ipa, then the script verifies the structure (the
-arm64 Mach-O binary, the Info.plist with the background-audio mode and
-the NFC usage declared). The result is unsigned: a sideload tool
+`Payload/Lumi.app` .ipa, then the script verifies the structure (see the
+ios/ README for what it checks). The result is unsigned: a sideload tool
 (AltStore, Sideloadly, …) re-signs it with your own Apple ID at install
 time — the app's code and Info.plist are untouched by the re-signing.
 

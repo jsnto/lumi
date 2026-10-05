@@ -56,6 +56,9 @@ CMD ["bash", "-c", "set -eux; \
     mkdir -p /out/Payload/Lumi.app; \
     install -m 0755 \"$BIN_PATH/LumiApp\" /out/Payload/Lumi.app/Lumi; \
     install -m 0644 ios/packaging/Info.plist /out/Payload/Lumi.app/Info.plist; \
+    # The launcher icons (the Info.plist's CFBundleIconFiles): the top-level \
+    # PNGs the pre-asset-catalog surface reads straight from the bundle. \
+    install -m 0644 ios/packaging/AppIcon/*.png /out/Payload/Lumi.app/; \
     cd /out; \
     python3 -m zipfile -c lumi-ios.ipa Payload; \
     python3 -m zipfile -l /out/lumi-ios.ipa"]
