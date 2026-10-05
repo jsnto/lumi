@@ -1,7 +1,7 @@
 # lumi (iOS)
 
 The iOS/iPhone port of the lumi NFC music player. It replicates the
-Android app's observable behavior for the five core features:
+Android app's observable behavior for the core features:
 
 1. **Folder music ingestion** — add a whole folder (its subfolders too)
    with the system folder picker; the access is persisted as a
