@@ -27,12 +27,12 @@ RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
     && sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
 
 WORKDIR /src
-# The build context is the repo root (android/scripts/build-apk-docker.sh builds
+# The build context is the repo root (scripts/build-apk.sh builds
 # it with -f android/Dockerfile); the Android project lives under android/.
 # local.properties (host-specific sdk.dir) is excluded via the repo-root
 # .dockerignore; AGP resolves the SDK from ANDROID_HOME instead.
 COPY . /src
 
-# Entrypoint: run the Gradle build. The wrapper script (android/scripts/build-apk-docker.sh)
+# Entrypoint: run the Gradle build. The wrapper script (scripts/build-apk.sh)
 # starts the container, waits for the build, then copies the APK out.
 CMD ["bash", "-c", "cd android && ./gradlew assembleDebug --no-daemon --stacktrace"]
