@@ -9,4 +9,7 @@ captures/
 build/
 android/app/build/
 .kotlin/
+# APK output (scripts/build-apk.sh)
+android/dist/
+# iOS IPA output (ios/scripts/build-ipa-docker.sh)
 dist/

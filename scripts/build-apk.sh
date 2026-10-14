@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Build the lumi debug APK inside Docker - no Android SDK or JDK on the host.
 #
-#   Usage:     ./android/scripts/build-apk-docker.sh   (from the repo root)
-#   Output:    dist/lumi-app-debug.apk
+#   Usage:     ./scripts/build-apk.sh   (from the repo root)
+#   Output:    android/dist/lumi-app-debug.apk
 #   Overrides: LUMI_DOCKER_IMAGE=<image>   (default lumi-apk-builder:1)
-#              OUT_DIR=<dir>               (default dist)
+#              OUT_DIR=<dir>               (default android/dist)
 #
 # The first run downloads the Android SDK (~500 MB) into the image and the
 # Gradle distribution via the wrapper; subsequent runs reuse the named
 # gradle-cache volume for a fast incremental build.
 set -euo pipefail
-# The script lives in <repo root>/android/scripts/; build from the repo root
+# The script lives in <repo root>/scripts/; build from the repo root
 # (the Docker context), with the Dockerfile referenced under android/.
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 
 IMAGE="${LUMI_DOCKER_IMAGE:-lumi-apk-builder:1}"
 VOLUME="${LUMI_GRADLE_VOLUME:-lumi-gradle-cache}"
-OUT_DIR="${OUT_DIR:-dist}"
+OUT_DIR="${OUT_DIR:-android/dist}"
 APK_NAME="lumi-app-debug.apk"
 
 if ! docker info >/dev/null 2>&1; then
