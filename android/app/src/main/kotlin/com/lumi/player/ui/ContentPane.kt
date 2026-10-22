@@ -41,13 +41,16 @@ import com.lumi.player.data.sortedByTitle
  * follow the sort control's title order (ascending by default). A folder
  * row opens the folder's own page (its songs' play/pause buttons live
  * there, not on the row); every individual row carries a play button that
- * plays just that song. Tapping a song row opens its profile page.
+ * plays just that song. Tapping a song row opens its profile page. A song
+ * row badges the entries the app has volume-normalized (the [normalized]
+ * ids) and marquee-scrolls a title that is too long to fit.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ContentPane(
     individualEntries: List<EntryEntity>,
     folders: List<FolderEntity>,
+    normalized: Set<Long>,
     sortDirection: ContentSortDirection,
     onSortDirectionChange: (ContentSortDirection) -> Unit,
     onBack: () -> Unit,
@@ -126,18 +129,28 @@ internal fun ContentPane(
                 individualEntries.sortedByTitle({ it.label }, { it.id }, sortDirection).forEach { entry ->
                     SettingRow(
                         leading = {
-                            IconChip(
-                                icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                                background = MaterialTheme.colorScheme.primaryContainer,
-                                content = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconChip(
+                                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                    background = MaterialTheme.colorScheme.primaryContainer,
+                                    content = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                                // The app has volume-normalized this entry
+                                // (it carries a stored loudness reading).
+                                if (entry.id in normalized) {
+                                    Spacer(Modifier.width(6.dp))
+                                    NormalizedBadge()
+                                }
+                            }
                         },
                         // The row body opens the song's profile page (the
                         // play and delete buttons are separate regions, so
-                        // they never fight the row tap).
+                        // they never fight the row tap). A title too long
+                        // to fit marquee-scrolls instead of clipping.
                         modifier = Modifier.clickable { onEntryOpened(entry) },
                         title = entry.label,
                         detail = detailFor(entry.type, entry.payload),
+                        titleMarquee = true,
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 SoftIconButton(

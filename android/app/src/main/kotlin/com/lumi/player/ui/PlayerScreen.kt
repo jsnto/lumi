@@ -170,6 +170,11 @@ fun PlayerScreen(
 
             Spacer(Modifier.size(28.dp))
 
+            // The current entry's title. A title that fits shows as-is (up
+            // to two lines, centered); one that is too long to fit
+            // auto-scrolls (marquee) instead of clipping - the marquee's
+            // fit/overflow decision is its own (a title that fits never
+            // animates).
             AnimatedContent(
                 targetState = playState.currentLabel
                     ?: if (idle) "Tap a tag to start!" else "Ready",
@@ -178,14 +183,31 @@ fun PlayerScreen(
                     fadeIn(animationSpec = tween(250)) togetherWith fadeOut(animationSpec = tween(250))
                 },
             ) { label ->
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = scheme.onBackground,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 2,
-                )
+                // The title's own overflow decision for THIS label: a
+                // title that does not fit its two lines flips into the
+                // scrolling marquee once the first layout has measured it
+                // (a fresh label starts static and is measured fresh).
+                var tooLongToFit by remember(label) { mutableStateOf(false) }
+                if (tooLongToFit) {
+                    MarqueeText(
+                        text = label,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = scheme.onBackground,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = scheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2,
+                        onTextLayout = { result ->
+                            tooLongToFit = result.hasVisualOverflow
+                        },
+                    )
+                }
             }
 
             if (type != null) {
