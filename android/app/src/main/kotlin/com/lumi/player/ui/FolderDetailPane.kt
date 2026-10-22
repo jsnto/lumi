@@ -58,7 +58,8 @@ import com.lumi.player.player.PlayerUiState
  * play/pause button. A rescan action re-walks the tree for new songs, and
  * the page ends in a danger zone whose delete removes the folder FROM THE
  * APP - and only the folder and its imported songs; the music files on the
- * phone are untouched.
+ * phone are untouched. A song row badges the entries the app will
+ * actually play volume-normalized (the [normalized] ids).
  *
  * The page is a child of the content pane: its back (the in-pane arrow AND
  * system back) unwinds one level to the content pane, and the content pane
@@ -70,6 +71,7 @@ internal fun FolderDetailPane(
     viewModel: LumiViewModel,
     folder: FolderEntity,
     songs: LumiViewModel.FolderSongsState?,
+    normalized: Set<Long>,
     sortDirection: ContentSortDirection,
     playState: PlayerUiState,
     collapsed: Set<List<String>>,
@@ -162,6 +164,7 @@ internal fun FolderDetailPane(
                                 depth = 0,
                                 path = emptyList(),
                                 scheme = scheme,
+                                normalized = normalized,
                                 collapsed = collapsed,
                                 playState = playState,
                                 onToggleCollapsed = onToggleCollapsed,
@@ -257,6 +260,7 @@ private fun FolderTreeRows(
     depth: Int,
     path: List<String>,
     scheme: ColorScheme,
+    normalized: Set<Long>,
     collapsed: Set<List<String>>,
     playState: PlayerUiState,
     onToggleCollapsed: (List<String>) -> Unit,
@@ -318,6 +322,7 @@ private fun FolderTreeRows(
                 depth = depth + 1,
                 path = nodeKey,
                 scheme = scheme,
+                normalized = normalized,
                 collapsed = collapsed,
                 playState = playState,
                 onToggleCollapsed = onToggleCollapsed,
@@ -337,11 +342,20 @@ private fun FolderTreeRows(
                 // pane's own language).
                 modifier = Modifier.clickable { onEntryOpened(entry) },
                 leading = {
-                    IconChip(
-                        icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                        background = scheme.primaryContainer,
-                        content = scheme.onPrimaryContainer,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconChip(
+                            icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                            background = scheme.primaryContainer,
+                            content = scheme.onPrimaryContainer,
+                        )
+                        // The app will actually play this entry
+                        // volume-normalized (a stored loudness reading AND
+                        // the audio level's mode on).
+                        if (entry.id in normalized) {
+                            Spacer(Modifier.width(6.dp))
+                            NormalizedBadge()
+                        }
+                    }
                 },
                 title = entry.label,
                 detail = detailFor(entry.type, entry.payload),

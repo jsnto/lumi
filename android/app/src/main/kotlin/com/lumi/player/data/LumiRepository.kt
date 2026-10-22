@@ -677,6 +677,22 @@ class LumiRepository(private val db: LumiDatabase) {
             LoudnessStatus(measurements.count { it.entryId in audioIds }, audioIds.size)
         }
 
+    /**
+     * The ids of the content entries the app will actually play
+     * volume-normalized, live: the entries carrying a stored loudness
+     * READING (a silent file's stored row carries no reading and is not
+     * normalized) AND the audio level's mode enabled (OFF - the default -
+     * applies no gain, so nothing is normalized while it holds): the song
+     * lists' rows badge the entries in this set.
+     */
+    fun observeNormalizedEntryIds(): Flow<Set<Long>> =
+        combine(
+            dao.observeNormalizedEntryIds().map { ids -> ids.toSet() },
+            observeAudioLevelMode(),
+        ) { ids, mode ->
+            if (mode == AudioLevelMode.OFF) emptySet() else ids
+        }
+
     companion object {
         /** Default absence window (seconds) before a removed tag pauses playback. */
         const val NFC_REREAD_SECONDS_DEFAULT = 15L

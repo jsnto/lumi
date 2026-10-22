@@ -100,7 +100,8 @@ import kotlin.math.roundToInt
  * and drops only that tag's link to that one song: the song stays in the
  * content list (for a "song not found" row the dead link itself goes),
  * and if the list empties the page falls back to the
- * "This tag plays nothing yet." state.
+ * "This tag plays nothing yet." state. A row whose live entry the app
+ * will actually play volume-normalized badges it (the [normalized] ids).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,6 +109,7 @@ internal fun TagDetailPane(
     viewModel: LumiViewModel,
     tag: TagEntity,
     linked: List<TagSongRow>,
+    normalized: Set<Long>,
     onBack: () -> Unit,
     onAddSong: () -> Unit,
     onEdit: (TagEntity) -> Unit,
@@ -205,6 +207,7 @@ internal fun TagDetailPane(
                         rows = linked,
                         onReordered = { viewModel.reorderTagSongs(tag, it) },
                         onRemoveSong = onRemoveSong,
+                        normalized = normalized,
                         songUrls = songUrls[tag.uid] ?: emptyMap(),
                         downloadStates = downloadStates,
                         onDownloadSong = { row, url -> viewModel.downloadTagSong(row.linkId, row.name, url) },
@@ -490,6 +493,7 @@ private fun ReorderableSongList(
     rows: List<TagSongRow>,
     onReordered: (List<TagSongRow>) -> Unit,
     onRemoveSong: (TagSongRow) -> Unit,
+    normalized: Set<Long>,
     songUrls: Map<String, String>,
     downloadStates: Map<Long, LumiViewModel.SongDownloadState>,
     onDownloadSong: (TagSongRow, String) -> Unit,
@@ -612,14 +616,24 @@ private fun ReorderableSongList(
             val downloadState = downloadStates[row.linkId]
             SettingRow(
                 leading = {
-                    IconChip(
-                        // A row whose song name resolves to no content
-                        // renders the warning sign (the "song not found"
-                        // marker) instead of the song's icon.
-                        icon = if (entry != null) EntryPresentation.icon(EntryType.fromStorage(entry.type)) else Icons.Filled.Warning,
-                        background = if (entry != null) scheme.primaryContainer else scheme.errorContainer,
-                        content = if (entry != null) scheme.onPrimaryContainer else scheme.onErrorContainer,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconChip(
+                            // A row whose song name resolves to no content
+                            // renders the warning sign (the "song not found"
+                            // marker) instead of the song's icon.
+                            icon = if (entry != null) EntryPresentation.icon(EntryType.fromStorage(entry.type)) else Icons.Filled.Warning,
+                            background = if (entry != null) scheme.primaryContainer else scheme.errorContainer,
+                            content = if (entry != null) scheme.onPrimaryContainer else scheme.onErrorContainer,
+                        )
+                        // The app will actually play this row's live entry
+                        // volume-normalized (a stored loudness reading AND
+                        // the audio level's mode on); a "song not found"
+                        // row's entry is gone, so it never badges.
+                        if (entry != null && entry.id in normalized) {
+                            Spacer(Modifier.width(6.dp))
+                            NormalizedBadge()
+                        }
+                    }
                 },
                 // The row's own name (see [songName]): never a guessed
                 // placeholder for a row that remembers its song.

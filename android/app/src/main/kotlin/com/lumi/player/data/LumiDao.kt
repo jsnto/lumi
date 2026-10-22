@@ -216,6 +216,15 @@ interface LumiDao {
     fun observeEntryLoudness(): Flow<List<EntryLoudnessEntity>>
 
     /**
+     * The ids of the content entries that carry a stored loudness READING
+     * (a silent file's row is stored but carries no reading, so it is not
+     * normalized): the song lists' "normalized" badge follows this
+     * combined with the audio level's mode (the repository flow), live.
+     */
+    @Query("SELECT entry_id FROM entry_loudness WHERE lufs IS NOT NULL")
+    fun observeNormalizedEntryIds(): Flow<List<Long>>
+
+    /**
      * The measurement rows joined to their content rows' payload: the
      * [LoudnessStore]'s service snapshot (keyed by the payload the player
      * actually loads - a payload shared by two entries maps to the same

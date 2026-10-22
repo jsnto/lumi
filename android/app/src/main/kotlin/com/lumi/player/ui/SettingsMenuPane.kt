@@ -34,8 +34,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumi.player.BuildConfig
@@ -162,6 +160,7 @@ internal fun SettingsMenuPane(
 /**
  * The now-playing strip (D-06): a one-line context reminder at the top of
  * the settings menu — what's playing, whether it is, and in which mode.
+ * The title auto-scrolls (marquee) when it is too long to fit.
  */
 @Composable
 private fun NowPlayingStrip(label: String, isPlaying: Boolean, mode: PlayMode) {
@@ -181,12 +180,10 @@ private fun NowPlayingStrip(label: String, isPlaying: Boolean, mode: PlayMode) {
             iconSize = 19.dp,
         )
         Spacer(Modifier.width(10.dp))
-        Text(
+        MarqueeText(
             text = label,
             style = MaterialTheme.typography.labelLarge,
             color = scheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Box(

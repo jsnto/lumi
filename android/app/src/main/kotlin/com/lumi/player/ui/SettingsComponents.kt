@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -205,7 +206,9 @@ internal fun ModeRow(
 /**
  * A settings row: a tonal icon chip (via [leading]), title, optional detail,
  * trailing actions. 56 dp min height (D-08); row titles are 16 sp Bold
- * (D-02).
+ * (D-02). When [titleMarquee] is set, the title auto-scrolls (marquee) when
+ * it is too long to fit instead of clipping (the now-playing surface and
+ * the settings surfaces that marquee titles pass it).
  */
 @Composable
 internal fun SettingRow(
@@ -214,6 +217,7 @@ internal fun SettingRow(
     modifier: Modifier = Modifier,
     detail: String? = null,
     trailing: (@Composable () -> Unit)? = null,
+    titleMarquee: Boolean = false,
 ) {
     Row(
         modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -222,12 +226,47 @@ internal fun SettingRow(
         leading()
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+            if (titleMarquee) {
+                MarqueeText(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+            }
             if (detail != null) {
                 Text(detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
         }
         trailing?.invoke()
+    }
+}
+
+/**
+ * The small tonal chip beside a song row's type chip marking an entry the
+ * app will actually play volume-normalized (a stored loudness reading AND
+ * the audio level's mode enabled - the [normalized] set, see
+ * `LumiRepository.observeNormalizedEntryIds`): the audio level's own icon
+ * (the "Audio level" row's volume) so the badge reads as that feature's
+ * marker. The content pane's song rows, the folder pages' song rows, and
+ * the tag pages' song rows all carry it.
+ */
+@Composable
+internal fun NormalizedBadge() {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(18.dp)
+            .background(scheme.secondaryContainer, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.VolumeUp,
+            contentDescription = "Normalized",
+            modifier = Modifier.size(11.dp),
+            tint = scheme.onSecondaryContainer,
+        )
     }
 }
 
