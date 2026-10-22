@@ -348,8 +348,9 @@ private fun FolderTreeRows(
                             background = scheme.primaryContainer,
                             content = scheme.onPrimaryContainer,
                         )
-                        // The app has volume-normalized this entry (it
-                        // carries a stored loudness reading).
+                        // The app will actually play this entry
+                        // volume-normalized (a stored loudness reading AND
+                        // the audio level's mode on).
                         if (entry.id in normalized) {
                             Spacer(Modifier.width(6.dp))
                             NormalizedBadge()

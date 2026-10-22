@@ -625,10 +625,10 @@ private fun ReorderableSongList(
                             background = if (entry != null) scheme.primaryContainer else scheme.errorContainer,
                             content = if (entry != null) scheme.onPrimaryContainer else scheme.onErrorContainer,
                         )
-                        // The app has volume-normalized this row's live
-                        // entry (it carries a stored loudness reading); a
-                        // "song not found" row's entry is gone, so it never
-                        // badges.
+                        // The app will actually play this row's live entry
+                        // volume-normalized (a stored loudness reading AND
+                        // the audio level's mode on); a "song not found"
+                        // row's entry is gone, so it never badges.
                         if (entry != null && entry.id in normalized) {
                             Spacer(Modifier.width(6.dp))
                             NormalizedBadge()

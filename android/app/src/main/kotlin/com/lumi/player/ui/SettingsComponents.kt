@@ -245,10 +245,12 @@ internal fun SettingRow(
 
 /**
  * The small tonal chip beside a song row's type chip marking an entry the
- * app has volume-normalized (it carries a stored loudness reading): the
- * audio level's own icon (the "Audio level" row's volume) so the badge
- * reads as that feature's marker. The content pane's song rows, the folder
- * pages' song rows, and the tag pages' song rows all carry it.
+ * app will actually play volume-normalized (a stored loudness reading AND
+ * the audio level's mode enabled - the [normalized] set, see
+ * `LumiRepository.observeNormalizedEntryIds`): the audio level's own icon
+ * (the "Audio level" row's volume) so the badge reads as that feature's
+ * marker. The content pane's song rows, the folder pages' song rows, and
+ * the tag pages' song rows all carry it.
  */
 @Composable
 internal fun NormalizedBadge() {
