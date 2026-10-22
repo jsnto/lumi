@@ -853,9 +853,10 @@ class LumiViewModel(
             .stateIn(viewModelScope, SharingStarted.Eagerly, LoudnessStatus(0, 0))
 
     /**
-     * The ids of the content entries the app has volume-normalized (the
-     * entries carrying a stored loudness reading), live: the song lists
-     * (the content pane's rows, the folder pages' song rows, the tag pages'
+     * The ids of the content entries the app will actually play
+     * volume-normalized (a stored loudness reading AND the audio level's
+     * mode enabled - OFF applies no gain), live: the song lists (the
+     * content pane's rows, the folder pages' song rows, the tag pages'
      * song rows) badge the entries in this set.
      */
     val normalizedEntryIds: StateFlow<Set<Long>> =

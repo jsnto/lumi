@@ -100,8 +100,8 @@ import kotlin.math.roundToInt
  * and drops only that tag's link to that one song: the song stays in the
  * content list (for a "song not found" row the dead link itself goes),
  * and if the list empties the page falls back to the
- * "This tag plays nothing yet." state. A row whose live entry the app has
- * volume-normalized badges it (the [normalized] ids).
+ * "This tag plays nothing yet." state. A row whose live entry the app
+ * will actually play volume-normalized badges it (the [normalized] ids).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

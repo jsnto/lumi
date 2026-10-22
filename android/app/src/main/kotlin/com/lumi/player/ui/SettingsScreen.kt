@@ -153,9 +153,10 @@ internal fun SettingsScreen(
     // The selected folder's song list (the folder detail page's plumbing;
     // null while the folder's walk is in flight).
     val folderSongs by viewModel.folderSongs.collectAsState(null)
-    // The content entries the app has volume-normalized (the song lists'
-    // normalized badge): the content pane's rows, the folder pages' song
-    // rows, and the tag pages' song rows badge the entries in this set.
+    // The content entries the app will actually play volume-normalized
+    // (the song lists' normalized badge): the content pane's rows, the
+    // folder pages' song rows, and the tag pages' song rows badge the
+    // entries in this set.
     val normalizedEntryIds by viewModel.normalizedEntryIds.collectAsState(emptySet())
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }

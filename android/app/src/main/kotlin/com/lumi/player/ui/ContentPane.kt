@@ -42,8 +42,9 @@ import com.lumi.player.data.sortedByTitle
  * row opens the folder's own page (its songs' play/pause buttons live
  * there, not on the row); every individual row carries a play button that
  * plays just that song. Tapping a song row opens its profile page. A song
- * row badges the entries the app has volume-normalized (the [normalized]
- * ids) and marquee-scrolls a title that is too long to fit.
+ * row badges the entries the app will actually play volume-normalized
+ * (the [normalized] ids) and marquee-scrolls a title that is too long to
+ * fit.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

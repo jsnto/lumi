@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
+import com.lumi.player.data.AudioLevelMode
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
@@ -28,13 +29,16 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The song lists badge the entries the app has volume-normalized - the
- * content entries carrying a stored loudness READING (the app's own
- * measurement; the badge follows the existing loudness data, it does not
- * invent a new pipeline). A song is badged on every surface that lists
- * tracks: the content pane's rows (a measured song badges, an unmeasured
- * one does not, and a silent file's measurement - no reading - badges no
- * song), the tag pages' song rows, and the folder pages' song rows.
+ * The song lists badge the entries the app will actually play
+ * volume-normalized - the content entries carrying a stored loudness
+ * READING (the app's own measurement; the badge follows the existing
+ * loudness data, it does not invent a new pipeline) AND the audio level's
+ * mode enabled (OFF - the default - applies no gain, so nothing is badged
+ * while it holds). A song is badged on every surface that lists tracks:
+ * the content pane's rows (a measured song with the mode on badges, a
+ * measured song with the mode off does not, an unmeasured one does not,
+ * and a silent file's measurement - no reading - badges no song), the tag
+ * pages' song rows, and the folder pages' song rows.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -112,12 +116,18 @@ class NormalizedBadgeUiTest {
         dbAndGet { app().repository.recordLoudness(entryId, lufs, lufs?.minus(1.0), "fp-$entryId") }
     }
 
+    /** Sets the app's audio level mode (the badge requires it enabled). */
+    private fun setAudioLevelMode(mode: AudioLevelMode) {
+        dbAndGet { app().repository.setAudioLevelMode(mode) }
+    }
+
     private fun badgeCount(): Int =
         compose.onAllNodesWithContentDescription("Normalized").fetchSemanticsNodes().size
 
     @Test
     fun aMeasuredSongIsBadgedInTheContentPane() {
         openContentPane()
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
         val ids = storeSongs("alpha", "bravo")
         // The app measured alpha (it has a loudness reading); bravo was
         // never measured.
@@ -137,8 +147,59 @@ class NormalizedBadgeUiTest {
     }
 
     @Test
+    fun aMeasuredSongIsNotBadgedWhileTheModeIsOff() {
+        openContentPane()
+        val ids = storeSongs("alpha", "bravo")
+        // The mode stays at its default (OFF - no gain is applied at
+        // playback), so even the stored reading is not normalized.
+        recordLoudness(ids[0], lufs = -14.0)
+        idleUntil(
+            cond = {
+                compose.onNodeWithText("alpha").isDisplayed() &&
+                    compose.onNodeWithText("bravo").isDisplayed()
+            },
+            message = "the content rows to settle",
+        )
+        compose.waitForIdle()
+        assertEquals(0, badgeCount())
+    }
+
+    @Test
+    fun theAudioLevelModeTogglesTheBadgeLive() {
+        openContentPane()
+        val ids = storeSongs("alpha", "bravo")
+        recordLoudness(ids[0], lufs = -14.0)
+        idleUntil(
+            cond = {
+                compose.onNodeWithText("alpha").isDisplayed() &&
+                    compose.onNodeWithText("bravo").isDisplayed()
+            },
+            message = "the content rows to settle",
+        )
+        compose.waitForIdle()
+        // Mode off (the default): the reading alone is not normalized.
+        assertEquals(0, badgeCount())
+        // Turning the mode on badges the measured song live ...
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
+        idleUntil(
+            cond = { badgeCount() == 1 },
+            message = "the badge to appear with the mode on",
+        )
+        compose.waitForIdle()
+        // ... and turning it off again removes it.
+        setAudioLevelMode(AudioLevelMode.OFF)
+        idleUntil(
+            cond = { badgeCount() == 0 },
+            message = "the badge to disappear with the mode off",
+        )
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Normalized").assertDoesNotExist()
+    }
+
+    @Test
     fun aSilentSongIsNotBadgedInTheContentPane() {
         openContentPane()
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
         val ids = storeSongs("silent", "loud")
         // silent's measurement settled with NO loudness reading (a silent
         // file - nothing to normalize); loud's measurement carries a
@@ -161,6 +222,7 @@ class NormalizedBadgeUiTest {
     @Test
     fun noBadgesWithoutAnyMeasurements() {
         openContentPane()
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
         storeSongs("alpha", "bravo")
         idleUntil(
             cond = {
@@ -182,6 +244,7 @@ class NormalizedBadgeUiTest {
         }
         // Only the tag's first song was measured.
         recordLoudness(songIds[0], lufs = -14.0)
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
 
         openTagPage("Bunny")
         idleUntil(
@@ -220,6 +283,7 @@ class NormalizedBadgeUiTest {
             .associate { it.label to it.id }
         // Only songA was measured.
         recordLoudness(entryIds.getValue("songA.mp3"), lufs = -14.0)
+        setAudioLevelMode(AudioLevelMode.NORMALIZE)
 
         // Open the folder's own page (the folder row is the pane's row).
         compose.onNodeWithText(FOLDER_TREE_URI).performScrollTo()

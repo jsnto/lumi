@@ -217,9 +217,9 @@ interface LumiDao {
 
     /**
      * The ids of the content entries that carry a stored loudness READING
-     * (the entries the app has volume-normalized - a silent file's row is
-     * stored but carries no reading, so it is not normalized): the song
-     * lists' "normalized" badge follows this, live.
+     * (a silent file's row is stored but carries no reading, so it is not
+     * normalized): the song lists' "normalized" badge follows this
+     * combined with the audio level's mode (the repository flow), live.
      */
     @Query("SELECT entry_id FROM entry_loudness WHERE lufs IS NOT NULL")
     fun observeNormalizedEntryIds(): Flow<List<Long>>

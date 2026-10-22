@@ -58,8 +58,8 @@ import com.lumi.player.player.PlayerUiState
  * play/pause button. A rescan action re-walks the tree for new songs, and
  * the page ends in a danger zone whose delete removes the folder FROM THE
  * APP - and only the folder and its imported songs; the music files on the
- * phone are untouched. A song row badges the entries the app has
- * volume-normalized (the [normalized] ids).
+ * phone are untouched. A song row badges the entries the app will
+ * actually play volume-normalized (the [normalized] ids).
  *
  * The page is a child of the content pane: its back (the in-pane arrow AND
  * system back) unwinds one level to the content pane, and the content pane
