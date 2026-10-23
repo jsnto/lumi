@@ -12,13 +12,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,7 +28,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * Behavioral coverage for adding a whole folder: the content pane's
@@ -59,50 +61,9 @@ class FolderAddUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        // The player screen's top bar and the settings menu both settle
-        // through async Room round trips: wait for the merged tree to have
-        // the node before clicking it (a click racing a mid-recomposition
-        // top bar misses the node), and for the menu's rows before clicking
-        // a menu row.
-        idleUntil({ compose.onNodeWithContentDescription("Settings").isDisplayed() })
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        idleUntil({ compose.onAllNodesWithText("Content").fetchSemanticsNodes().isNotEmpty() })
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    // 15 s (the suite's convention for polling the async Room round trips;
-    // the pre-fix 5 s window timed out under full-suite JVM load - the host's
-    // swap was full - while the scan itself was still settling).
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the folder scan to settle" }
-    }
-
     @Test
     fun contentPaneOffersAnAddFolderButtonBesideAddContent() {
-        openContentPane()
+        compose.openContentPane()
         // The "Add content" pill is now the + button on the section's title
         // row, so it is found by its content description.
         compose.onNodeWithContentDescription("Add content").assertExists()
@@ -115,7 +76,8 @@ class FolderAddUiTest {
 
     @Test
     fun addFolderStoresEveryAudioFileAtEveryDepth() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
 
         // A fake documents tree: the root holds a song, a subfolder (with
         // its own song deeper down) and an unsupported file.
@@ -139,7 +101,7 @@ class FolderAddUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -170,7 +132,8 @@ class FolderAddUiTest {
 
     @Test
     fun reAddingTheSameFolderAddsNoDuplicateRows() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(
@@ -186,11 +149,11 @@ class FolderAddUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         // Picking the same folder again must not duplicate its songs.
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("All 2 songs") } })
+        compose.idleUntil({ events.any { it.startsWith("All 2 songs") } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -202,7 +165,8 @@ class FolderAddUiTest {
 
     @Test
     fun reAddingASingleSongFolderUsesTheSingularCopyAndAddsNoDuplicateRow() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
@@ -215,12 +179,12 @@ class FolderAddUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 1 song from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 1 song from the folder." } })
 
         // Re-picking the one-song folder keeps the copy singular in both
         // branches: the add event and the already-stored event.
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "The song from the folder is already in your content list." } })
+        compose.idleUntil({ events.any { it == "The song from the folder is already in your content list." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -232,13 +196,14 @@ class FolderAddUiTest {
 
     @Test
     fun folderContainingAnAlreadyAddedFileAddsNoDuplicateRow() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         // song-a was already added through the file picker; the later folder
         // pick contains it again.
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
         viewModel.addFileEntry(Uri.parse("content://docs/document/audio:100"), EntryType.AUDIO, "song-a.mp3")
-        idleUntil({ events.any { it == "Song added!" } })
+        compose.idleUntil({ events.any { it == "Song added!" } })
 
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
@@ -252,7 +217,7 @@ class FolderAddUiTest {
         }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 1 of 2 songs from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 1 of 2 songs from the folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -264,18 +229,19 @@ class FolderAddUiTest {
 
     @Test
     fun rePickingTheSameFileThroughTheFilePickerAddsNoDuplicateRow() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
 
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
         val fileUri = Uri.parse("content://docs/document/audio:100")
         viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
-        idleUntil({ events.any { it == "Song added!" } })
+        compose.idleUntil({ events.any { it == "Song added!" } })
 
         // Picking the very same file again must not create a second row.
         viewModel.addFileEntry(fileUri, EntryType.AUDIO, "song-a.mp3")
-        idleUntil({ events.any { it == "That song is already in your content list." } })
+        compose.idleUntil({ events.any { it == "That song is already in your content list." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -318,7 +284,8 @@ class FolderAddUiTest {
 
     @Test
     fun addFolderWhoseRootHasNoDirectChildrenDoesNotCrash() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         registerEmptyTreeProvider()
 
         val events = mutableListOf<String>()
@@ -328,7 +295,7 @@ class FolderAddUiTest {
         // zero-row cursor (no name, no direct children). Must complete -
         // and add nothing.
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("No songs found") } })
+        compose.idleUntil({ events.any { it.startsWith("No songs found") } })
 
         // The folder is remembered (so it stays rescannable) with the tree
         // uri as its label fallback (the folder's own row is empty), and no
@@ -343,7 +310,8 @@ class FolderAddUiTest {
 
     @Test
     fun addFolderWithoutSupportedAudioAddsNothing() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(
@@ -359,7 +327,7 @@ class FolderAddUiTest {
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("No songs found") } })
+        compose.idleUntil({ events.any { it.startsWith("No songs found") } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertTrue("a folder without supported audio must add nothing", entries.isEmpty())

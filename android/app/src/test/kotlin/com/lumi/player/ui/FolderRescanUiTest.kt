@@ -7,12 +7,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -23,7 +21,11 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * Behavioral coverage for rescanning an added folder: adding a folder tree
@@ -52,37 +54,6 @@ class FolderRescanUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the rescan to settle" }
-    }
-
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
@@ -91,7 +62,8 @@ class FolderRescanUiTest {
 
     @Test
     fun addingAFolderRemembersItWithARescanAffordance() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
@@ -100,7 +72,7 @@ class FolderRescanUiTest {
 
         val events = eventsOf(viewModel)
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         // The folder is now listed in the "Folders" section; its rescan
         // affordance lives on the folder's detail page. On the small test
@@ -117,7 +89,8 @@ class FolderRescanUiTest {
 
     @Test
     fun rescanPicksUpASongAddedSinceTheLastScan() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         // First the folder holds one song; a rescan later finds a new one.
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
@@ -127,7 +100,7 @@ class FolderRescanUiTest {
 
         val events = eventsOf(viewModel)
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         // A new file appears in the folder after the initial scan.
         viewModel.folderChildren = { folderUri ->
@@ -141,7 +114,7 @@ class FolderRescanUiTest {
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.rescanFolder(folder)
-        idleUntil({ events.any { it == "Added 1 new song from that folder." } })
+        compose.idleUntil({ events.any { it == "Added 1 new song from that folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -153,7 +126,8 @@ class FolderRescanUiTest {
 
     @Test
     fun rescanOfAnUnchangedFolderAddsNothing() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
@@ -162,12 +136,12 @@ class FolderRescanUiTest {
 
         val events = eventsOf(viewModel)
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         // Rescan with the folder unchanged: nothing new is found.
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.rescanFolder(folder)
-        idleUntil({ events.any { it == "Nothing new in that folder." } })
+        compose.idleUntil({ events.any { it == "Nothing new in that folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertTrue("an unchanged rescan adds no rows", entries.map { it.label } == listOf("song-a.mp3"))
@@ -175,7 +149,8 @@ class FolderRescanUiTest {
 
     @Test
     fun rescanOfAFolderWithARevokedGrantAddsNothingAndDoesNotCrash() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             if (folderUri.toString() == TREE_URI) {
                 listOf(FolderChild("song-a.mp3", isDirectory = false, childUri = "content://docs/document/audio:100"))
@@ -184,7 +159,7 @@ class FolderRescanUiTest {
 
         val events = eventsOf(viewModel)
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
 
         // The user revokes the folder's read grant: the document provider
         // query throws instead of returning an empty list.
@@ -192,7 +167,7 @@ class FolderRescanUiTest {
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.rescanFolder(folder)
-        idleUntil({ events.any { it == "Nothing new in that folder." } })
+        compose.idleUntil({ events.any { it == "Nothing new in that folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertTrue(

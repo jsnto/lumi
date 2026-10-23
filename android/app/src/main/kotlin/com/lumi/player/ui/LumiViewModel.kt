@@ -20,7 +20,7 @@ import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import com.lumi.player.data.FolderEntity
-import com.lumi.player.data.LoudnessResult
+import com.lumi.player.core.LoudnessResult
 import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.LumiThemeMode
@@ -38,7 +38,7 @@ import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.TagCardDetails
 import com.lumi.player.nfc.TagInspect
 import com.lumi.player.nfc.TagPayloadRead
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import com.lumi.player.player.NfcAction
 import com.lumi.player.player.PlaybackPolicy
 import com.lumi.player.player.PlaybackStatus

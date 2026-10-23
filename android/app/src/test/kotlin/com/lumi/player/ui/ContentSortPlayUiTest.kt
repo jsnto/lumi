@@ -8,14 +8,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.isDisplayed
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.ContentSortDirection
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import com.lumi.player.player.PlayerService
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,6 +27,11 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The content pane's sort control and play buttons. The list sorts by
@@ -61,41 +64,10 @@ class ContentSortPlayUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun openContentPane(): Pair<MainActivity, LumiViewModel> {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return activity to field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the content pane to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
     /** The ACTION_START intent the play buttons most recently started. */
     private fun waitForStartIntent(): Intent {
         var intent: Intent? = null
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 intent = shadowOf(app() as Application).nextStartedService ?: intent
                 intent != null
@@ -115,11 +87,11 @@ class ContentSortPlayUiTest {
 
     @Test
     fun theContentListSortsByTitleAscendingByDefault() {
-        openContentPane()
+        compose.openContentPane()
         // The stored rows arrive in insertion order; the list must show
         // A->Z by title until the user picks otherwise (the default).
         storeSongs("alpha", "charlie", "bravo")
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("charlie").isDisplayed() &&
                     compose.onNodeWithText("bravo").isDisplayed() &&
@@ -150,9 +122,9 @@ class ContentSortPlayUiTest {
 
     @Test
     fun togglingTheSortControlReordersTheListAndPersistsThePick() {
-        val (_, viewModel) = openContentPane()
+        val viewModel = viewModelOf(compose.openContentPane())
         storeSongs("alpha", "charlie", "bravo")
-        idleUntil(cond = { compose.onNodeWithText("charlie").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithText("charlie").isDisplayed() })
 
         // Ascending is the default order.
         assertTrue(
@@ -163,28 +135,28 @@ class ContentSortPlayUiTest {
         // Pick descending: the order flips and the pick persists (the
         // observed direction is re-read from the settings table).
         compose.onNodeWithText("Z-A").performClick()
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.bottom <
                     compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.top
             },
             message = "the descending reorder",
         )
-        idleUntil(
+        compose.idleUntil(
             cond = { viewModel.contentSortDirection.value == ContentSortDirection.DESCENDING },
             message = "the persisted sort direction",
         )
 
         // Back to ascending: the order flips again.
         compose.onNodeWithText("A-Z").performClick()
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInWindow.bottom <
                     compose.onNodeWithText("charlie").fetchSemanticsNode().boundsInWindow.top
             },
             message = "the ascending reorder",
         )
-        idleUntil(
+        compose.idleUntil(
             cond = { viewModel.contentSortDirection.value == ContentSortDirection.ASCENDING },
             message = "the persisted sort direction",
         )
@@ -192,9 +164,9 @@ class ContentSortPlayUiTest {
 
     @Test
     fun aSongRowPlayButtonPlaysJustThatSongThroughTheExistingPath() {
-        openContentPane()
+        compose.openContentPane()
         storeSongs("alpha", "bravo")
-        idleUntil(cond = { compose.onNodeWithContentDescription("Play bravo").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithContentDescription("Play bravo").isDisplayed() })
         compose.onNodeWithContentDescription("Play bravo").performClick()
 
         val intent = waitForStartIntent()
@@ -213,7 +185,7 @@ class ContentSortPlayUiTest {
 
     @Test
     fun aFolderRowCarriesNoPlayButton_andItsRowStillOpensTheFolderPage() {
-        val (_, viewModel) = openContentPane()
+        val viewModel = viewModelOf(compose.openContentPane())
         // Two songs (stored in this order) marked as imported from one
         // folder.
         dbAndGet {
@@ -222,7 +194,7 @@ class ContentSortPlayUiTest {
             val folder = app().repository.rememberFolder("content://docs/tree:walkin", "Walkin")
             app().repository.markEntriesFromFolder(folder.id, setOf(a.payload, b.payload))
         }
-        idleUntil(cond = { compose.onNodeWithText("Walkin").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithText("Walkin").isDisplayed() })
 
         // The folder row's play button is gone - and its songs' buttons
         // are not on the content pane at all: the folder-imported rows
@@ -245,9 +217,8 @@ class ContentSortPlayUiTest {
         waitForFolderPage()
         // The page's walk settles asynchronously (a Room round trip); the
         // song rows (and their play buttons) arrive with it.
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onNodeWithContentDescription("Play song-one").isDisplayed() },
-            timeoutMs = 10_000,
             message = "the folder page's song play buttons",
         )
         compose.onNodeWithContentDescription("Play song-two").assertExists()

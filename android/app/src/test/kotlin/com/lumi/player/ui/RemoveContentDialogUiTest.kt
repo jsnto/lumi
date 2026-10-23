@@ -6,11 +6,9 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -19,7 +17,10 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
 
 /**
  * The content pane's remove-content confirmation dialog (the failed live
@@ -55,37 +56,9 @@ class RemoveContentDialogUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun openContentPane() {
-        Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the condition") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
     @Test
     fun theRemoveContentDialogReflectsTheCurrentState_andNoDialogLingersAfterTheRemoval() {
-        openContentPane()
+        compose.openContentPane()
 
         // One individual song, already played by a tag (so the dialog's
         // survival clause is about a real tag link, not a hypothetical one).
@@ -94,11 +67,11 @@ class RemoveContentDialogUiTest {
             val tag = checkNotNull(app().repository.addTag("AABB00", "Lumi test tag"))
             check(app().repository.linkEntryToTag(tag.id, entry.id))
         }
-        idleUntil(cond = { compose.onNodeWithText("bravo").isDisplayed() }, message = "the content row")
+        compose.idleUntil(cond = { compose.onNodeWithText("bravo").isDisplayed() }, message = "the content row")
 
         // The row's delete action opens the remove-content confirmation.
         compose.onNodeWithContentDescription("Delete").performClick()
-        idleUntil(cond = { compose.onNodeWithText("Remove content?").isDisplayed() }, message = "the remove-content dialog")
+        compose.idleUntil(cond = { compose.onNodeWithText("Remove content?").isDisplayed() }, message = "the remove-content dialog")
 
         // The copy reflects the CURRENT state (the post-migration effect):
         // the song leaves the app, and the tags that play it keep a
@@ -115,14 +88,14 @@ class RemoveContentDialogUiTest {
         // Confirming settles the removal: the dialog is gone (no stale
         // dialog lingers) and the song's row leaves the content list.
         compose.onNodeWithText("Remove").performClick()
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("Remove content?").isNotDisplayed() &&
                     compose.onNodeWithText(currentCopy).isNotDisplayed()
             },
             message = "the dialog to settle",
         )
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("bravo").isNotDisplayed() &&
                     compose.onNodeWithText("Nothing here yet. Add a song.").isDisplayed()

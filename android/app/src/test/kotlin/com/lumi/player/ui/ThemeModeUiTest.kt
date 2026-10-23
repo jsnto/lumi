@@ -35,11 +35,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.openSettings
+import com.lumi.player.ui.testutil.clickMenuRow
 
 /**
  * The settings menu's top-level "Appearance" row (promoted to the menu -
@@ -77,34 +80,6 @@ class ThemeModeUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         setSystemNight(false)
-    }
-
-    /** Opens the settings menu (the real [MainActivity], player screen first). */
-    private fun openSettings(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
-    /** Opens the appearance sub-screen through the menu's own Appearance
-     * row (a top-level row). The row is below the viewport on the small
-     * screen, so it is scrolled into view before the click. */
-    private fun openAppearancePane(activity: MainActivity) {
-        compose.onNodeWithText("Appearance").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Appearance").performClick()
-        compose.waitForIdle()
-    }
-
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
     }
 
     /** Waits for the asynchronous Room round trip to make the choice observable. */
@@ -151,8 +126,6 @@ class ThemeModeUiTest {
         return checkNotNull(captured) { "the theme probe must compose" }
     }
 
-    private fun app(): LumiApp = RuntimeEnvironment.getApplication() as LumiApp
-
     /**
      * Seeds a raw, un-sanitized value directly into the settings table,
      * bypassing [LumiViewModel.setThemeMode] (which only ever writes the
@@ -184,7 +157,7 @@ class ThemeModeUiTest {
 
     @Test
     fun theMenuShowsTheAppearanceRowWithFollowSystemByDefault() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
         // The menu offers the Appearance row (promoted to a top-level menu
         // row), and the default is follow system (the phone's own setting)
@@ -205,7 +178,8 @@ class ThemeModeUiTest {
 
     @Test
     fun appearanceRowOpensTheSubScreenWithAllThreeChoices() {
-        openAppearancePane(openSettings())
+        compose.openSettings()
+        compose.clickMenuRow("Appearance")
 
         // The sub-screen (top bar AND section titled "Appearance") offers
         // the three choices with their details.
@@ -239,7 +213,7 @@ class ThemeModeUiTest {
         // Pick Dark in the sub-screen (through the menu's Appearance row);
         // the Room round trip makes it observable, and the menu row's
         // subtitle now reads Dark.
-        openAppearancePane(activity)
+        compose.clickMenuRow("Appearance")
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
         compose.waitForIdle()
@@ -256,9 +230,9 @@ class ThemeModeUiTest {
 
     @Test
     fun choosingLightOverridesADarkChoice() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
-        openAppearancePane(activity)
+        compose.clickMenuRow("Appearance")
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
         compose.waitForIdle()
@@ -330,7 +304,7 @@ class ThemeModeUiTest {
      */
     @Test
     fun darkChoiceAppliesTheDarkWindowChromeAndLightRestoresTheManifestChrome() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         // The manifest's fixed-light chrome, as captured on the first
         // composition (before any chrome sync can run).
         val originalVisibility = activity.window.decorView.systemUiVisibility
@@ -340,7 +314,7 @@ class ThemeModeUiTest {
         // follows the SAME resolved mode as the UI - the light status-bar
         // icons off, and the dark window background (no near-white flash
         // before the first dark frame).
-        openAppearancePane(activity)
+        compose.clickMenuRow("Appearance")
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
         compose.waitForIdle()
@@ -390,7 +364,7 @@ class ThemeModeUiTest {
         // The appearance row is below the viewport on the small screen:
         // scroll it into view (openAppearancePane) or the click is never
         // delivered.
-        openAppearancePane(activity)
+        compose.clickMenuRow("Appearance")
         compose.onNodeWithText("Dark").performClick()
         awaitThemeMode(activity, LumiThemeMode.DARK)
         controller.destroy()
@@ -463,7 +437,7 @@ class ThemeModeUiTest {
     @Test
     fun garbageStoredValueColdLaunchMenuRowShowsFollowSystem() {
         runBlocking { seedStoredThemeMode("bogus-mode") }
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
         compose.onNodeWithText("Appearance").assertExists()
         // The row's subtitle is the RESOLVED mode: the garbage value

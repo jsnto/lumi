@@ -12,14 +12,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.LumiTagNdef
 import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -36,6 +34,18 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.sendTag
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.TECH_NDEF
+import com.lumi.player.ui.testutil.TECH_NFCA
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickTagRow
 
 /**
  * The tag details page's card information and its "Save to NFC tag"
@@ -98,33 +108,6 @@ class TagCardWriteUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000, message: String = "the condition") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
-    /** The activity's view model (the same seam the other settings tests use). */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
     /**
      * Forges a presented-tag handle the way the framework's foreground
      * dispatch delivers one: the uid, the tech list (NfcA by default, plus
@@ -139,61 +122,32 @@ class TagCardWriteUiTest {
         maxNdefLength: Int = 151,
         ndefType: Int = 2,
     ): Tag {
-        val techs = if (ndef) intArrayOf(1, 6) else intArrayOf(1)
+        val techs = if (ndef) intArrayOf(TECH_NFCA, TECH_NDEF) else intArrayOf(TECH_NFCA)
         val ndefBundle = Bundle().apply {
             putInt("ndefmaxlength", maxNdefLength)
             putInt("ndefcardstate", if (writable) 2 else 0)
             putInt("ndeftype", ndefType)
         }
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
+        return syntheticTag(
+            uid = uid,
+            techs = techs,
+            techExtras = if (ndef) arrayOf(Bundle(), ndefBundle) else arrayOf(Bundle()),
         )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            techs,
-            if (ndef) arrayOf(Bundle(), ndefBundle) else arrayOf(Bundle()),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /** Delivers [tag] to the resumed activity the way foreground dispatch would. */
-    private fun sendTag(controller: ActivityController<MainActivity>, tag: Tag) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tag))
-        compose.waitForIdle()
     }
 
     /** Registers the tag under a known name and opens its details page. */
     private fun controllerWithOpenTagPage(): ActivityController<MainActivity> {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = compose.setupMainActivity()
         openTagPage()
         return controller
     }
 
     /** Navigates to the registered tag's details page (from the player screen). */
     private fun openTagPage() {
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Porch").performClick()
-        compose.waitForIdle()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow("Porch")
         compose.onNodeWithText("Tag details").assertIsDisplayed()
     }
 
@@ -201,12 +155,12 @@ class TagCardWriteUiTest {
     fun aPresentedTagShowsItsAvailableCardDetails_onTheTagPage() {
         val controller = controllerWithOpenTagPage()
 
-        sendTag(controller, forgeTag(TAG_UID))
+        compose.sendTag(controller, forgeTag(TAG_UID))
 
         // The discovery-data details appear in the details section: the
         // tech list (NfcA + the NDEF tech), the NDEF type (type 2 - the
         // NFC Forum name), the NDEF capacity, and the writability.
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("NfcA, Ndef").assertExists()
                 compose.onNodeWithText("NFC Forum Type 2").assertExists()
@@ -223,12 +177,12 @@ class TagCardWriteUiTest {
     fun aTagWithoutTheNdefTechShowsNoNdefFields() {
         val controller = controllerWithOpenTagPage()
 
-        sendTag(controller, forgeTag(TAG_UID, ndef = false))
+        compose.sendTag(controller, forgeTag(TAG_UID, ndef = false))
 
         // The tech list is available (the NfcA tech only) and shows; the
         // NDEF fields are not available on this handle and stay absent -
         // nothing is guessed.
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("NfcA").assertExists()
                 compose.onNodeWithText("NDEF type").assertDoesNotExist()
@@ -249,9 +203,9 @@ class TagCardWriteUiTest {
         // A read of ANOTHER tag (registered, so its page exists): the
         // details are keyed by that tag's uid, so this page shows none of
         // it - no stale details.
-        sendTag(controller, forgeTag(OTHER_UID))
+        compose.sendTag(controller, forgeTag(OTHER_UID))
 
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     // The page itself (the tag's own name in the details
@@ -273,7 +227,7 @@ class TagCardWriteUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Back porch").performClick()
         compose.waitForIdle()
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("NFC Forum Type 2").assertExists()
                 true
@@ -289,8 +243,8 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
 
         // The PORCH tag's card is presented: its details are observed.
-        sendTag(controller, forgeTag(TAG_UID))
-        idleUntil({
+        compose.sendTag(controller, forgeTag(TAG_UID))
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("NFC Forum Type 2").assertExists()
                 true
@@ -303,8 +257,8 @@ class TagCardWriteUiTest {
         // nothing, so it reports and settles): its details are observed
         // too, keyed to THAT tag's uid.
         val viewModel = viewModelOf(controller.get())
-        sendTag(controller, forgeTag(OTHER_UID, maxNdefLength = 64))
-        idleUntil({
+        compose.sendTag(controller, forgeTag(OTHER_UID, maxNdefLength = 64))
+        compose.idleUntil({
             val details = viewModel.tagCardDetails.value
             details.containsKey(TAG_UID) && details.containsKey(OTHER_UID)
         }, message = "both tags' details to be observed")
@@ -318,7 +272,7 @@ class TagCardWriteUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Porch").performClick()
         compose.waitForIdle()
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("NFC Forum Type 2").assertExists()
                 compose.onNodeWithText("151 bytes").assertExists()
@@ -355,9 +309,9 @@ class TagCardWriteUiTest {
 
         // Present the tag's OWN card (its NFC ID matches the tag's uid)
         // - the card write only runs for the tag's own card.
-        sendTag(controller, forgeTag(TAG_UID))
+        compose.sendTag(controller, forgeTag(TAG_UID))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
@@ -426,9 +380,9 @@ class TagCardWriteUiTest {
             true
         }
 
-        sendTag(controller, forgeTag(TAG_UID))
+        compose.sendTag(controller, forgeTag(TAG_UID))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
@@ -468,9 +422,9 @@ class TagCardWriteUiTest {
         // A card the app has never seen - perfectly writable, but its
         // NFC ID does not match the tag's: the write is refused before
         // the discovery-data gate even looks at the card.
-        sendTag(controller, forgeTag(CARD_UID))
+        compose.sendTag(controller, forgeTag(CARD_UID))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "That card's NFC ID doesn't match this tag's - nothing was written." },
             message = "the mismatch report",
         )
@@ -508,9 +462,9 @@ class TagCardWriteUiTest {
         // written): the verdict is discovery data - the write seam must
         // never run. (The card carries the tag's own NFC ID, so it gets
         // past the id-match gate to the discovery-data verdict.)
-        sendTag(controller, forgeTag(TAG_UID, writable = false))
+        compose.sendTag(controller, forgeTag(TAG_UID, writable = false))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "That tag is read-only - nothing was written." },
             message = "the read-only report",
         )
@@ -536,9 +490,9 @@ class TagCardWriteUiTest {
 
         // A writable card whose NDEF area cannot hold the payload: the
         // report names what it holds and what the data needs.
-        sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 20))
+        compose.sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 20))
 
-        idleUntil(
+        compose.idleUntil(
             {
                 val toast = ShadowToast.getTextOfLatestToast()
                 toast != null && toast.startsWith("That tag is too small for the tag's data") &&
@@ -595,9 +549,9 @@ class TagCardWriteUiTest {
         // The tag's own card with plenty of capacity (a card the gate
         // would pass): the settle-time cap refusal still wins, and no
         // physical write is attempted at all.
-        sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 4096))
+        compose.sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 4096))
 
-        idleUntil(
+        compose.idleUntil(
             {
                 val toast = ShadowToast.getTextOfLatestToast()
                 toast != null &&
@@ -637,7 +591,7 @@ class TagCardWriteUiTest {
 
         // The note shows near the button (the mirror's text matcher is
         // exact, so the probe is the note's full text)...
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("This tag's data is too large for the tag payload - nothing can be written.").assertExists()
@@ -720,9 +674,9 @@ class TagCardWriteUiTest {
         // (the NDEF length missing from the presentation extras - the
         // framework answers 0): the gate must not report "too small
         // (0 bytes)" and refuse the write.
-        sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 0))
+        compose.sendTag(controller, forgeTag(TAG_UID, maxNdefLength = 0))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
@@ -748,9 +702,9 @@ class TagCardWriteUiTest {
 
         // A card without the NDEF tech: there is no NDEF area to write
         // to, and the write seam must never run.
-        sendTag(controller, forgeTag(TAG_UID, ndef = false))
+        compose.sendTag(controller, forgeTag(TAG_UID, ndef = false))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "That tag isn't an NDEF tag - nothing was written." },
             message = "the non-NDEF report",
         )
@@ -771,9 +725,9 @@ class TagCardWriteUiTest {
         // left range mid-write).
         viewModel.tagWriter = { _, _ -> false }
 
-        sendTag(controller, forgeTag(TAG_UID))
+        compose.sendTag(controller, forgeTag(TAG_UID))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "Couldn't write to that tag - keep it on the phone and try again." },
             message = "the write-failure report",
         )
@@ -808,7 +762,7 @@ class TagCardWriteUiTest {
             writes++
             true
         }
-        sendTag(controller, forgeTag(CARD_UID))
+        compose.sendTag(controller, forgeTag(CARD_UID))
         // Let the read settle (it is handled synchronously off the
         // delivery), then assert the do-nothing outcome.
         Thread.sleep(500)
@@ -836,8 +790,8 @@ class TagCardWriteUiTest {
         viewModel.songPayloadReader = { _ ->
             TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
         }
-        sendTag(controller, forgeTag(TAG_UID))
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
+        compose.sendTag(controller, forgeTag(TAG_UID))
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
 
         // ...and the card-write scan: its read must not run at all.
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
@@ -855,8 +809,8 @@ class TagCardWriteUiTest {
             true
         }
 
-        sendTag(controller, forgeTag(TAG_UID))
-        idleUntil(
+        compose.sendTag(controller, forgeTag(TAG_UID))
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "Saved to the tag." },
             message = "the save confirmation",
         )
@@ -886,8 +840,8 @@ class TagCardWriteUiTest {
         viewModel.songPayloadReader = { _ ->
             TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
         }
-        sendTag(controller, forgeTag(TAG_UID))
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
+        compose.sendTag(controller, forgeTag(TAG_UID))
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
 
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.onNodeWithText("Write to NFC tag").performClick()
@@ -899,9 +853,9 @@ class TagCardWriteUiTest {
             true
         }
         // A read-only card: the gate refuses before any physical write.
-        sendTag(controller, forgeTag(TAG_UID, writable = false))
+        compose.sendTag(controller, forgeTag(TAG_UID, writable = false))
 
-        idleUntil(
+        compose.idleUntil(
             { ShadowToast.getTextOfLatestToast() == "That tag is read-only - nothing was written." },
             message = "the read-only report",
         )
@@ -933,7 +887,7 @@ class TagCardWriteUiTest {
         compose.waitForIdle()
 
         // The note next to the button says why...
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("Turn on NFC to save to tag.").assertExists()
@@ -972,7 +926,7 @@ class TagCardWriteUiTest {
         openTagPage()
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("This device has no NFC, so it can't save to a tag.").assertExists()
@@ -1022,7 +976,7 @@ class TagCardWriteUiTest {
         ShadowLooper.idleMainLooper()
         compose.waitForIdle()
 
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("Turn on NFC to save to tag.").assertDoesNotExist()
@@ -1057,8 +1011,8 @@ class TagCardWriteUiTest {
         // A normal read of the tag's own (read-only) card records its
         // discovery details for the tag's uid - the details section shows
         // the same fact (Writable: No) that the gate would reach...
-        sendTag(controller, forgeTag(TAG_UID, writable = false))
-        idleUntil(
+        compose.sendTag(controller, forgeTag(TAG_UID, writable = false))
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("No").assertExists()
@@ -1072,7 +1026,7 @@ class TagCardWriteUiTest {
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
 
         // ...the note next to the button says why...
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("That tag is read-only, so it can't be written.").assertExists()
@@ -1105,10 +1059,10 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        sendTag(controller, forgeTag(TAG_UID, ndef = false))
+        compose.sendTag(controller, forgeTag(TAG_UID, ndef = false))
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
 
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText("That tag isn't an NDEF tag, so it can't be written.").assertExists()
@@ -1139,7 +1093,7 @@ class TagCardWriteUiTest {
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        sendTag(controller, forgeTag(TAG_UID))
+        compose.sendTag(controller, forgeTag(TAG_UID))
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.waitForIdle()
 

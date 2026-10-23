@@ -8,8 +8,9 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
-import com.lumi.player.player.LoudnessMeterProcessor
-import com.lumi.player.player.MeterAudioSink
+import com.lumi.player.core.LoudnessMeterProcessor
+import com.lumi.player.core.LoudnessResult
+import com.lumi.player.core.MeterAudioSink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers

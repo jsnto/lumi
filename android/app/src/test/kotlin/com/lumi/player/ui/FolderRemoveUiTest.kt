@@ -6,12 +6,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -28,6 +26,11 @@ import java.io.FileNotFoundException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * Behavioral coverage for removing an added folder: the folder's detail
@@ -66,38 +69,6 @@ class FolderRemoveUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Opens the Content pane and returns its (activity-scoped) view model. */
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the operation to settle" }
-    }
-
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
@@ -116,12 +87,13 @@ class FolderRemoveUiTest {
     /** Adds a folder through the view model until its add event settles. */
     private fun addFolder(viewModel: LumiViewModel, events: MutableList<String>, expected: String) {
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == expected } })
+        compose.idleUntil({ events.any { it == expected } })
     }
 
     @Test
     fun theFolderRowOffersNoRowActions_andOpensTheFolderPage() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         addFolder(viewModel, eventsOf(viewModel), "Added 1 song from the folder.")
 
@@ -147,7 +119,8 @@ class FolderRemoveUiTest {
 
     @Test
     fun removingAFolderRemovesTheFolderRowAndItsImportedSongs() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a"), file("song-b.mp3", "c://x/b")))
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 2 songs from the folder.")
@@ -160,7 +133,7 @@ class FolderRemoveUiTest {
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
 
         // The preview identified the imported songs (the walked payloads)
         // and counted how many are still stored.
@@ -179,7 +152,7 @@ class FolderRemoveUiTest {
             .assertExists()
 
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it == "Removed the folder and 2 imported songs." } })
+        compose.idleUntil({ events.any { it == "Removed the folder and 2 imported songs." } })
 
         // The folder row and its imported songs are gone...
         assertTrue("the folder row is removed", dbAndGet { app().repository.observeFolders().first() }.isEmpty())
@@ -205,7 +178,8 @@ class FolderRemoveUiTest {
      */
     @Test
     fun removingAFolderUnmarksSongsThatLeftTheTreeIntoTheIndividualList() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         // song-b is imported with the folder; the tree has since shrunk
@@ -225,7 +199,7 @@ class FolderRemoveUiTest {
         )
 
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
         val preview = viewModel.folderRemovalPreview.value!!
         assertEquals(
             "the walk identifies only the song still in the tree",
@@ -235,7 +209,7 @@ class FolderRemoveUiTest {
         assertEquals(1, preview.songCount)
 
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it == "Removed the folder and 1 imported song." } })
+        compose.idleUntil({ events.any { it == "Removed the folder and 1 imported song." } })
 
         // song-a (still in the tree) is gone; song-b's row survived...
         val entries = dbAndGet { app().repository.observeEntries().first() }
@@ -257,7 +231,8 @@ class FolderRemoveUiTest {
 
     @Test
     fun removingAnUnreadableFolderRemovesOnlyTheFolderRow() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 1 song from the folder.")
@@ -268,7 +243,7 @@ class FolderRemoveUiTest {
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
 
         // The preview plainly says the count is undeterminable.
         val preview = viewModel.folderRemovalPreview.value!!
@@ -282,7 +257,7 @@ class FolderRemoveUiTest {
         ).assertExists()
 
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it == "Removed the folder. Its songs couldn't be read, so they were left in place." } })
+        compose.idleUntil({ events.any { it == "Removed the folder. Its songs couldn't be read, so they were left in place." } })
 
         assertTrue("the folder row is removed", dbAndGet { app().repository.observeFolders().first() }.isEmpty())
         assertEquals(
@@ -294,7 +269,8 @@ class FolderRemoveUiTest {
 
     @Test
     fun removingAFolderWithNoImportedSongsRemovesOnlyTheFolderRow() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         // The folder holds no supported audio: the add stored no songs.
         swapTree(viewModel, listOf(FolderChild("readme.txt", isDirectory = false, childUri = "c://x/readme.txt")))
         val events = eventsOf(viewModel)
@@ -302,14 +278,14 @@ class FolderRemoveUiTest {
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
 
         assertEquals(0, viewModel.folderRemovalPreview.value!!.songCount)
         compose.waitForIdle()
         compose.onNodeWithText("has no imported songs in the content list", substring = true).assertExists()
 
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it == "Removed the folder." } })
+        compose.idleUntil({ events.any { it == "Removed the folder." } })
 
         assertTrue("the folder row is removed", dbAndGet { app().repository.observeFolders().first() }.isEmpty())
         assertTrue("no entries existed, none were touched", dbAndGet { app().repository.observeEntries().first() }.isEmpty())
@@ -317,14 +293,15 @@ class FolderRemoveUiTest {
 
     @Test
     fun cancellingAFolderRemovalKeepsTheFolderAndItsSongs() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 1 song from the folder.")
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
 
         viewModel.cancelFolderRemoval()
         assertTrue("the preview is dismissed", viewModel.folderRemovalPreview.value == null)
@@ -348,7 +325,8 @@ class FolderRemoveUiTest {
      */
     @Test
     fun reAddingARemovedFolderReimportsIt() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a"), file("song-b.mp3", "c://x/b")))
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 2 songs from the folder.")
@@ -356,15 +334,15 @@ class FolderRemoveUiTest {
         // The removal: the folder row and its imported songs leave.
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.requestFolderRemoval(folder)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it == "Removed the folder and 2 imported songs." } })
+        compose.idleUntil({ events.any { it == "Removed the folder and 2 imported songs." } })
         assertTrue(dbAndGet { app().repository.observeFolders().first() }.isEmpty())
         assertTrue(dbAndGet { app().repository.observeEntries().first() }.isEmpty())
 
         // Picking the same folder again re-imports it like a fresh add.
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.count { it == "Added 2 songs from the folder." } == 2 })
+        compose.idleUntil({ events.count { it == "Added 2 songs from the folder." } == 2 })
 
         assertEquals(
             "the folder is remembered once again",
@@ -380,7 +358,8 @@ class FolderRemoveUiTest {
 
     @Test
     fun aRemovalRequestWhileThePreviewIsOpenIsIgnored() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
         val bTreeQueries = AtomicInteger(0)
         viewModel.folderChildren = { folderUri ->
@@ -393,16 +372,16 @@ class FolderRemoveUiTest {
         }
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI_A))
-        idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
+        compose.idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
         viewModel.addFolderEntry(Uri.parse(TREE_URI_B))
-        idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
+        compose.idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
 
         val folders = dbAndGet { app().repository.observeFolders().first() }
         val folderA = folders.single { it.uri == TREE_URI_A }
         val folderB = folders.single { it.uri == TREE_URI_B }
 
         viewModel.requestFolderRemoval(folderA)
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
         val previewA = viewModel.folderRemovalPreview.value!!
         assertEquals(TREE_URI_A, previewA.folder.uri)
         assertEquals(setOf("c://x/a"), previewA.importedPayloads)
@@ -445,7 +424,8 @@ class FolderRemoveUiTest {
 
     @Test
     fun aRemovalRequestWhileAWalkIsInFlightIsIgnored() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         // Phase 1: both trees answer immediately, so the adds settle.
@@ -457,9 +437,9 @@ class FolderRemoveUiTest {
             }
         }
         viewModel.addFolderEntry(Uri.parse(TREE_URI_A))
-        idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
+        compose.idleUntil({ events.count { it == "Added 1 song from the folder." } == 1 })
         viewModel.addFolderEntry(Uri.parse(TREE_URI_B))
-        idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
+        compose.idleUntil({ events.count { it == "Added 1 song from the folder." } == 2 })
 
         val folders = dbAndGet { app().repository.observeFolders().first() }
         val folderA = folders.single { it.uri == TREE_URI_A }
@@ -495,7 +475,7 @@ class FolderRemoveUiTest {
         assertEquals(bQueriesBefore, bTreeQueries.get())
 
         gateA.countDown()
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
         val preview = viewModel.folderRemovalPreview.value!!
         assertEquals(TREE_URI_A, preview.folder.uri)
         assertEquals(setOf("c://x/a"), preview.importedPayloads)

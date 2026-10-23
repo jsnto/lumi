@@ -2,10 +2,8 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
@@ -25,13 +23,16 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Manual (untagged) playback against the NFC receive path. The content play
@@ -60,56 +61,10 @@ class ManualPlayTagSwitchUiTest {
         PlayerStateHolder.update { PlayerUiState() }
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
     private fun viewModelOf(controller: ActivityController<MainActivity>): LumiViewModel {
         val field = MainActivity::class.java.getDeclaredField("viewModel")
         field.isAccessible = true
         return field.get(controller.get()) as LumiViewModel
-    }
-
-    /**
-     * A synthetic tag with [uid] (the stub SDK's [Tag] constructor throws
-     * and omits the test hooks, so the real six-arg constructor is used
-     * reflectively - the same shape the foreground-dispatch tests build).
-     */
-    private fun tagWithUid(uid: String): Tag {
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /** Delivers a tag the way the NFC stack's foreground dispatch would. */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
     }
 
     /**
@@ -178,22 +133,13 @@ class ManualPlayTagSwitchUiTest {
         return activations
     }
 
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the read to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
     @Test
     fun manualPlay_thenTagRead_startsTheTagList_notIgnored() {
         val manual = setupDb()
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
 
         // Tag A's list is playing (its read started it).
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -215,7 +161,7 @@ class ManualPlayTagSwitchUiTest {
 
         // Reading the tag again must switch back to the tag's own list -
         // not be ignored while the manual song plays.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val switch = nextServiceIntent()
         assertNotNull(
             "a later tag read must start the tag's own list after a manual play, not be ignored",
@@ -229,10 +175,10 @@ class ManualPlayTagSwitchUiTest {
     fun pausedManualPlay_thenTagRead_startsTheTagList_notResumesManualQueue() {
         setupDb()
         val manual = setupManualSong()
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
 
         // Tag A's list is playing (its read started it).
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -258,7 +204,7 @@ class ManualPlayTagSwitchUiTest {
         // Reading the tag must start the tag's own list - "reading
         // overrides pause" applies to the tag's list, not to the manual
         // queue.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val switch = nextServiceIntent()
         assertNotNull("a tag read over a paused manual session must not be swallowed", switch)
         assertEquals(
@@ -272,7 +218,7 @@ class ManualPlayTagSwitchUiTest {
     @Test
     fun readingAnEmptyTag_leavesThePolicyUnchanged_andDoesNotResumeTheManualSession() {
         val manual = setupEmptyTag()
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller)
         val events = eventsOf(viewModel)
         val activations = tagActivationsOf(viewModel)
@@ -290,8 +236,8 @@ class ManualPlayTagSwitchUiTest {
         // Reading a tag that plays nothing must not make it the active tag:
         // it would hold the policy (and arm the presence poll) for a list
         // that never plays.
-        sendTag(controller, UID_EMPTY)
-        idleUntil(cond = { events.any { it.startsWith("Nothing is linked") } }, message = "the empty-tag report")
+        compose.sendTagWithUid(controller, UID_EMPTY)
+        compose.idleUntil(cond = { events.any { it.startsWith("Nothing is linked") } }, message = "the empty-tag report")
         assertNull(
             "a tag with no linked songs must not become the active tag",
             viewModel.activeTagUid,
@@ -308,7 +254,7 @@ class ManualPlayTagSwitchUiTest {
         // Re-reading the empty tag while the manual session is paused must
         // not resume the manual queue - "reading overrides pause" applies to
         // the tag's own list, and this tag has none.
-        sendTag(controller, UID_EMPTY)
+        compose.sendTagWithUid(controller, UID_EMPTY)
         compose.waitForIdle()
         ShadowLooper.idleMainLooper()
         assertNull(
@@ -324,7 +270,7 @@ class ManualPlayTagSwitchUiTest {
     @Test
     fun readingATagWhoseSongsAllLeftTheLibrary_reportsTheMissingSongs_notTheEmptyTag() {
         val manual = setupDeadLinkTag()
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller)
         val events = eventsOf(viewModel)
         val activations = tagActivationsOf(viewModel)
@@ -342,8 +288,8 @@ class ManualPlayTagSwitchUiTest {
         // Reading the dead-link tag reports that its songs are gone - not
         // the empty-tag copy (its page still lists the "song not found"
         // rows) - and must not make it the active tag.
-        sendTag(controller, UID_DEAD)
-        idleUntil(
+        compose.sendTagWithUid(controller, UID_DEAD)
+        compose.idleUntil(
             cond = { events.any { it == "None of Shelf's songs are in the content list anymore." } },
             message = "the all-songs-missing report",
         )

@@ -22,6 +22,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.openSettings
 
 /**
  * Behavioral tests for the settings menu (polex-style): the settings screen
@@ -54,15 +55,6 @@ class SettingsMenuUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun openSettings(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     private fun systemBack(activity: MainActivity) {
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
@@ -70,7 +62,7 @@ class SettingsMenuUiTest {
 
     @Test
     fun settingsMenuListsEachSettingAsButton() {
-        openSettings()
+        compose.openSettings()
 
         // Every setting is a button on the settings screen itself. The
         // "Tag to content" entry is gone: linking songs to a tag happens
@@ -115,7 +107,7 @@ class SettingsMenuUiTest {
 
     @Test
     fun eachMenuButtonOpensItsConfigurationScreen() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
         // Play mode: the sub-screen offers the mode selection.
         compose.onNodeWithText("Play mode").performClick()
@@ -210,7 +202,7 @@ class SettingsMenuUiTest {
 
     @Test
     fun systemBackFromMenuReturnsToThePlayerScreen() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         systemBack(activity)
         // The player screen's top bar is back; the settings menu is gone.
@@ -230,7 +222,7 @@ class SettingsMenuUiTest {
         thread.join()
         ShadowLooper.idleMainLooper()
 
-        openSettings()
+        compose.openSettings()
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
 

@@ -1,6 +1,6 @@
 package com.lumi.player.data
 
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

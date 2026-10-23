@@ -1,4 +1,4 @@
-package com.lumi.player.player
+package com.lumi.player.core
 
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.AuxEffectInfo

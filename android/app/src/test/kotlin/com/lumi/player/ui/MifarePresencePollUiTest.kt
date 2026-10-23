@@ -2,9 +2,7 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
@@ -29,10 +27,12 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
-import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Behavioral coverage for the proximity-mode continuous-reading fast path:
@@ -66,60 +66,6 @@ class MifarePresencePollUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    private fun tagWithUid(uid: String): Tag {
-        // The stub SDK omits Tag's test hooks; the real framework (loaded by
-        // Robolectric at runtime) has the public six-arg constructor, so
-        // construct the synthetic tag reflectively.
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /**
-     * Delivers a tag to the resumed activity the way the NFC stack's
-     * foreground dispatch would: an intent carrying EXTRA_TAG to the
-     * activity itself, arriving as onNewIntent.
-     */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
     }
 
     /**
@@ -159,12 +105,12 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withSessionReader(activity, alwaysAbsentReader)
         // The tag's re-read while presented starts the continuous-reading
         // poll; the tag then leaves range, so every read fails.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         // The fast path confirms the removal in ~100 ms (a failed read, the
         // retry delay, the failed retry) and pauses through the existing
         // route - far sooner than the ~16 s absence-timeout fallback.
@@ -197,10 +143,10 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withSessionReader(activity, alwaysPresentReader)
-        sendTag(controller, UID_A) // re-read of the active tag: starts the poll
+        compose.sendTagWithUid(controller, UID_A) // re-read of the active tag: starts the poll
         assertTrue(
             "a Mifare Ultralight active tag must run the continuous-reading poll",
             presencePollJobOf(activity)?.isActive == true,
@@ -235,14 +181,14 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         // The synthetic tag carries no tech list, so the default
         // session-establishment finds no Mifare Ultralight: no fast-path
         // poll may run. The session check happens on a real background
         // thread, so pump in real time until the (never-started) job has
         // settled.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val deadline = System.currentTimeMillis() + 3_000
         while (presencePollJobOf(activity)!!.isActive && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
@@ -270,7 +216,7 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         // A live read can fail with a non-IO runtime exception when the
         // NFC session dies mid-read (e.g. the NFC service drops while the
@@ -278,7 +224,7 @@ class MifarePresencePollUiTest {
         // "tag out of range" strike so the loop degrades to the two-strike
         // pause path instead of escaping the poll (and crashing the app).
         withSessionReader(activity, PresenceReader { throw RuntimeException("dead session") })
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent(3_000)
         assertNotNull(
             "a dead-session read failure must degrade to the two-strike pause " +
@@ -294,15 +240,15 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withSessionReader(activity, alwaysPresentReader)
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val firstJob = presencePollJobOf(activity)!!
         assertTrue("the active tag's poll must be running", firstJob.isActive)
         // An unrelated tag (not even registered) is presented: its read
         // must cancel A's poll.
-        sendTag(controller, UID_B)
+        compose.sendTagWithUid(controller, UID_B)
         ShadowLooper.idleMainLooper()
         assertTrue(
             "a new tag presentation must cancel the previous tag's poll",
@@ -316,10 +262,10 @@ class MifarePresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withSessionReader(activity, alwaysPresentReader)
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val firstJob = presencePollJobOf(activity)!!
         // The service stops on its own: the shared state settles to IDLE and
         // the activity must tear the fast-path poll down with the fallback.

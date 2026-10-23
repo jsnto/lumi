@@ -1,5 +1,10 @@
 package com.lumi.player.data
 
+import com.lumi.player.core.LIMITER_KNEE_LINEAR
+import com.lumi.player.core.LoudnessMeter
+import com.lumi.player.core.LoudnessResult
+import com.lumi.player.core.gainFor as coreGainFor
+import com.lumi.player.core.softClip
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -54,7 +59,7 @@ class LoudnessTest {
         assertEquals(0.00, result.truePeakDbTp!!, 0.05)
         // The per-track gain at the -16 LUFS default target: the level
         // difference (the headroom cap does not bind: -1 - 0 = -1 > -5.08).
-        assertEquals(-5.08, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(-5.08, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -65,7 +70,7 @@ class LoudnessTest {
         assertEquals(-20.00, result.truePeakDbTp!!, 0.05)
         // The gain is the level difference up to the ceiling (the ceiling
         // does not bind here: -1 - (-20) = 19 > 14.92).
-        assertEquals(+14.92, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(+14.92, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -73,7 +78,7 @@ class LoudnessTest {
         val result = meter(sine(440.0))
 
         assertEquals(-11.61, result.lufs!!, 0.05)
-        assertEquals(-4.39, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(-4.39, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -81,7 +86,7 @@ class LoudnessTest {
         val result = meter(sine(100.0))
 
         assertEquals(-12.75, result.lufs!!, 0.05)
-        assertEquals(-3.25, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(-3.25, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -89,7 +94,7 @@ class LoudnessTest {
         val result = meter(sine(10_000.0))
 
         assertEquals(-7.58, result.lufs!!, 0.05)
-        assertEquals(-8.42, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(-8.42, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -106,7 +111,7 @@ class LoudnessTest {
         val result = meter(mixed)
 
         assertEquals(-10.99, result.lufs!!, 0.05)
-        assertEquals(-5.01, gainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
+        assertEquals(-5.01, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 0.05)
     }
 
     @Test
@@ -116,7 +121,7 @@ class LoudnessTest {
         assertNull("silence has no loudness", result.lufs)
         assertNull("silence has no true peak", result.truePeakDbTp)
         // And no gain is ever computed from it.
-        assertEquals(0.0, gainFor(result.lufs, result.truePeakDbTp, -16.0), 1e-9)
+        assertEquals(0.0, coreGainFor(result.lufs, result.truePeakDbTp, -16.0), 1e-9)
     }
 
     // ---- the meter's invariants ---------------------------------------------
@@ -267,8 +272,8 @@ class LoudnessTest {
     @Test
     fun gain_isTheLevelDifference_whenHeadroomAllows() {
         // Gap 3 dB, headroom -1 - (-10) = 9 dB: the gap wins.
-        assertEquals(-5.0, gainFor(-10.0, 0.0, -15.0), 1e-9)
-        assertEquals(+3.0, gainFor(-19.0, -10.0, -16.0), 1e-9)
+        assertEquals(-5.0, coreGainFor(-10.0, 0.0, -15.0), 1e-9)
+        assertEquals(+3.0, coreGainFor(-19.0, -10.0, -16.0), 1e-9)
     }
 
     @Test
@@ -276,19 +281,19 @@ class LoudnessTest {
         // Measured -15.0, peak 0.0, target -16: the gap is -1 dB, and the
         // headroom cap (-1 - 0 = -1) is exactly equal - it must never push
         // the peak past the ceiling.
-        assertEquals(-1.0, gainFor(-15.0, 0.0, -16.0), 1e-9)
+        assertEquals(-1.0, coreGainFor(-15.0, 0.0, -16.0), 1e-9)
         // A louder track with no headroom: the cap (not the gap) binds.
-        assertEquals(-1.0, gainFor(-16.5, 0.0, -14.0), 1e-9)
+        assertEquals(-1.0, coreGainFor(-16.5, 0.0, -14.0), 1e-9)
     }
 
     @Test
     fun gain_withNoPeakReading_isTheUnboundedGap() {
-        assertEquals(+2.5, gainFor(-16.5, null, -14.0), 1e-9)
+        assertEquals(+2.5, coreGainFor(-16.5, null, -14.0), 1e-9)
     }
 
     @Test
     fun gain_forSilence_isZero() {
-        assertEquals(0.0, gainFor(null, null, -16.0), 1e-9)
+        assertEquals(0.0, coreGainFor(null, null, -16.0), 1e-9)
     }
 
     @Test

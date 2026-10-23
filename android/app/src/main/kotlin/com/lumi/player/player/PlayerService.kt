@@ -17,6 +17,8 @@ import androidx.core.app.ServiceCompat
 import androidx.media3.common.C
 import com.lumi.player.LumiApp
 import com.lumi.player.R
+import com.lumi.player.core.EntrySpec
+import com.lumi.player.core.LoudnessProcessor
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagPositionEntity
 import com.lumi.player.data.gainFor

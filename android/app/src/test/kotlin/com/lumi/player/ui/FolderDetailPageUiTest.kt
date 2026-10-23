@@ -12,18 +12,16 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
 import com.lumi.player.data.FolderChild
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
 import com.lumi.player.player.PlaybackStatus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -36,8 +34,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
 import java.io.FileNotFoundException
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.clickFolderRow
 
 /**
  * Behavioral coverage for the folder's detail page (opened by tapping a
@@ -89,49 +93,6 @@ class FolderDetailPageUiTest {
         PlayerStateHolder.update { PlayerUiState() }
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECK_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the operation to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
-    /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 60_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
-            Thread.sleep(20)
-        }
-        compose.onNodeWithText(text).assertExists()
-    }
-
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
@@ -162,7 +123,7 @@ class FolderDetailPageUiTest {
         treeUri: String = TREE_URI,
     ) {
         viewModel.addFolderEntry(Uri.parse(treeUri))
-        idleUntil({ events.any { it == expected } })
+        compose.idleUntil({ events.any { it == expected } })
     }
 
     /**
@@ -171,10 +132,8 @@ class FolderDetailPageUiTest {
      * and waits for the detail page to show.
      */
     private fun openFolderPage(treeUri: String = TREE_URI) {
-        compose.onNodeWithText(treeUri).performScrollTo()
-        compose.onNodeWithText(treeUri).performClick()
-        compose.waitForIdle()
-        waitForText("Folder details")
+        compose.clickFolderRow(treeUri)
+        compose.waitForText("Folder details")
     }
 
     /** The left edge of the first row whose title is [text]. */
@@ -190,7 +149,7 @@ class FolderDetailPageUiTest {
      * [android.content.Context.startService]). */
     private fun waitForStartIntent(): Intent {
         var intent: Intent? = null
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 intent = shadowOf(app() as Application).nextStartedService ?: intent
                 intent != null
@@ -202,7 +161,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun thePageShowsTheFolderDetailsAndItsImportedSongs() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(
             viewModel,
             listOf(
@@ -215,7 +175,7 @@ class FolderDetailPageUiTest {
 
         openFolderPage()
         // The page lists the imported songs - including the subfolder's song.
-        waitForText("song-a.mp3")
+        compose.waitForText("song-a.mp3")
         compose.onNodeWithText("song-b.flac").assertExists()
         // The page carries the rescan action and the danger zone; the
         // content pane's row-level copy is gone.
@@ -226,7 +186,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun thePageShowsTheImportedFolderTreeWithConnectorLinesAndShowHide() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         // The tree's real SAF uri grammar: the picker's tree uri names the
         // picked folder's docId, and every file's payload is the tree-scoped
         // content uri whose docId encodes the full path below the root -
@@ -258,7 +219,7 @@ class FolderDetailPageUiTest {
         // lines indent each row one step (16 dp, the tree's per-depth
         // indent) per subfolder down, and every folder row leads its own
         // level.
-        waitForText("Albums")
+        compose.waitForText("Albums")
         compose.onNodeWithText("deep.flac").assertExists()
         compose.onNodeWithText("Deep").assertExists()
         compose.onNodeWithText("deepest.wav").assertExists()
@@ -298,7 +259,7 @@ class FolderDetailPageUiTest {
         // documented sharp edge) - settle on the flipped chevron (the
         // state's own affordance) before the hard asserts read the
         // post-toggle composition.
-        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Albums").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithContentDescription("Expand Albums").isDisplayed() })
         compose.onNodeWithText("deep.flac").assertDoesNotExist()
         compose.onNodeWithText("Deep").assertDoesNotExist()
         compose.onNodeWithText("deepest.wav").assertDoesNotExist()
@@ -306,7 +267,7 @@ class FolderDetailPageUiTest {
         compose.onNodeWithText("Song details").assertDoesNotExist()
         compose.onNodeWithText("Folder details").assertExists()
         compose.onNodeWithText("Albums").performClick()
-        idleUntil(cond = { compose.onNodeWithContentDescription("Collapse Albums").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithContentDescription("Collapse Albums").isDisplayed() })
         compose.onNodeWithText("deep.flac").assertExists()
         compose.onNodeWithText("deepest.wav").assertExists()
         compose.onNodeWithContentDescription("Collapse Albums").assertExists()
@@ -314,13 +275,14 @@ class FolderDetailPageUiTest {
         // no matter what collapses, and a song row's body still opens the
         // song's profile page.
         compose.onNodeWithText("mango.mp3").performClick()
-        idleUntil(cond = { compose.onNodeWithText("Song details").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithText("Song details").isDisplayed() })
         compose.onNodeWithText("Song details").assertExists()
     }
 
     @Test
     fun collapsingANestedFolderHidesOnlyItsOwnRows_andTheStateSurvivesANavigationRoundTrip() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             when (val s = folderUri.toString()) {
                 WALKIN_TREE -> listOf(
@@ -340,14 +302,14 @@ class FolderDetailPageUiTest {
         addFolder(viewModel, eventsOf(viewModel), "Added 3 songs from the folder.", WALKIN_TREE)
 
         openFolderPage(WALKIN_TREE)
-        waitForText("mango.mp3")
+        compose.waitForText("mango.mp3")
 
         // Collapsing the NESTED folder hides only its own content: the
         // outer folder's direct song stays, and the nested folder's own
         // row (the toggle itself) stays - with the chevron pointing the
         // other way.
         compose.onNodeWithText("Deep").performClick()
-        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
         compose.onNodeWithText("deep.wav").assertDoesNotExist()
         compose.onNodeWithText("mid.flac").assertExists()
         compose.onNodeWithText("Deep").assertExists()
@@ -361,7 +323,7 @@ class FolderDetailPageUiTest {
         openFolderPage(WALKIN_TREE)
         // The re-entered page re-walks the tree (async) - settle on the
         // surviving collapsed state's own affordance before the asserts.
-        idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
+        compose.idleUntil(cond = { compose.onNodeWithContentDescription("Expand Deep").isDisplayed() })
         compose.onNodeWithText("deep.wav").assertDoesNotExist()
         compose.onNodeWithText("mid.flac").assertExists()
         compose.onNodeWithContentDescription("Expand Deep").assertExists()
@@ -369,7 +331,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun songRowsCarryPlayButtonsThatStartJustThatSong() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             when (val s = folderUri.toString()) {
                 WALKIN_TREE -> listOf(
@@ -385,7 +348,7 @@ class FolderDetailPageUiTest {
         addFolder(viewModel, eventsOf(viewModel), "Added 2 songs from the folder.", WALKIN_TREE)
 
         openFolderPage(WALKIN_TREE)
-        waitForText("mango.mp3")
+        compose.waitForText("mango.mp3")
 
         // Every song row - the root's and the nested one - carries its own
         // play button; the subfolder's row (the show/hide toggle) carries
@@ -411,7 +374,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun theCurrentSongRowShowsPause_andTogglesThroughTheService() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             when (val s = folderUri.toString()) {
                 WALKIN_TREE -> listOf(
@@ -424,7 +388,7 @@ class FolderDetailPageUiTest {
         addFolder(viewModel, eventsOf(viewModel), "Added 2 songs from the folder.", WALKIN_TREE)
 
         openFolderPage(WALKIN_TREE)
-        waitForText("mango.mp3")
+        compose.waitForText("mango.mp3")
 
         // Nothing is current: every row shows its play button.
         compose.onNodeWithContentDescription("Play mango.mp3").assertExists()
@@ -436,7 +400,7 @@ class FolderDetailPageUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, currentLabel = "mango.mp3")
         }
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onAllNodesWithContentDescription("Pause mango.mp3").fetchSemanticsNodes().isNotEmpty() },
             message = "the current song's button to turn into pause",
         )
@@ -457,7 +421,7 @@ class FolderDetailPageUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PAUSED, currentLabel = "mango.mp3")
         }
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onAllNodesWithContentDescription("Play mango.mp3").fetchSemanticsNodes().isNotEmpty() },
             message = "the paused song's button to turn back into play",
         )
@@ -470,7 +434,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun thePageSortsItsTreeLevelsWithTheSharedDirectionControl() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         viewModel.folderChildren = { folderUri ->
             when (val s = folderUri.toString()) {
                 WALKIN_TREE -> listOf(
@@ -487,7 +452,7 @@ class FolderDetailPageUiTest {
         addFolder(viewModel, eventsOf(viewModel), "Added 3 songs from the folder.", WALKIN_TREE)
 
         openFolderPage(WALKIN_TREE)
-        waitForText("mango.mp3")
+        compose.waitForText("mango.mp3")
         // The content pane's own sort control, with its per-level caption.
         compose.onNodeWithText("Sort by title").assertExists()
         compose.onNodeWithText("Applies to the folders and the songs at each level below.").assertExists()
@@ -504,13 +469,14 @@ class FolderDetailPageUiTest {
         // The Z-A pick flips the level to the content list's descending
         // order (mango above alpha), and the subfolder still leads.
         compose.onNodeWithText("Z-A").performClick()
-        idleUntil({ topOf("mango.mp3") < topOf("alpha.mp3") })
+        compose.idleUntil({ topOf("mango.mp3") < topOf("alpha.mp3") })
         assertTrue("the subfolder row still comes before the songs", topOf("Albums") < topOf("mango.mp3"))
     }
 
     @Test
     fun thePageShowsAnEmptyStateWhenTheFolderHasNoImportedSongs() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("notes.txt", "c://x/n")))
         addFolder(viewModel, eventsOf(viewModel), "No songs found in that folder.")
 
@@ -524,7 +490,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun thePageShowsTheUnreadableStateWhenTheTreeCanNoLongerBeRead() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         addFolder(viewModel, eventsOf(viewModel), "Added 1 song from the folder.")
 
@@ -539,12 +506,13 @@ class FolderDetailPageUiTest {
 
     @Test
     fun rescanFromThePagePicksUpNewSongsAndRefreshesTheList() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         addFolder(viewModel, eventsOf(viewModel), "Added 1 song from the folder.")
 
         openFolderPage()
-        waitForText("song-a.mp3")
+        compose.waitForText("song-a.mp3")
 
         // The folder gains two songs since the add; a rescan from the page
         // stores them AND refreshes the page's own list.
@@ -555,7 +523,7 @@ class FolderDetailPageUiTest {
         ))
         val events = eventsOf(viewModel)
         compose.onNodeWithContentDescription("Rescan").performClick()
-        idleUntil({ events.any { it == "Added 2 new songs from that folder." } })
+        compose.idleUntil({ events.any { it == "Added 2 new songs from that folder." } })
         compose.waitForIdle()
         compose.onNodeWithText("song-b.mp3").assertExists()
         compose.onNodeWithText("song-c.mp3").assertExists()
@@ -564,7 +532,8 @@ class FolderDetailPageUiTest {
 
     @Test
     fun theDangerZoneDeleteRemovesTheFolderAndItsSongsAndFallsBackToTheContentPane() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a"), file("song-b.mp3", "c://x/b")))
         val events = eventsOf(viewModel)
         addFolder(viewModel, events, "Added 2 songs from the folder.")
@@ -577,7 +546,7 @@ class FolderDetailPageUiTest {
         compose.onNodeWithText("Delete").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Delete").performClick()
-        idleUntil({ viewModel.folderRemovalPreview.value != null })
+        compose.idleUntil({ viewModel.folderRemovalPreview.value != null })
         compose.waitForIdle()
         compose.onNodeWithText("Remove folder?").assertExists()
         compose.onNodeWithText(
@@ -588,19 +557,23 @@ class FolderDetailPageUiTest {
             .assertExists()
         // ...and the confirm removes the folder and its songs.
         viewModel.confirmFolderRemoval()
-        idleUntil({ events.any { it.startsWith("Removed the folder") } })
+        compose.idleUntil({ events.any { it.startsWith("Removed the folder") } })
         assertTrue("the folder row is removed", dbAndGet { app().repository.observeFolders().first() }.isEmpty())
         assertTrue("the imported songs are removed", dbAndGet { app().repository.observeEntries().first() }.isEmpty())
         // The page, left behind by the removal, falls back to the content
-        // pane the folder's row lived in.
-        compose.waitForIdle()
+        // pane the folder's row lived in. The fallback's recomposition
+        // settles through the same async round trip, so wait for the
+        // pane's own empty state (a single idle can read the pre-fallback
+        // frame under load).
+        compose.waitForText("Nothing here yet. Add a song.")
         compose.onNodeWithText("Folder details").assertDoesNotExist()
         compose.onNodeWithText("Nothing here yet. Add a song.").assertIsDisplayed()
     }
 
     @Test
     fun removingTheFolderWhileThePageIsOpenFallsBackToTheContentPane() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         swapTree(viewModel, listOf(file("song-a.mp3", "c://x/a")))
         addFolder(viewModel, eventsOf(viewModel), "Added 1 song from the folder.")
 
@@ -613,7 +586,7 @@ class FolderDetailPageUiTest {
         // the main looper until the fallback lands.)
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         dbAndGet { app().repository.removeFolder(folder, emptySet()) }
-        idleUntil({ compose.onAllNodesWithText("Folder details").fetchSemanticsNodes().isEmpty() })
+        compose.idleUntil({ compose.onAllNodesWithText("Folder details").fetchSemanticsNodes().isEmpty() })
         // The song stays in the content list (the row-level removal was not
         // used), and the folder's row is gone.
         compose.onNodeWithText("song-a.mp3").assertExists()
