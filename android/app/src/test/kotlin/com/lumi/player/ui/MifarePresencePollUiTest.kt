@@ -39,7 +39,7 @@ import org.robolectric.shadows.ShadowLooper
  * the Tag handle delivered by the always-listening foreground-dispatch read
  * is held and, for the active tag, read continuously in the background
  * ([com.lumi.player.nfc.MifarePresencePoller]). Drives the real
- * [MainActivity] under Robolectric and replaces the activity's
+ * [MainActivity] under Robolectric and replaces the presence engine's
  * session-establishment seam with fake readers: a reader that always
  * answers (the tag is still in range) and one that always fails (the tag
  * left). Pins that a confirmed removal (two failed reads) pauses through
@@ -123,27 +123,18 @@ class MifarePresencePollUiTest {
     }
 
     /**
-     * Replaces the activity's session-establishment seam: every tag then
-     * gets [reader] (or no session at all when [reader] is null).
+     * Replaces the presence engine's session-establishment seam: every tag
+     * then gets [reader] (or no session at all when [reader] is null).
      */
     private fun withSessionReader(activity: MainActivity, reader: PresenceReader?) {
-        val field = MainActivity::class.java.getDeclaredField("establishPresenceSession")
-        field.isAccessible = true
-        val factory: (Tag) -> PresenceReader? = { reader }
-        field.set(activity, factory)
+        activity.presenceEngine.establishPresenceSession = { reader }
     }
 
-    private fun presencePollJobOf(activity: MainActivity): Job? {
-        val field = MainActivity::class.java.getDeclaredField("presencePollJob")
-        field.isAccessible = true
-        return field.get(activity) as Job?
-    }
+    private fun presencePollJobOf(activity: MainActivity): Job? =
+        activity.presenceEngine.presencePollJob
 
-    private fun lastSeenAtOf(activity: MainActivity): Long {
-        val field = MainActivity::class.java.getDeclaredField("lastSeenAt")
-        field.isAccessible = true
-        return field.get(activity) as Long
-    }
+    private fun lastSeenAtOf(activity: MainActivity): Long =
+        activity.presenceEngine.lastSeenAt
 
     private val alwaysAbsentReader = PresenceReader { throw IOException("tag out of range") }
     private val alwaysPresentReader = PresenceReader { /* page 0 answered */ }

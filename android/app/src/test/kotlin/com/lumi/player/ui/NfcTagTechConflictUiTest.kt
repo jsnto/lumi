@@ -52,7 +52,7 @@ import org.robolectric.shadows.ShadowLooper
  * (violating "keeps playing while held"), and a removed tag took ~15 s to
  * pause.
  *
- * The fix (see [com.lumi.player.ui.MainActivity]): (1) every session
+ * The fix (see [PresenceFallbackEngine]): (1) every session
  * establisher RELEASES the tag's slot (an unconditional close() on a tech
  * instance of the tag - the framework's close() has no ownership check and
  * resets the tag-level connection state, bytecode-verified) before its own
@@ -70,9 +70,9 @@ import org.robolectric.shadows.ShadowLooper
  * setTechnologyDisconnected), checkConnected, getTagService and transceive
  * DO run. The tests below therefore drive the REAL AOSP method bodies
  * (the exact bytecode the device executes) via reflection for the
- * mechanism tests, and pin the app-level race guard through the activity's
- * session seams with a fake (the Robolectric-runnable shape) for the
- * end-to-end behavior.
+ * mechanism tests, and pin the app-level race guard through the presence
+ * engine's session seams with a fake (the Robolectric-runnable shape) for
+ * the end-to-end behavior.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -209,28 +209,23 @@ class NfcTagTechConflictUiTest {
         }.apply { isAccessible = true }
     }
 
-    private fun presencePollJobOf(activity: MainActivity): kotlinx.coroutines.Job? {
-        val field = MainActivity::class.java.getDeclaredField("presencePollJob")
-        field.isAccessible = true
-        return field.get(activity) as kotlinx.coroutines.Job?
-    }
+    private fun presencePollJobOf(activity: MainActivity): kotlinx.coroutines.Job? =
+        activity.presenceEngine.presencePollJob
 
     /**
-     * Replaces the activity's generic-session seam: every tag then gets
-     * [session], with each establish call counted in [establishes].
+     * Replaces the presence engine's generic-session seam: every tag then
+     * gets [session], with each establish call counted in [establishes].
      */
     private fun withCountingGenericSession(
         activity: MainActivity,
         session: FakeGenericSession,
         establishes: AtomicInteger,
     ) {
-        val field = MainActivity::class.java.getDeclaredField("establishGenericPresenceSession")
-        field.isAccessible = true
         val factory: (Tag) -> GenericPresenceSession? = {
             establishes.incrementAndGet()
             session
         }
-        field.set(activity, factory)
+        activity.presenceEngine.establishGenericPresenceSession = factory
     }
 
     /** A fake tag-tech session whose probe the test can make fail. */

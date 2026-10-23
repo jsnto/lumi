@@ -41,7 +41,8 @@ import org.robolectric.shadows.ShadowLooper
  * ([com.lumi.player.nfc.GenericPresencePoller]) so a non-Mifare tag HELD
  * STATIONARY keeps the presence record fresh instead of false-pausing after
  * the absence window. Drives the real [MainActivity] under Robolectric and
- * replaces the activity's generic-session seam with a fake probe: one that
+ * replaces the presence engine's generic-session seam with a fake probe:
+ * one that
  * keeps answering (the tag is still on the antenna) and one that stops
  * answering (the tag was lifted). Pins that a still-answering tag keeps
  * playing and refreshes the presence record, that a tag that stops answering
@@ -118,27 +119,18 @@ class GenericPresencePollUiTest {
     }
 
     /**
-     * Replaces the activity's generic-session seam: every tag then gets
-     * [session] (or no generic session at all when [session] is null).
+     * Replaces the presence engine's generic-session seam: every tag then
+     * gets [session] (or no generic session at all when [session] is null).
      */
     private fun withGenericSession(activity: MainActivity, session: GenericPresenceSession?) {
-        val field = MainActivity::class.java.getDeclaredField("establishGenericPresenceSession")
-        field.isAccessible = true
-        val factory: (Tag) -> GenericPresenceSession? = { session }
-        field.set(activity, factory)
+        activity.presenceEngine.establishGenericPresenceSession = { session }
     }
 
-    private fun presencePollJobOf(activity: MainActivity): Job? {
-        val field = MainActivity::class.java.getDeclaredField("presencePollJob")
-        field.isAccessible = true
-        return field.get(activity) as Job?
-    }
+    private fun presencePollJobOf(activity: MainActivity): Job? =
+        activity.presenceEngine.presencePollJob
 
-    private fun lastSeenAtOf(activity: MainActivity): Long {
-        val field = MainActivity::class.java.getDeclaredField("lastSeenAt")
-        field.isAccessible = true
-        return field.get(activity) as Long
-    }
+    private fun lastSeenAtOf(activity: MainActivity): Long =
+        activity.presenceEngine.lastSeenAt
 
     /** A fake tag-tech session whose probe the test can make fail. */
     private class FakeGenericSession : GenericPresenceSession {
