@@ -273,7 +273,7 @@ class FolderContentManager(
         val folder = selectedFolder ?: return
         folderSongsJob?.cancel()
         _folderSongs.value = null
-        scope.launch {
+        folderSongsJob = scope.launch {
             val payloads: Set<String>? =
                 folderTreeReader.walkFolderTree("Failed to read the songs of folder ${folder.uri} for the folder page", folder.uri)
                     ?.let { songs -> songs.map { it.uri }.toSet() }
