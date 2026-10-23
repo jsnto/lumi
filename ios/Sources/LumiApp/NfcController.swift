@@ -636,3 +636,80 @@ extension NfcController: NFCNDEFReaderSessionDelegate {
         // absence-timeout fallback's territory).
     }
 }
+
+// MARK: - AppModel: NfcEventListener
+
+// The app model's face for the controller's events (the god-object
+// split's conformance face, in its protocol's file): the events hop to
+// the main actor, and the armed scan's settle - driven by the
+// controller's routing - resolves a registered read to the detail page
+// (or the pending assign) and an unknown read to the registration flow.
+
+extension AppModel: NfcEventListener {
+    nonisolated public func nfcControllerDidDetect(uid: String, payload: LumiTagData?) {
+        Task { @MainActor in
+            self.onTagDetected(uid: uid, payload: payload)
+        }
+    }
+
+    nonisolated public func nfcControllerDidLose(uid: String) {
+        Task { @MainActor in
+            self.onTagLost(uid: uid)
+        }
+    }
+
+    nonisolated public func nfcControllerDidSettleScan(_ outcome: NfcController.ScanOutcome) {
+        Task { @MainActor in
+            self.settleScan(outcome)
+        }
+    }
+
+    nonisolated public func nfcControllerUsabilityChanged(supported: Bool) {
+        Task { @MainActor in
+            self.isNfcSupported = supported
+        }
+    }
+}
+
+private extension AppModel {
+    /// The armed scan's settle (the Android onTagDetected's scan branch,
+    /// driven by the controller's routing): registered -> the detail page
+    /// (or the pending assign), unknown -> the registration flow.
+    func settleScan(_ outcome: NfcController.ScanOutcome) {
+        scanActive = false
+        cardWriteTargetId = nil
+        cardCompareTargetId = nil
+        switch outcome {
+        case let .registeredTag(tag):
+            if let entryId = scanAssignEntryId, let entry = store.entryById(entryId) {
+                // The scan-to-assign: link the pending entry and stay on
+                // the profile (the Android scanAssign registered path).
+                _ = assignEntryToTag(tag: tag, entry: entry)
+                scanAssignEntryId = nil
+                selectedEntryId = entry.id
+            } else {
+                // The scan resolved a registered tag: open its detail
+                // page (the Android pendingTagProfile -> tag detail page
+                // route, consumed in the tags pane).
+                scannedTagId = tag.id
+                uiEvent("Found \(tag.name).")
+            }
+        case let .unknownTag(uid, payload, memory):
+            // The naming prefill: the card's own payload name, else the
+            // per-card memory's name (the Android capture prefill).
+            var prefill = ""
+            var songs: [String] = []
+            if let payload {
+                prefill = payload.name
+                songs = payload.songs
+            }
+            if prefill.isEmpty { prefill = memory?.name ?? "" }
+            if songs.isEmpty { songs = memory?.songs ?? [] }
+            capture = CaptureState(uid: uid, name: prefill, restoreSongs: songs)
+        case let .cardWrite(message):
+            uiEvent(message)
+        case let .cardCompare(message):
+            uiEvent(message)
+        }
+    }
+}
