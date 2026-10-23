@@ -696,7 +696,7 @@ internal fun SettingsScreen(
  * confirmation says so plainly: the folder row is still removed, and the
  * songs that can no longer be identified stay.
  */
-private fun folderRemovalText(preview: LumiViewModel.FolderRemovalPreview): String {
+private fun folderRemovalText(preview: FolderContentManager.FolderRemovalPreview): String {
     val label = preview.folder.label
     return when (val count = preview.songCount) {
         null -> "That folder's songs can no longer be read, so the songs imported from it can't be identified and will stay in the content list. “$label” will be removed from the folder list. The music files themselves stay on the phone."
