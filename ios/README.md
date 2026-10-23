@@ -114,12 +114,31 @@ ios/
     FolderScan.swift       the folder walk (pre-order, audio extensions,
                            rescan diff, the self-listing-folder guard)
   Sources/LumiApp/         the iOS-only app (SwiftUI + AVFoundation + CoreNFC)
-    AppModel.swift         the orchestration (the Android view-model port)
+    AppModel.swift         the orchestration (the Android view-model port):
+                           the published state, the playback commands, the
+                           scan/registration flow, and the thin same-named
+                           delegates onto the four managers below
+    SettingsModel.swift    the stored settings (the settings table's keys,
+                           the tolerant reads, the writes, the
+                           remembered-positions write flow)
+    FolderContentManager.swift  the content: files and folders (the add /
+                           rescan / removal / backfill, the play-url grant,
+                           the content list's views)
+    TagLinkManager.swift   the tag song management (the per-song link /
+                           unlink / reorder + the profile's assign-to-tag)
+    LoudnessOrchestrator.swift  the loudness normalization orchestration
+                           (the "Normalize now" pass, the on-add
+                           measurements, the single measurement slot)
+    FileStore.swift        the default store (the JSON document in
+                           Application Support)
     PlaybackEngine.swift   AVAudioEngine + the player node + the loudness
                            sink node (the gain + limiter on the delivery
                            path) + the session + the bad-file loop guard
+                           (+ the app model's engine-delegate face and the
+                           entry's playable-audio helper)
     LoudnessMeasurer.swift the decode-speed loudness read (AVAssetReader)
     NfcController.swift    the always-listening reader + presence monitor
+                           (+ the app model's NFC event-sink face)
     FolderAccess.swift     security-scoped bookmarks + the folder children
     MetadataReader.swift   the best-effort file metadata read
     LumiApp.swift          the @main app + navigation + the wizard gate

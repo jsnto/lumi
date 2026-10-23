@@ -729,3 +729,59 @@ final class LoudnessSampleProcessor {
         }
     }
 }
+
+// MARK: - entry helpers
+
+extension Entry {
+    /// Whether the entry is playable audio (the app is audio-only; a
+    /// non-audio entry is skipped by the player, the Android app's
+    /// loadCurrent skip).
+    public func typeIsAudio() -> Bool {
+        // The payload is a file path; the supported-audio extension is the
+        // type discriminator (the Android app's AUDIO type, ported as the
+        // extension check at the player boundary).
+        let last = payload.lastPathComponent
+        guard let dot = last.lastIndex(of: ".") else { return false }
+        let ext = last[last.index(after: dot)...]
+        return supportedAudioExtensions.contains(ext.lowercased())
+    }
+}
+
+// MARK: - AppModel: PlaybackEngineDelegate
+
+// The app model's face for the engine's events (the god-object split's
+// conformance face, in its protocol's file): the stop clears the
+// policy's active tag, and the position save lands through the store
+// with the app's remembered-positions capacity, live.
+
+extension AppModel: PlaybackEngineDelegate {
+    nonisolated public func playbackEngineDidStop() {
+        Task { @MainActor in
+            self.policy.onPlaybackStopped()
+            self.nfc.seedWatchedTag(uid: nil)
+        }
+    }
+
+    nonisolated public func playbackEngineSavePosition(
+        tagUid: String,
+        positionMs: Int64,
+        entryIndex: Int,
+        queueFingerprint: String,
+    ) {
+        Task { @MainActor in
+            self.store.remember(
+                TagPosition(
+                    tagUid: tagUid,
+                    positionMs: positionMs,
+                    entryIndex: entryIndex,
+                    queueFingerprint: queueFingerprint,
+                    lastPlayedAt: Int64(Date().timeIntervalSince1970 * 1000),
+                ),
+                // The app's remembered-positions setting, live (a step on
+                // the Advanced options page changes the LRU capacity at
+                // the next saved position).
+                capacity: self.rememberedPositions,
+            )
+        }
+    }
+}
