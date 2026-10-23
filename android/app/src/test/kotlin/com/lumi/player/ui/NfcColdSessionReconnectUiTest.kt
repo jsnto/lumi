@@ -123,22 +123,15 @@ class NfcColdSessionReconnectUiTest {
     }
 
     private fun withPresenceSessionFactory(activity: MainActivity, factory: (Tag) -> PresenceReader?) {
-        val field = MainActivity::class.java.getDeclaredField("establishPresenceSession")
-        field.isAccessible = true
-        field.set(activity, factory)
+        activity.presenceEngine.establishPresenceSession = factory
     }
 
     private fun withGenericSessionFactory(activity: MainActivity, factory: (Tag) -> GenericPresenceSession?) {
-        val field = MainActivity::class.java.getDeclaredField("establishGenericPresenceSession")
-        field.isAccessible = true
-        field.set(activity, factory)
+        activity.presenceEngine.establishGenericPresenceSession = factory
     }
 
-    private fun presencePollJobOf(activity: MainActivity): kotlinx.coroutines.Job? {
-        val field = MainActivity::class.java.getDeclaredField("presencePollJob")
-        field.isAccessible = true
-        return field.get(activity) as kotlinx.coroutines.Job?
-    }
+    private fun presencePollJobOf(activity: MainActivity): kotlinx.coroutines.Job? =
+        activity.presenceEngine.presencePollJob
 
     /** A session that is cold from the start: every read fails. */
     private val coldReader = PresenceReader { throw IOException("session cold (tag out of RF range?)") }
