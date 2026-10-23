@@ -37,10 +37,7 @@ import com.lumi.player.ui.testutil.waitForText
 import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.dbAndGet
 import com.lumi.player.ui.testutil.viewModelOf
-import com.lumi.player.ui.testutil.setupMainActivity
-import com.lumi.player.ui.testutil.clickSettings
-import com.lumi.player.ui.testutil.clickMenuRow
-import com.lumi.player.ui.testutil.clickTagRow
+import com.lumi.player.ui.testutil.openTagPage
 
 /**
  * Behavioral coverage for the per-tag page: tapping a tag row in the NFC
@@ -93,15 +90,6 @@ class TagDetailPageUiTest {
     private fun tagLinks(tagId: Long): List<TagSongRow> =
         dbAndGet { app().repository.entriesForTag(tagId) }
 
-    /** Opens settings, the NFC tags pane, and then the [name] tag's page. */
-    private fun openTagPage(name: String): MainActivity {
-        val activity = compose.setupMainActivity().get()
-        compose.clickSettings()
-        compose.clickMenuRow("NFC tags")
-        compose.clickTagRow(name)
-        return activity
-    }
-
     /**
      * The activity-result launch keys through the settings screen's
      * pickers (the activity's only launchers): the in-app add-song flow
@@ -131,7 +119,7 @@ class TagDetailPageUiTest {
             true
         }
 
-        openTagPage("Bunny")
+        compose.openTagPage("Bunny")
 
         // The page's details section names the tag and shows its UID.
         compose.onNodeWithText("Tag details").assertIsDisplayed()
@@ -175,7 +163,7 @@ class TagDetailPageUiTest {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -235,7 +223,7 @@ class TagDetailPageUiTest {
             app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -292,7 +280,7 @@ class TagDetailPageUiTest {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -330,7 +318,7 @@ class TagDetailPageUiTest {
         val tagId = dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
         dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -372,7 +360,7 @@ class TagDetailPageUiTest {
         }
         dbAndGet { listOf(firstId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -420,7 +408,7 @@ class TagDetailPageUiTest {
             app().repository.addEntry(EntryType.AUDIO, "First song", "content://first-dup").id
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -465,7 +453,7 @@ class TagDetailPageUiTest {
             true
         }
 
-        openTagPage("Porch")
+        compose.openTagPage("Porch")
 
         // The danger zone states the effect before the delete: the tag and
         // its links go, the songs stay in the content list.
@@ -513,7 +501,7 @@ class TagDetailPageUiTest {
         val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
         dbAndGet { listOf(firstId, secondId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Second song")
@@ -566,7 +554,7 @@ class TagDetailPageUiTest {
             true
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
@@ -654,7 +642,7 @@ class TagDetailPageUiTest {
             true
         }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
@@ -733,7 +721,7 @@ class TagDetailPageUiTest {
         val onlyId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Only song", "content://only").id }
         dbAndGet { listOf(onlyId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Only song")
@@ -758,7 +746,7 @@ class TagDetailPageUiTest {
     fun systemBackFromTheTagPageReturnsToTheTagsListAndOnlyThenTheMenu() {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         compose.waitForText("Tag details")
 
         // The page is a child of the NFC tags pane, so the screen's
@@ -790,7 +778,7 @@ class TagDetailPageUiTest {
     @Test
     fun editActionOpensTheEditDialogAndSavingUpdatesTheDisplayedName() {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val field = MainActivity::class.java.getDeclaredField("viewModel")
         field.isAccessible = true
         val viewModel = field.get(activity) as LumiViewModel
@@ -837,7 +825,7 @@ class TagDetailPageUiTest {
         val first = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first") }
         val second = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second") }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
@@ -871,7 +859,7 @@ class TagDetailPageUiTest {
         val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
@@ -938,7 +926,7 @@ class TagDetailPageUiTest {
         val secondId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second").id }
         dbAndGet { listOf(firstId, secondId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Second song")
@@ -977,7 +965,7 @@ class TagDetailPageUiTest {
         val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
         compose.waitForIdle()
@@ -1023,7 +1011,7 @@ class TagDetailPageUiTest {
         val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
         compose.waitForIdle()
@@ -1064,7 +1052,7 @@ class TagDetailPageUiTest {
         val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
         compose.waitForIdle()
@@ -1103,7 +1091,7 @@ class TagDetailPageUiTest {
         val thirdId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third").id }
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
         compose.waitForText("Third song")
@@ -1202,7 +1190,7 @@ class TagDetailPageUiTest {
         val third = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Third song", "content://third") }
         dbAndGet { listOf(first.id, second.id).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }

@@ -66,29 +66,14 @@ class SettingsBackNavUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    /** Opens the settings menu from the player screen (the Settings chip). */
-    private fun openSettings(): MainActivity {
-        return compose.openSettings()
-    }
-
     private fun systemBack(activity: MainActivity) {
         activity.onBackPressedDispatcher.onBackPressed()
         compose.waitForIdle()
     }
 
-    /** Opens the registered tag's detail page (settings, NFC tags, the tag's row). */
-    private fun openTagPage(name: String): MainActivity {
-        return compose.openTagPage(name)
-    }
-
-    /** Opens the folder's detail page (settings, content, the folder's row). */
-    private fun openFolderPage(label: String): MainActivity {
-        return compose.openFolderPage(label)
-    }
-
     @Test
     fun menuScrollPositionSurvivesLeavingForASubScreen() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
         // On the short screen the menu list overflows: scroll it down until
         // the footer (and thus the bottom rows) is visible and the leading
@@ -127,7 +112,7 @@ class SettingsBackNavUiTest {
 
     @Test
     fun systemBackUnwindsTheSubScreenAndOnlyThenTheMenu() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
 
         // Open the tags sub-screen from the (top) of the menu (the menu
         // overflows the small test screen, so scroll the row into view
@@ -162,7 +147,7 @@ class SettingsBackNavUiTest {
     fun systemBackFromTheTagDetailPageUnwindsToTheTagsListAndOnlyThenTheMenu() {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
 
-        val activity = openTagPage("Porch")
+        val activity = compose.openTagPage("Porch")
         // The detail page is showing.
         compose.waitForText("Tag details")
 
@@ -190,7 +175,7 @@ class SettingsBackNavUiTest {
     fun theInPaneBackArrowFromTheTagDetailPageLandsOnTheTagsList() {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
 
-        openTagPage("Porch")
+        compose.openTagPage("Porch")
         compose.waitForText("Tag details")
 
         // The pane's own back arrow (the top bar) lands on the NFC tags
@@ -210,7 +195,7 @@ class SettingsBackNavUiTest {
     fun systemBackFromTheFolderDetailPageUnwindsToTheContentPaneAndOnlyThenTheMenu() {
         dbAndGet { app().repository.rememberFolder(FOLDER_URI, "Music") }
 
-        val activity = openFolderPage("Music")
+        val activity = compose.openFolderPage("Music")
         // The detail page is showing.
         compose.waitForText("Folder details")
 
@@ -242,7 +227,7 @@ class SettingsBackNavUiTest {
     fun theInPaneBackArrowFromTheFolderDetailPageLandsOnTheContentPane() {
         dbAndGet { app().repository.rememberFolder(FOLDER_URI, "Music") }
 
-        openFolderPage("Music")
+        compose.openFolderPage("Music")
         compose.waitForText("Folder details")
 
         // The pane's own back arrow (the top bar) lands on the content
@@ -330,7 +315,7 @@ class SettingsBackNavUiTest {
     fun systemBackFromASongOpenedInTheContentPaneUnwindsToTheContentPane() {
         dbAndGet { app().repository.addEntryUnique(EntryType.AUDIO, "Individual song", "content://docs/solo") }
 
-        val activity = openSettings()
+        val activity = compose.openSettings()
         compose.onNodeWithText("Content").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()

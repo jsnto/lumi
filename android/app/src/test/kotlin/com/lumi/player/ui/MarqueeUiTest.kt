@@ -20,6 +20,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.idleUntil
 import com.lumi.player.ui.testutil.dbAndGet
 import com.lumi.player.ui.testutil.openContentPane
@@ -63,9 +64,6 @@ class MarqueeUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
     }
-
-    private fun app(): LumiApp =
-        androidx.test.core.app.ApplicationProvider.getApplicationContext()
 
     private fun storeSongs(vararg labels: String) {
         dbAndGet {

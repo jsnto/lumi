@@ -18,7 +18,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -27,7 +26,6 @@ import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
 import com.lumi.player.ui.testutil.idleUntil
 import com.lumi.player.ui.testutil.waitForText
-import com.lumi.player.ui.testutil.syntheticTag
 import com.lumi.player.ui.testutil.sendTagWithUid
 import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.viewModelOf

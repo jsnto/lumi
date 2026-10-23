@@ -27,7 +27,6 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import com.lumi.player.ui.testutil.idleUntil
 import com.lumi.player.ui.testutil.waitForText
-import com.lumi.player.ui.testutil.syntheticTag
 import com.lumi.player.ui.testutil.sendTagWithUid
 import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.dbAndGet

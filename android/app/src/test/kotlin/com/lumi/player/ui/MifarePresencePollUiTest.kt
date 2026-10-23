@@ -30,7 +30,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
-import com.lumi.player.ui.testutil.syntheticTag
 import com.lumi.player.ui.testutil.sendTagWithUid
 import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.setupMainActivity
@@ -67,12 +66,6 @@ class MifarePresencePollUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
     }
 
     /**

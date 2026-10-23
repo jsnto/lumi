@@ -35,11 +35,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.viewModelOf
 import com.lumi.player.ui.testutil.openSettings
 import com.lumi.player.ui.testutil.clickMenuRow
@@ -125,8 +125,6 @@ class ThemeModeUiTest {
         }
         return checkNotNull(captured) { "the theme probe must compose" }
     }
-
-    private fun app(): LumiApp = RuntimeEnvironment.getApplication() as LumiApp
 
     /**
      * Seeds a raw, un-sanitized value directly into the settings table,

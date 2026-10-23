@@ -14,7 +14,6 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.AutoLockDelay
 import com.lumi.player.data.SettingsEntity
@@ -36,6 +35,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.TimeUnit
+import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.dbAndGet
 import com.lumi.player.ui.testutil.viewModelOf
 import com.lumi.player.ui.testutil.openSettings
@@ -132,9 +132,6 @@ class AutoLockUiTest {
         PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
         ShadowLooper.idleMainLooper()
     }
-
-    private fun app(): LumiApp =
-        ApplicationProvider.getApplicationContext<LumiApp>()
 
     // ---- the menu and the moved rows ----
 
