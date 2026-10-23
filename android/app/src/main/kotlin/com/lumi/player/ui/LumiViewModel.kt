@@ -71,8 +71,9 @@ import kotlinx.coroutines.withTimeout
  * constructed here - [settings], [loudnessOrchestrator],
  * [folderContentManager], [tagLinkManager], [nfcCoordinator], and
  * [autoLockEngine] - through same-named surfaces, so the UI and the test
- * suite never touch the collaborators directly (each collaborator's own
- * KDoc carries the behavior details).
+ * suite never call a collaborator directly (the UI only names the folder
+ * manager's nested state types) - each collaborator's own KDoc carries
+ * the behavior details.
  */
 class LumiViewModel(
     private val context: Context,

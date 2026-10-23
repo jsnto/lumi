@@ -32,7 +32,8 @@ import kotlinx.coroutines.withContext
  * provider's tree-scoped listing seam), whose [folderChildren] seam unit
  * tests replace through the view model's same-named delegate. The
  * [LumiViewModel] keeps same-named delegates for every surface here, so
- * the UI and the test suite never touch this class directly.
+ * the UI and the test suite never call this class directly (the UI names
+ * the nested state types, but never constructs or calls the class).
  */
 class FolderContentManager(
     private val context: Context,
