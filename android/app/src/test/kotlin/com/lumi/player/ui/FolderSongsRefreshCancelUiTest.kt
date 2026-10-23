@@ -1,14 +1,12 @@
 package com.lumi.player.ui
 
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -16,10 +14,13 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
+import com.lumi.player.ui.testutil.idleUntil
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
 
 /**
  * Regression coverage for the folder page's in-flight walk capture
@@ -63,28 +64,6 @@ class FolderSongsRefreshCancelUiTest {
         markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
-    }
-
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    /** Pumps the (paused) main looper until [cond] or the deadline. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 10_000): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            if (cond()) return true
-            Thread.sleep(10)
-        }
-        ShadowLooper.idleMainLooper()
-        return cond()
     }
 
     @Test
@@ -142,19 +121,25 @@ class FolderSongsRefreshCancelUiTest {
         // Walk W1 starts on the first selection and parks on its root
         // listing (the folder page's song list is in flight).
         viewModel.selectFolder(folder)
-        assertTrue("the first walk must reach its (held) root listing", idleUntil({ w1Blocked.get() }))
+        compose.idleUntil(
+            { w1Blocked.get() },
+            message = "the first walk to reach its (held) root listing",
+        )
 
         // The user re-selects the same folder (the page's re-entry / a
         // rescan's refresh): the in-flight walk is cancelled and a fresh
         // walk starts.
         viewModel.selectFolder(folder)
-        assertTrue("the second walk must reach its (held) root listing", idleUntil({ w2Blocked.get() }))
+        compose.idleUntil(
+            { w2Blocked.get() },
+            message = "the second walk to reach its (held) root listing",
+        )
 
         // The newer walk settles first, with both songs.
         w2Release.countDown()
-        assertTrue(
-            "the re-selected walk settles with the newer song set",
-            idleUntil({ viewModel.folderSongs.value?.entries?.map { it.label }?.toSet() == setOf("song-a.mp3", "song-b.mp3") }),
+        compose.idleUntil(
+            { viewModel.folderSongs.value?.entries?.map { it.label }?.toSet() == setOf("song-a.mp3", "song-b.mp3") },
+            message = "the re-selected walk to settle with the newer song set",
         )
 
         // Only now does the first walk's last listing return - with the

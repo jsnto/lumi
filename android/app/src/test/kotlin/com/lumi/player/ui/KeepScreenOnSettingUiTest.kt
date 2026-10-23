@@ -24,6 +24,8 @@ import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.openAdvancedPage
 
 /**
  * Verifies the keep-screen-on settings checkbox on the Advanced options
@@ -57,31 +59,10 @@ class KeepScreenOnSettingUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun openAdvancedPage(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     /** The Advanced options page's keep-screen-on checkbox node in a given state. */
     private fun checkboxIn(state: ToggleableState): SemanticsMatcher =
         SemanticsMatcher.expectValue(SemanticsProperties.TestTag, "keep-screen-on")
             .and(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, state))
-
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
-    }
 
     /** Waits for the asynchronous Room round trip to make the setting observable. */
     private fun awaitKeepScreenOn(activity: MainActivity, expected: Boolean) {
@@ -95,7 +76,7 @@ class KeepScreenOnSettingUiTest {
 
     @Test
     fun advancedPageShowsKeepScreenOnUncheckedByDefault() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
 
         compose.onNodeWithText("Keep screen on").assertIsDisplayed()
         compose.onNodeWithText("Keep the display on while the app is open.").assertExists()
@@ -115,7 +96,7 @@ class KeepScreenOnSettingUiTest {
 
     @Test
     fun checkingTheCheckboxPersistsTheSetting() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
 
         compose.onNode(checkboxIn(ToggleableState.Off)).performClick()
         // The click drives the view model, which persists to the database;
@@ -129,7 +110,7 @@ class KeepScreenOnSettingUiTest {
 
     @Test
     fun uncheckingTheCheckboxRestoresTheDefault() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
 
         // Check it, then uncheck it: the choice persists as off again.
         compose.onNode(checkboxIn(ToggleableState.Off)).performClick()

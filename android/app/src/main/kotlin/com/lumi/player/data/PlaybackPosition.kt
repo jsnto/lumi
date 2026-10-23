@@ -3,7 +3,7 @@ package com.lumi.player.data
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.withTransaction
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 
 /** Default number of tags whose last played position is remembered (LRU). */
 const val MAX_REMEMBERED_TAGS = 3

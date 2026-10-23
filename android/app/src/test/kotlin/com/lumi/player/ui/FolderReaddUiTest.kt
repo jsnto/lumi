@@ -11,12 +11,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -29,7 +27,12 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowContentResolver
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * Drives the captain's on-device sequence for a folder that already contains
@@ -69,8 +72,6 @@ class FolderReaddUiTest {
         ShadowContentResolver.registerProviderInternal("docs", FakeDocumentsProvider())
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
     private var activityController: ActivityController<MainActivity> = buildActivity(MainActivity::class.java)
 
     /** Whether [activityController]'s activity has been created (and its view model with it). */
@@ -89,14 +90,9 @@ class FolderReaddUiTest {
                 activityCreated = true
                 activityController.get()
             }
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
+        compose.clickSettings()
+        compose.clickMenuRow("Content")
+        return viewModelOf(activity)
     }
 
     /** Simulates reopening the app: a fresh, created activity (so the view model's init runs - including the backfill - and a fresh view model), the same database. */
@@ -104,23 +100,6 @@ class FolderReaddUiTest {
         activityController.destroy()
         activityController = buildActivity(MainActivity::class.java).setup()
         activityCreated = true
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the operation to settle" }
     }
 
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
@@ -138,7 +117,7 @@ class FolderReaddUiTest {
         val viewModel1 = openContentPane()
         val events1 = eventsOf(viewModel1)
         viewModel1.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events1.any { it == "Added 2 songs from the folder." } })
+        compose.idleUntil({ events1.any { it == "Added 2 songs from the folder." } })
 
         val stored1 = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -173,7 +152,7 @@ class FolderReaddUiTest {
         compose.onNodeWithText("Music").performClick()
         compose.waitForIdle()
         // The page's song list settles after the folder's walk (async).
-        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
+        compose.idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
         assertTrue(
             "the first song is visible on the folder's page after the reopen",
             compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty(),
@@ -192,12 +171,12 @@ class FolderReaddUiTest {
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         assertEquals("the remembered folder kept its tree uri", TREE_URI, folder.uri)
         viewModel2.rescanFolder(folder)
-        idleUntil({ events2.any { it == "Nothing new in that folder." } })
+        compose.idleUntil({ events2.any { it == "Nothing new in that folder." } })
 
         // Re-add (re-pick) the already-known folder: every song is already
         // stored, so nothing is duplicated - and nothing is lost.
         viewModel2.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events2.any { it == "All 2 songs from the folder are already in your content list." } })
+        compose.idleUntil({ events2.any { it == "All 2 songs from the folder are already in your content list." } })
 
         val stored2 = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -211,7 +190,7 @@ class FolderReaddUiTest {
         compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
         compose.onNodeWithText("Music").performClick()
         compose.waitForIdle()
-        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
+        compose.idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
         assertTrue(
             "the songs are still visible on the folder's page after rescan + re-add",
             compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() &&
@@ -236,7 +215,7 @@ class FolderReaddUiTest {
         ShadowContentResolver.registerProviderInternal("docs", ThrowingTreeProvider())
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Couldn't read that folder's songs." } })
+        compose.idleUntil({ events.any { it == "Couldn't read that folder's songs." } })
 
         val folders = dbAndGet { app().repository.observeFolders().first() }
         assertEquals("the folder is still remembered for rescans", 1, folders.size)
@@ -269,7 +248,7 @@ class FolderReaddUiTest {
         ShadowContentResolver.registerProviderInternal("docs", FakeDocumentsProvider())
         reopenApp()
 
-        idleUntil({
+        compose.idleUntil({
             dbAndGet { app().repository.entriesByPayloads(setOf(TRACK_PAYLOAD, DEEP_PAYLOAD)) }
                 .all { it.folderId != null }
         })
@@ -290,7 +269,7 @@ class FolderReaddUiTest {
         compose.onNodeWithText("Nothing here yet. Add a song.").assertExists()
         compose.onNodeWithText("Music").performClick()
         compose.waitForIdle()
-        idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
+        compose.idleUntil({ compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() })
         assertTrue(
             "the folder's page lists both backfilled songs",
             compose.onAllNodesWithText("track 01.mp3").fetchSemanticsNodes().isNotEmpty() &&

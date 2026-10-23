@@ -15,7 +15,6 @@ import com.lumi.player.data.FolderChild
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Before
@@ -29,6 +28,9 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The first-time setup wizard: a fresh install (cleared app data - a fresh
@@ -69,39 +71,6 @@ class SetupWizardUiTest {
     private fun startMainActivity(): ActivityController<MainActivity> =
         Robolectric.buildActivity(MainActivity::class.java).setup()
 
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the wizard to settle" }
-    }
-
-    /**
-     * Polls [text] in with a looper pump: the wizard's finish persists the
-     * completion through a Room write (Room's background executor, outside
-     * [waitForIdle]), and only the store's emission flips the gate from the
-     * wizard to the app - the swap lands a frame or two after the click.
-     */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
-        idleUntil({
-            try {
-                compose.onNodeWithText(text).assertExists()
-                true
-            } catch (e: AssertionError) {
-                false
-            }
-        }, timeoutMs)
-    }
-
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
@@ -121,7 +90,7 @@ class SetupWizardUiTest {
             } else emptyList()
         }
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it.startsWith("Added") } })
+        compose.idleUntil({ events.any { it.startsWith("Added") } })
     }
 
     /** Walks welcome -> music -> (folder imported) -> the music step's Next. */
@@ -185,7 +154,7 @@ class SetupWizardUiTest {
         // completion's Room write + the gate's flip land a frame or two
         // after the click - poll with the pump).
         compose.onNodeWithText("Open lumi").performClick()
-        waitForText("Tap a tag to start!")
+        compose.waitForText("Tap a tag to start!")
         compose.onNodeWithText("Tap a tag to start!").assertIsDisplayed()
         compose.onNodeWithText("You're all set!").assertDoesNotExist()
 
@@ -193,7 +162,7 @@ class SetupWizardUiTest {
         // straight to the player (no wizard).
         controller.destroy()
         Robolectric.buildActivity(MainActivity::class.java).setup()
-        waitForText("Tap a tag to start!")
+        compose.waitForText("Tap a tag to start!")
         compose.onNodeWithText("Tap a tag to start!").assertIsDisplayed()
         compose.onNodeWithText("Welcome to lumi").assertDoesNotExist()
     }
@@ -213,7 +182,7 @@ class SetupWizardUiTest {
         // step (the view model outlives the recreation) instead of
         // restarting at the welcome.
         controller.recreate()
-        waitForText("Play with a tag")
+        compose.waitForText("Play with a tag")
         compose.onNodeWithText("Play with a tag").assertIsDisplayed()
         compose.onNodeWithText("Welcome to lumi").assertDoesNotExist()
     }
@@ -231,7 +200,7 @@ class SetupWizardUiTest {
         // deep-linked to the NFC tags pane (where the tag is scanned) -
         // the swap lands a frame or two after the click (see waitForText).
         compose.onNodeWithText("Set up now").performClick()
-        waitForText("Scan NFC")
+        compose.waitForText("Scan NFC")
         compose.onNodeWithText("Scan NFC").assertIsDisplayed()
         compose.onNodeWithText("Play with a tag").assertDoesNotExist()
 
@@ -240,7 +209,7 @@ class SetupWizardUiTest {
         // the player before the first frame).
         controller.destroy()
         Robolectric.buildActivity(MainActivity::class.java).setup()
-        waitForText("Tap a tag to start!")
+        compose.waitForText("Tap a tag to start!")
         compose.onNodeWithText("Welcome to lumi").assertDoesNotExist()
         compose.onNodeWithText("Tap a tag to start!").assertIsDisplayed()
     }
@@ -258,7 +227,7 @@ class SetupWizardUiTest {
         // tags pane (the swap lands a frame or two after the click - see
         // waitForText).
         compose.onNodeWithText("Set up now").performClick()
-        waitForText("Scan NFC")
+        compose.waitForText("Scan NFC")
         compose.onNodeWithText("Scan NFC").assertIsDisplayed()
 
         // Exit the way the system back does: the tags pane unwinds to the

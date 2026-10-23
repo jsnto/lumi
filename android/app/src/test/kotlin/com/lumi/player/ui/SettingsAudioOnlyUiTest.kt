@@ -25,6 +25,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.openSettings
 
 /**
  * Behavioral tests for the audio-only settings change: the "Add content"
@@ -50,15 +51,6 @@ class SettingsAudioOnlyUiTest {
         markSetupCompleteForTests()
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
-    }
-
-    private fun openSettings(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        return activity
     }
 
     private class SettingsHostActivity : androidx.activity.ComponentActivity() {
@@ -174,7 +166,7 @@ class SettingsAudioOnlyUiTest {
         thread.start()
         thread.join()
         ShadowLooper.idleMainLooper()
-        openSettings()
+        compose.openSettings()
 
         // Open the Content configuration from its menu button.
         compose.onNodeWithText("Content").performClick()

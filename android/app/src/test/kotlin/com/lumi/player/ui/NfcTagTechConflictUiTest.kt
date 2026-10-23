@@ -2,11 +2,9 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareUltralight
 import android.nfc.tech.NfcA
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
@@ -32,9 +30,16 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
+import com.lumi.player.ui.testutil.TECH_IODEP
+import com.lumi.player.ui.testutil.TECH_MIFARE_ULTRALIGHT
+import com.lumi.player.ui.testutil.TECH_NFCA
+import com.lumi.player.ui.testutil.connectedTechnologySlotOf
+import com.lumi.player.ui.testutil.sendTag
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Coverage for the tag-tech single-connection-slot conflict that kept the
@@ -94,14 +99,6 @@ class NfcTagTechConflictUiTest {
         PlayerStateHolder.update { PlayerUiState() }
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
     /**
      * A controllable INfcTag binder. connect/reconnect succeed while the
      * tag is in the field (status 0 = success); transceive answers with a
@@ -153,44 +150,17 @@ class NfcTagTechConflictUiTest {
         mifare: Boolean,
         occupiedBy: Int,
         binder: TagBinder,
-    ): Tag {
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tag = ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            if (mifare) intArrayOf(TECH_NFCA, TECH_MIFARE_UL) else intArrayOf(TECH_NFCA, TECH_IODEP),
-            arrayOf(
+    ): Tag =
+        com.lumi.player.ui.testutil.syntheticTag(
+            uid = uid,
+            techs = if (mifare) intArrayOf(TECH_NFCA, TECH_MIFARE_ULTRALIGHT) else intArrayOf(TECH_NFCA, TECH_IODEP),
+            techExtras = arrayOf(
                 android.os.Bundle().apply { putShort("sak", 0) },
                 android.os.Bundle(),
             ),
-            0,
-            0L,
-            binder.proxy,
-        ) as Tag
-        if (occupiedBy >= 0) {
-            // The real framework (loaded by Robolectric at runtime) exposes
-            // the tag's single connection slot; the stub SDK does not, so
-            // occupy it reflectively.
-            tag.javaClass.getDeclaredMethod(
-                "setConnectedTechnology",
-                Int::class.javaPrimitiveType!!,
-            ).invoke(tag, occupiedBy)
-        }
-        return tag
-    }
-
-    private fun slotOf(tag: Tag): Int =
-        tag.javaClass.getDeclaredMethod("getConnectedTechnology").invoke(tag) as Int
+            tagService = binder.proxy,
+            occupiedBy = occupiedBy,
+        )
 
     /**
      * The REAL AOSP method body of a [android.nfc.tech.BasicTagTechnology]
@@ -246,9 +216,13 @@ class NfcTagTechConflictUiTest {
      * activity itself, arriving as onNewIntent.
      */
     private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        val tag = syntheticTag(uid, mifare = false, occupiedBy = -1, TagBinder())
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tag))
-        compose.waitForIdle()
+        // This class's delivery is the NTAG215 shape (no Mifare tech, the
+        // NFC stack's own connection holding the slot is the point of the
+        // test): a fresh binder-backed tag with no pre-occupied slot.
+        compose.sendTag(
+            controller,
+            syntheticTag(uid, mifare = false, occupiedBy = -1, TagBinder()),
+        )
     }
 
     /**
@@ -320,7 +294,7 @@ class NfcTagTechConflictUiTest {
             assertEquals(
                 "the refused connect must not take the slot",
                 TECH_IODEP,
-                slotOf(mifareTag),
+                connectedTechnologySlotOf(mifareTag),
             )
         }
         // Same for the NfcA tech (the NTAG215 shape): the device log showed
@@ -328,7 +302,7 @@ class NfcTagTechConflictUiTest {
         val nfcATag = syntheticTag(
             UID_ON_DEVICE,
             mifare = false,
-            occupiedBy = TECH_MIFARE_UL,
+            occupiedBy = TECH_MIFARE_ULTRALIGHT,
             TagBinder(),
         )
         val nfca = NfcA.get(nfcATag)
@@ -370,14 +344,14 @@ class NfcTagTechConflictUiTest {
             "close() on any tech instance of the tag must release the " +
                 "tag-level slot (the fix's release step)",
             -1,
-            slotOf(tag),
+            connectedTechnologySlotOf(tag),
         )
         // The app's own connect then takes the slot, and the session reads.
         realBody("connect").invoke(nfca)
         assertEquals(
             "the app's connect must acquire the released slot",
             TECH_NFCA,
-            slotOf(tag),
+            connectedTechnologySlotOf(tag),
         )
         val page = nfca.transceive(byteArrayOf(0x93.toByte(), 0x20.toByte()))
         assertEquals(
@@ -399,19 +373,19 @@ class NfcTagTechConflictUiTest {
             "setConnectedTechnology",
             Int::class.javaPrimitiveType!!,
         )
-        assertEquals("a fresh tag's slot is unconnected", -1, slotOf(tag))
-        assertTrue("the first holder takes the slot", set.invoke(tag, TECH_MIFARE_UL) as Boolean)
-        assertEquals(TECH_MIFARE_UL, slotOf(tag))
+        assertEquals("a fresh tag's slot is unconnected", -1, connectedTechnologySlotOf(tag))
+        assertTrue("the first holder takes the slot", set.invoke(tag, TECH_MIFARE_ULTRALIGHT) as Boolean)
+        assertEquals(TECH_MIFARE_ULTRALIGHT, connectedTechnologySlotOf(tag))
         assertFalse(
             "a second holder must be refused while the slot is held",
             set.invoke(tag, TECH_NFCA) as Boolean,
         )
-        assertEquals("the refused holder must not displace the first", TECH_MIFARE_UL, slotOf(tag))
+        assertEquals("the refused holder must not displace the first", TECH_MIFARE_ULTRALIGHT, connectedTechnologySlotOf(tag))
         tag.javaClass.getDeclaredMethod("setTechnologyDisconnected").invoke(tag)
         assertEquals(
             "the release (what the framework's close() calls) must clear the slot",
             -1,
-            slotOf(tag),
+            connectedTechnologySlotOf(tag),
         )
     }
 
@@ -425,7 +399,7 @@ class NfcTagTechConflictUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_ON_DEVICE)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         val session = FakeGenericSession()
         val establishes = AtomicInteger(0)
@@ -535,7 +509,7 @@ class NfcTagTechConflictUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_ON_DEVICE)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         val session = FakeGenericSession()
         val establishes = AtomicInteger(0)
@@ -590,7 +564,7 @@ class NfcTagTechConflictUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_ON_DEVICE)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         val session = FakeGenericSession()
         val establishes = AtomicInteger(0)
@@ -628,14 +602,6 @@ class NfcTagTechConflictUiTest {
     }
 
     companion object {
-        // Tech codes as stored in the Tag tech list: 1 = NfcA, 3 = IsoDep,
-        // 9 = Mifare Ultralight (bytecode-verified: NfcA.get checks
-        // hasTech(1), IsoDep.get checks hasTech(3), MifareUltralight uses
-        // 9).
-        private const val TECH_NFCA = 1
-        private const val TECH_IODEP = 3
-        private const val TECH_MIFARE_UL = 9
-
         // The on-device tag's real UID (the "1" tag in the round-r1 logcat:
         // 10-byte Ultralight UID, Mifare Ultralight tech list).
         const val UID_ON_DEVICE = "04A18E52D82A81"

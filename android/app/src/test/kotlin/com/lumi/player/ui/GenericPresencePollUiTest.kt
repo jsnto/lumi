@@ -2,9 +2,7 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
@@ -29,10 +27,13 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
-import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Behavioral coverage for the proximity-mode GENERIC fast path: a tag the
@@ -68,54 +69,6 @@ class GenericPresencePollUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
-    private fun tagWithUid(uid: String): Tag {
-        // The stub SDK omits Tag's test hooks; the real framework (loaded by
-        // Robolectric at runtime) has the public six-arg constructor, so
-        // construct the synthetic tag reflectively.
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /**
-     * Delivers a tag to the resumed activity the way the NFC stack's
-     * foreground dispatch would: an intent carrying EXTRA_TAG to the
-     * activity itself, arriving as onNewIntent.
-     */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
     }
 
     /**
@@ -164,14 +117,14 @@ class GenericPresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         val session = FakeGenericSession()
         withGenericSession(activity, session)
         // The synthetic tag carries no Mifare Ultralight tech, so the
         // Mifare fast path cannot run; the re-read of the active tag must
         // start the generic fast path instead.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         assertTrue(
             "a non-Mifare active tag with a connectable session must run the " +
                 "generic presence poll",
@@ -215,11 +168,11 @@ class GenericPresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         val session = FakeGenericSession()
         withGenericSession(activity, session)
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         assertTrue("the generic presence poll must be running",
             presencePollJobOf(activity)?.isActive == true)
         // The tag is lifted: the probes stop answering, and two failed
@@ -252,15 +205,15 @@ class GenericPresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withGenericSession(activity, FakeGenericSession())
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val firstJob = presencePollJobOf(activity)!!
         assertTrue("the active tag's generic poll must be running", firstJob.isActive)
         // An unrelated tag (not even registered) is presented: its read
         // must cancel A's poll.
-        sendTag(controller, UID_B)
+        compose.sendTagWithUid(controller, UID_B)
         ShadowLooper.idleMainLooper()
         assertTrue("a new tag presentation must cancel the previous tag's poll",
             firstJob.isCancelled)
@@ -272,13 +225,13 @@ class GenericPresencePollUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         withGenericSession(activity, null)
         // No Mifare session and no generic session: no fast-path poll may
         // run, and the absence-timeout fallback must still detect the
         // removal.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val deadline = System.currentTimeMillis() + 3_000
         while (presencePollJobOf(activity)!!.isActive && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()

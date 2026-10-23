@@ -3,6 +3,8 @@ package com.lumi.player.player
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
+import com.lumi.player.core.LoudnessMeterProcessor
+import com.lumi.player.core.LoudnessProcessor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

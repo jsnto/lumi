@@ -2,9 +2,7 @@ package com.lumi.player.ui
 
 import android.app.Application
 import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
@@ -29,10 +27,13 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
-import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Regression for the on-device proximity stop: on a real device, a tag
@@ -72,54 +73,6 @@ class NfcColdSessionReconnectUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
-    private fun tagWithUid(uid: String): Tag {
-        // The stub SDK omits Tag's test hooks; the real framework (loaded by
-        // Robolectric at runtime) has the public six-arg constructor, so
-        // construct the synthetic tag reflectively.
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /**
-     * Delivers a tag to the resumed activity the way the NFC stack's
-     * foreground dispatch would: an intent carrying EXTRA_TAG to the
-     * activity itself, arriving as onNewIntent.
-     */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
     }
 
     private fun withPresenceSessionFactory(activity: MainActivity, factory: (Tag) -> PresenceReader?) {
@@ -164,7 +117,7 @@ class NfcColdSessionReconnectUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         // The initial session goes cold (a stationary tag under foreground
         // dispatch); every reconnect establishes a fresh session that
@@ -174,7 +127,7 @@ class NfcColdSessionReconnectUiTest {
             calls.incrementAndGet()
             if (calls.get() == 1) coldReader else healthyReader
         }
-        sendTag(controller, UID_A) // re-read of the active tag: starts the poll
+        compose.sendTagWithUid(controller, UID_A) // re-read of the active tag: starts the poll
         // Let the poll run through several read cycles in real time (the
         // cold read, the reconnect, and the healthy reads that follow).
         pump(2_500)
@@ -206,7 +159,7 @@ class NfcColdSessionReconnectUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         // The initial session is cold and every reconnect fails to
         // establish a session (the tag genuinely left the field): the
@@ -217,7 +170,7 @@ class NfcColdSessionReconnectUiTest {
             calls.incrementAndGet()
             if (calls.get() == 1) coldReader else null
         }
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent(5_000)
         assertNotNull(
             "a tag that answers neither its session nor a fresh session must still pause",
@@ -236,7 +189,7 @@ class NfcColdSessionReconnectUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val activity = controller.get()
         // The synthetic tag carries no tech list, so the default Mifare seam
         // finds no session and the generic fast path owns it. Its initial
@@ -247,7 +200,7 @@ class NfcColdSessionReconnectUiTest {
             calls.incrementAndGet()
             if (calls.get() == 1) FakeGenericSession(fail = true) else FakeGenericSession(fail = false)
         }
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         pump(2_500)
         assertTrue(
             "a reconnectable cold generic session must keep the probe poll running",

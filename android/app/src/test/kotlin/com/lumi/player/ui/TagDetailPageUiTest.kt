@@ -14,14 +14,12 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagSongRow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,6 +32,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickTagRow
 
 /**
  * Behavioral coverage for the per-tag page: tapping a tag row in the NFC
@@ -82,66 +89,16 @@ class TagDetailPageUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    /** Pumps the main looper until [cond] holds or fails. */
-    // 15 s default (not 5 s): the drag-reorder tests poll a Room write
-    // that runs on the main looper, and on a COLD test JVM (this class
-    // first in the fork, or a single-method run) the write can settle
-    // slower than 5 s - a cold-start timing flake, not a product bug
-    // (warm JVMs settle the same writes in <100 ms). The budget is a
-    // wait allowance, never a behavior assertion.
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the condition to hold" }
-    }
-
-    /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
-            Thread.sleep(20)
-        }
-        compose.onNodeWithText(text).assertExists()
-    }
-
     /** The tag's current song list, read off the database. */
     private fun tagLinks(tagId: Long): List<TagSongRow> =
         dbAndGet { app().repository.entriesForTag(tagId) }
 
-    /** The activity's view model (the same seam the other settings tests use). */
-    private fun mainViewModel(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
     /** Opens settings, the NFC tags pane, and then the [name] tag's page. */
     private fun openTagPage(name: String): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText(name).performClick()
-        compose.waitForIdle()
+        val activity = compose.setupMainActivity().get()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow(name)
         return activity
     }
 
@@ -181,7 +138,7 @@ class TagDetailPageUiTest {
         compose.onNodeWithText(BUNNY_UID).assertExists()
 
         // Bunny's song list is on the page...
-        waitForText("First song")
+        compose.waitForText("First song")
         compose.onNodeWithText("Second song").assertExists()
         // ...and only Bunny's: Owl's song is not on Bunny's page (the list
         // is keyed by the tag).
@@ -219,8 +176,8 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         // The empty tag says so, and the + button on the Songs section's
         // title row opens the in-app content list (it may sit below the
@@ -235,7 +192,7 @@ class TagDetailPageUiTest {
         // The in-app list offers the app's existing content, and the file
         // picker is never launched (the save links, it does not store).
         compose.onNodeWithText("Add a song").assertExists()
-        waitForText("First song")
+        compose.waitForText("First song")
         assertEquals(
             "the add-song action must not launch the file picker",
             launchedBefore,
@@ -250,7 +207,7 @@ class TagDetailPageUiTest {
         checkboxState("First song", ToggleableState.On)
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 1 })
+        compose.idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(
             "the checked row must link the stored entry",
             listOf(contentId),
@@ -259,7 +216,7 @@ class TagDetailPageUiTest {
         // The dialog closed (its title is gone) and the page shows the
         // new song row.
         compose.onNodeWithText("Add a song").assertDoesNotExist()
-        waitForText("First song")
+        compose.waitForText("First song")
         compose.onNodeWithText("This tag plays nothing yet.").assertDoesNotExist()
         assertEquals(
             "saving links the stored row - no new content row is stored",
@@ -279,14 +236,14 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
-        waitForText("Second song")
+        compose.waitForText("Second song")
         compose.waitForIdle()
 
         // Check two of the rows: one through its own checkbox node, the
@@ -314,7 +271,7 @@ class TagDetailPageUiTest {
         // link and the dialog closes.
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 2 })
+        compose.idleUntil({ tagLinks(tagId).size == 2 })
         assertEquals(
             "saving links exactly the checked songs, in the dialog's row order",
             displayedOrder.map { if (it == "First song") firstId else secondId },
@@ -336,14 +293,14 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
-        waitForText("First song")
+        compose.waitForText("First song")
         compose.waitForIdle()
 
         // With nothing checked the Save button is dimmed (disabled):
@@ -364,7 +321,7 @@ class TagDetailPageUiTest {
         assertFalse("checking a song must enable the Save button", saveButtonDisabled())
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 1 })
+        compose.idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(listOf(contentId), tagLinks(tagId).map { it.entryId })
     }
 
@@ -374,14 +331,14 @@ class TagDetailPageUiTest {
         dbAndGet { app().repository.addEntry(EntryType.AUDIO, "First song", "content://first").id }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
-        waitForText("First song")
+        compose.waitForText("First song")
         compose.waitForIdle()
 
         // Check a song, then cancel: the dialog closes and NOTHING links.
@@ -398,7 +355,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Add song").performClick()
         compose.waitForIdle()
-        waitForText("First song")
+        compose.waitForText("First song")
         compose.waitForIdle()
         checkboxState("First song", ToggleableState.Off)
         assertTrue("the re-opened list's Save is dimmed again", saveButtonDisabled())
@@ -416,8 +373,8 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
@@ -443,7 +400,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 2 })
+        compose.idleUntil({ tagLinks(tagId).size == 2 })
         assertEquals(
             "the flagged song keeps its single link; only the checked one is added",
             listOf(firstId, secondId),
@@ -464,8 +421,8 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         compose.onNodeWithContentDescription("Add song").performScrollTo()
         compose.waitForIdle()
@@ -474,7 +431,7 @@ class TagDetailPageUiTest {
 
         // Duplicate content (the same label stored twice) displays ONCE -
         // one row per song, the first stored copy behind it.
-        waitForText("First song")
+        compose.waitForText("First song")
         assertEquals(
             "the collapsed list offers the duplicated song exactly once",
             1,
@@ -487,7 +444,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 1 })
+        compose.idleUntil({ tagLinks(tagId).size == 1 })
         assertEquals(
             "saving the collapsed row links the FIRST stored copy",
             listOf(firstCopy),
@@ -528,8 +485,13 @@ class TagDetailPageUiTest {
 
         // The tag is gone (the page fell back to the NFC tags list, where
         // the tag's row lived) and its songs remain in the content list -
-        // deleting a tag never deletes the entries.
-        waitForText("NFC tags")
+        // deleting a tag never deletes the entries. The pane's top bar AND
+        // its section carry the "NFC tags" title, so wait for the text by
+        // its presence, not its uniqueness.
+        compose.idleUntil(
+            cond = { compose.onAllNodesWithText("NFC tags").fetchSemanticsNodes().isNotEmpty() },
+            message = "the tags list fallback",
+        )
         compose.onNodeWithText("Danger zone").assertDoesNotExist()
         dbAndGet {
             val tags = app().repository.observeTags().first()
@@ -552,9 +514,9 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Second song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Second song")
         compose.waitForIdle()
 
         // Every song row exposes its own remove action, and the drag handle
@@ -605,11 +567,11 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         // Remove the MIDDLE song: the page confirms, then the link goes.
@@ -625,7 +587,7 @@ class TagDetailPageUiTest {
         // The tag's list loses exactly the removed song - the rest keep
         // their order (the middle one is out, the order of what stays is
         // unchanged).
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(firstId, thirdId) })
         assertEquals(
             "the remaining songs keep their persisted order",
             listOf(firstId, thirdId),
@@ -693,9 +655,9 @@ class TagDetailPageUiTest {
         }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         // The missing song renders its OWN row, rendering its snapshot
@@ -727,7 +689,7 @@ class TagDetailPageUiTest {
             app().repository.addEntry(EntryType.AUDIO, "Gone song", "content://gone-reimported")
             true
         }
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("this song is no longer in the content list").assertDoesNotExist()
                 true
@@ -754,7 +716,7 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("“Gone song” will be removed from Porch. It stays in the content list.").assertIsDisplayed()
         compose.onNodeWithText("Remove").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 2 })
+        compose.idleUntil({ tagLinks(tagId).size == 2 })
         compose.onNodeWithText("Gone song").assertDoesNotExist()
         compose.onNodeWithText("First song").assertExists()
         compose.onNodeWithText("Third song").assertExists()
@@ -772,9 +734,9 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(onlyId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Only song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Only song")
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Remove Only song from the tag").performScrollTo()
@@ -784,10 +746,10 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("Remove").performClick()
         compose.waitForIdle()
 
-        idleUntil({ tagLinks(tagId).isEmpty() })
+        compose.idleUntil({ tagLinks(tagId).isEmpty() })
         // An empty list falls back to the existing empty state (the observed
         // list drives it).
-        waitForText("This tag plays nothing yet.")
+        compose.waitForText("This tag plays nothing yet.")
     }
 
     // ---------- back navigation: the page unwinds one level to the tags list ----------
@@ -797,7 +759,7 @@ class TagDetailPageUiTest {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch")?.id ?: 0L }
 
         val activity = openTagPage("Porch")
-        waitForText("Tag details")
+        compose.waitForText("Tag details")
 
         // The page is a child of the NFC tags pane, so the screen's
         // BackHandler must answer the first system back by unwinding ONE
@@ -849,7 +811,7 @@ class TagDetailPageUiTest {
         // path.
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ dbAndGet { app().repository.tagByUid(TAG_UID) }?.name == "Porch" })
+        compose.idleUntil({ dbAndGet { app().repository.tagByUid(TAG_UID) }?.name == "Porch" })
         // The dialog is gone; the page still shows the saved name (the top
         // bar and the details row both carry it, so assert existence rather
         // than a single displayed node).
@@ -860,7 +822,7 @@ class TagDetailPageUiTest {
         val tag = dbAndGet { app().repository.tagByUid(TAG_UID) }
         checkNotNull(tag)
         viewModel.renameTag(tag, "Renamed tag")
-        idleUntil({ dbAndGet { app().repository.tagByUid(TAG_UID) }?.name == "Renamed tag" })
+        compose.idleUntil({ dbAndGet { app().repository.tagByUid(TAG_UID) }?.name == "Renamed tag" })
         compose.waitForIdle()
         check(compose.onAllNodesWithText("Renamed tag").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithText("Porch").assertDoesNotExist()
@@ -876,15 +838,15 @@ class TagDetailPageUiTest {
         val second = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Second song", "content://second") }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         // The page's own add-song path appends one link at a time, so the
         // stored order is the order the songs were added.
         viewModel.linkEntryToTag(tag, first)
-        idleUntil({ tagLinks(tagId).size == 1 })
+        compose.idleUntil({ tagLinks(tagId).size == 1 })
         viewModel.linkEntryToTag(tag, second)
-        idleUntil({ tagLinks(tagId).size == 2 })
+        compose.idleUntil({ tagLinks(tagId).size == 2 })
         assertEquals(
             "the stored order is the order the songs were added",
             listOf(first.id, second.id),
@@ -910,9 +872,9 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         // The row pitch, measured from the laid-out rows: the gap between
@@ -934,7 +896,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The reordered list is the persisted link order (the play order).
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
 
         // The page shows it: the dragged row now leads (the last row may
         // sit at the edge of the small test screen's viewport, where a
@@ -956,7 +918,7 @@ class TagDetailPageUiTest {
         compose.onNodeWithText("Scan NFC").assertExists()
         compose.onNodeWithText("Porch").performClick()
         compose.waitForIdle()
-        waitForText("Second song")
+        compose.waitForText("Second song")
         compose.waitForIdle()
         assertEquals(
             "the re-read order is the dragged order",
@@ -977,9 +939,9 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Second song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Second song")
         compose.waitForIdle()
 
         val firstTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
@@ -1016,8 +978,8 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
@@ -1039,7 +1001,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The move was a real drag: it persisted the swap.
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
 
         // ... and the page never scrolled while the handle was held.
         compose.waitForIdle()
@@ -1062,8 +1024,8 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
@@ -1087,7 +1049,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The drag settled where the pointer said: one row down.
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
         compose.waitForIdle()
         val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
         val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
@@ -1103,8 +1065,8 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        idleUntil({ mainViewModel(activity).effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        compose.idleUntil({ viewModelOf(activity).effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
@@ -1126,7 +1088,7 @@ class TagDetailPageUiTest {
         compose.waitForIdle()
 
         // The drag settles where the pointer released: one row down.
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
         compose.waitForIdle()
         val aTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
         val bTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
@@ -1142,9 +1104,9 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(firstId, secondId, thirdId).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
-        waitForText("Third song")
+        val viewModel = viewModelOf(activity)
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.waitForText("Third song")
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Reorder First song").performScrollTo()
@@ -1161,7 +1123,7 @@ class TagDetailPageUiTest {
             moveBy(Offset(0f, pitch.toFloat()))
             up()
         }
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(secondId, firstId, thirdId) })
         compose.waitForIdle()
 
         // Second drag on the SAME node: the song now leading (the second
@@ -1214,19 +1176,18 @@ class TagDetailPageUiTest {
             Thread.sleep(150)
             compose.waitForIdle()
         }
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(firstId, secondId, thirdId) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(firstId, secondId, thirdId) })
         compose.waitForIdle()
 
         // The page shows the order the second drag left: the first song
         // leads again (polled - the merged tree can lag a pending
         // recomposition by a frame right after the drag settles).
-        idleUntil(
+        compose.idleUntil(
             {
                 val firstRowTop = compose.onNodeWithText("First song").fetchSemanticsNode().boundsInRoot.top
                 val secondRowTop = compose.onNodeWithText("Second song").fetchSemanticsNode().boundsInRoot.top
                 firstRowTop > 0f && firstRowTop < secondRowTop
             },
-            timeoutMs = 10_000,
         )
     }
 
@@ -1242,22 +1203,22 @@ class TagDetailPageUiTest {
         dbAndGet { listOf(first.id, second.id).forEach { app().repository.linkEntryToTag(tagId, it) }; true }
 
         val activity = openTagPage("Porch")
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e -> events += e } }
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         // An accepted reorder writes the order and fires the save event -
         // the baseline the rejection below is measured against.
         viewModel.reorderTagSongs(tag, rowsInOrder(tagId, listOf(second.id, first.id)))
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(second.id, first.id) })
-        idleUntil({ events.contains("Order saved.") })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(second.id, first.id) })
+        compose.idleUntil({ events.contains("Order saved.") })
 
         // A song is added while a second drag is still in flight: the
         // current set is now {first, second, third}, while the in-flight
         // order can only be a permutation of the old {first, second}.
         viewModel.linkEntryToTag(tag, third)
-        idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(second.id, first.id, third.id) })
+        compose.idleUntil({ tagLinks(tagId).map { it.entryId } == listOf(second.id, first.id, third.id) })
 
         // The stale in-flight order is rejected: the current order is
         // kept and the save event fires only for the accepted write.

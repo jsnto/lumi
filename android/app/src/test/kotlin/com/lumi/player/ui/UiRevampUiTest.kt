@@ -16,14 +16,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.font.FontWeight
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.PlayMode
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
 import com.lumi.player.ui.theme.LumiTheme
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -37,6 +35,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
 
 /**
  * Behavioral coverage for the settled UI revamp (D-01..D-08) on top of the
@@ -85,30 +86,6 @@ class UiRevampUiTest {
         NfcTestState.reset()
         NfcTestState.radioEnabled = true
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                compose.onNodeWithText(text, substring = true).assertExists()
-                return
-            } catch (e: AssertionError) {
-                ShadowLooper.idleMainLooper()
-                Thread.sleep(10)
-            }
-        }
-        compose.onNodeWithText(text, substring = true).assertExists()
     }
 
     private fun openSettings(): MainActivity {
@@ -331,7 +308,7 @@ class UiRevampUiTest {
         openSettings()
         compose.onNodeWithText("NFC tags").performClick()
         compose.waitForIdle()
-        waitForText("Bunny")
+        compose.waitForText("Bunny", substring = true)
 
         // Deleting a tag happens from the tag detail page's danger zone (the
         // row-level delete icon is gone): the row body opens the page, and
@@ -350,7 +327,7 @@ class UiRevampUiTest {
         compose.waitForIdle()
         // The page fell back to the NFC tags list (where the tag's row
         // lived); the list is empty now.
-        waitForText("No tags yet")
+        compose.waitForText("No tags yet", substring = true)
         assertEquals(0, dbAndGet { app().repository.observeTags().first() }.size)
     }
 

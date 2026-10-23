@@ -8,11 +8,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
-import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -21,7 +19,17 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.openSettings
+import com.lumi.player.ui.testutil.openTagPage
+import com.lumi.player.ui.testutil.openFolderPage
+import com.lumi.player.ui.testutil.openAdvancedPage
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.clickFolderRow
+import com.lumi.player.ui.testutil.clickSongRow
 
 /**
  * Behavioral coverage for the settings navigation back gesture: system back
@@ -58,12 +66,9 @@ class SettingsBackNavUiTest {
         NfcTestState.radioEnabled = true
     }
 
+    /** Opens the settings menu from the player screen (the Settings chip). */
     private fun openSettings(): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        return activity
+        return compose.openSettings()
     }
 
     private fun systemBack(activity: MainActivity) {
@@ -71,69 +76,14 @@ class SettingsBackNavUiTest {
         compose.waitForIdle()
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** The activity's main view model (the settings screen's owner). */
-    private fun mainViewModel(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    /** Pumps the main looper until a node with [text] is laid out or fails. */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
-            Thread.sleep(20)
-        }
-        compose.onNodeWithText(text).assertExists()
-    }
-
-    /**
-     * Opens settings, the NFC tags pane, and the [name] tag's detail page
-     * (the tag row arrives through an async Room round trip, so wait for it
-     * before clicking).
-     */
+    /** Opens the registered tag's detail page (settings, NFC tags, the tag's row). */
     private fun openTagPage(name: String): MainActivity {
-        val activity = openSettings()
-        compose.onNodeWithText("NFC tags").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        waitForText(name)
-        compose.onNodeWithText(name).performScrollTo()
-        compose.onNodeWithText(name).performClick()
-        compose.waitForIdle()
-        return activity
+        return compose.openTagPage(name)
     }
 
-    /**
-     * Opens settings, the content pane, and the [label] folder's detail
-     * page (the folder row arrives through an async Room round trip, so
-     * wait for it before clicking).
-     */
+    /** Opens the folder's detail page (settings, content, the folder's row). */
     private fun openFolderPage(label: String): MainActivity {
-        val activity = openSettings()
-        compose.onNodeWithText("Content").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        waitForText(label)
-        compose.onNodeWithText(label).performScrollTo()
-        compose.onNodeWithText(label).performClick()
-        compose.waitForIdle()
-        return activity
+        return compose.openFolderPage(label)
     }
 
     @Test
@@ -214,7 +164,7 @@ class SettingsBackNavUiTest {
 
         val activity = openTagPage("Porch")
         // The detail page is showing.
-        waitForText("Tag details")
+        compose.waitForText("Tag details")
 
         // The first system back unwinds the detail page one level, to the
         // NFC tags list it lives under - not the menu, and not out of
@@ -241,7 +191,7 @@ class SettingsBackNavUiTest {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
 
         openTagPage("Porch")
-        waitForText("Tag details")
+        compose.waitForText("Tag details")
 
         // The pane's own back arrow (the top bar) lands on the NFC tags
         // list, the detail page's parent pane - not the menu.
@@ -262,7 +212,7 @@ class SettingsBackNavUiTest {
 
         val activity = openFolderPage("Music")
         // The detail page is showing.
-        waitForText("Folder details")
+        compose.waitForText("Folder details")
 
         // The first system back unwinds the detail page one level, to the
         // content pane it lives under - not the menu, and not out of
@@ -293,7 +243,7 @@ class SettingsBackNavUiTest {
         dbAndGet { app().repository.rememberFolder(FOLDER_URI, "Music") }
 
         openFolderPage("Music")
-        waitForText("Folder details")
+        compose.waitForText("Folder details")
 
         // The pane's own back arrow (the top bar) lands on the content
         // pane, the detail page's parent pane - not the menu.
@@ -320,25 +270,15 @@ class SettingsBackNavUiTest {
             val folder = app().repository.rememberFolder(FOLDER_URI, folderLabel)
             app().repository.markEntriesFromFolder(folder.id, setOf(song.payload))
         }
-        val activity = openSettings()
-        compose.onNodeWithText("Content").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
+        val activity = compose.openContentPane()
         // The page's walk goes through the faked seam (it lists the stored
         // row's payload, so the song's row shows on the page).
-        mainViewModel(activity).folderChildren = {
+        viewModelOf(activity).folderChildren = {
             listOf(FolderChild("$songLabel.mp3", isDirectory = false, childUri = songPayload))
         }
-        waitForText(folderLabel)
-        compose.onNodeWithText(folderLabel).performScrollTo()
-        compose.onNodeWithText(folderLabel).performClick()
-        compose.waitForIdle()
-        waitForText(songLabel)
-        compose.onNodeWithText(songLabel).performScrollTo()
-        compose.onNodeWithText(songLabel).performClick()
-        compose.waitForIdle()
-        waitForText("Song details")
+        compose.clickFolderRow(folderLabel)
+        compose.clickSongRow(songLabel)
+        compose.waitForText("Song details")
         return activity
     }
 
@@ -395,11 +335,11 @@ class SettingsBackNavUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Content").performClick()
         compose.waitForIdle()
-        waitForText("Individual song")
+        compose.waitForText("Individual song")
         compose.onNodeWithText("Individual song").performScrollTo()
         compose.onNodeWithText("Individual song").performClick()
         compose.waitForIdle()
-        waitForText("Song details")
+        compose.waitForText("Song details")
 
         // The song was opened from the content pane's own row, so its back
         // lands on the content pane - the profile's default opener - and
@@ -421,15 +361,14 @@ class SettingsBackNavUiTest {
     /** Opens settings, the Advanced options page, and the audio level
      *  sub-screen (the audio level setting's home since the reorganization;
      *  it is no longer a top-level menu row). */
+    /**
+     * Opens the audio level page (settings, the Advanced options page, the
+     * page's own last row). The row sits below the fold on the short test
+     * screen, so it scrolls into view before the click (a zero-bounds click
+     * would land at the screen origin).
+     */
     private fun openAudioLevelPage(): MainActivity {
-        val activity = openSettings()
-        compose.onNodeWithText("Advanced options").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performClick()
-        compose.waitForIdle()
-        // The row is the page's last child - on the short test screen it
-        // sits below the fold, so scroll it into view before clicking (a
-        // zero-bounds click would land at the screen origin).
+        val activity = compose.openAdvancedPage()
         compose.onNodeWithText("Audio level").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Audio level").performClick()

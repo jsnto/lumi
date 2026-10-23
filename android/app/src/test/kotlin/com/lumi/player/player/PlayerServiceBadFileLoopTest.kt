@@ -1,5 +1,6 @@
 package com.lumi.player.player
 
+import com.lumi.player.core.EntrySpec
 import android.content.Intent
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player

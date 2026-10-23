@@ -23,10 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderTreeLevel
-import com.lumi.player.data.collapseKey
 import com.lumi.player.data.rowsInTreeOrder
 import com.lumi.player.data.visibleRowCount
 import com.lumi.player.nfc.LumiTagData
@@ -88,6 +83,13 @@ internal fun AddSongPickerDialog(
     // id leads the paths of the rows nested under it too). Display state
     // only - collapsing hides rows, it never changes the save order.
     var collapsed: Set<List<String>> by remember { mutableStateOf(emptySet()) }
+    // The song rows' check toggle: copy-on-write over the observed state -
+    // every toggle reassigns a fresh set (the state write is what re-composes).
+    val onToggleChecked: (Long) -> Unit = { id ->
+        val ids = HashSet<Long>(checkedIds)
+        if (!ids.remove(id)) ids.add(id)
+        checkedIds = ids
+    }
     // Every song row of the tree in its render order (folders first,
     // nested rows right after their folder's row, the level's songs after):
     // the Save button commits the checked rows in THIS order - the flat
@@ -120,24 +122,78 @@ internal fun AddSongPickerDialog(
                     // same grouping the content folder pages use.
                     val remaining = intArrayOf(tree.visibleRowCount(collapsed))
                     Column {
-                        PickerTreeRows(
+                        TreeLevelRows(
                             level = tree,
                             depth = 0,
                             path = emptyList(),
-                            checkedIds = checkedIds,
                             collapsed = collapsed,
-                            onToggleChecked = { id ->
-                                val ids = HashSet<Long>(checkedIds)
-                                if (!ids.remove(id)) ids.add(id)
-                                checkedIds = ids
-                            },
                             onToggleCollapsed = { path ->
                                 val paths = HashSet<List<String>>(collapsed)
                                 if (!paths.remove(path)) paths.add(path)
                                 collapsed = paths
                             },
-                            alreadyOnTagLabels = alreadyOnTagLabels,
                             remaining = remaining,
+                            songRow = { entry ->
+                                val flagged = entry.label in alreadyOnTagLabels
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 56.dp)
+                                        // Addable rows toggle their check;
+                                        // the flagged rows (the tag already
+                                        // plays the song) are non-addable
+                                        // and carry no click at all.
+                                        .then(
+                                            if (flagged) {
+                                                Modifier
+                                            } else {
+                                                Modifier.clickable { onToggleChecked(entry.id) }
+                                            },
+                                        )
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    IconChip(
+                                        icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
+                                        background = scheme.primaryContainer,
+                                        content = scheme.onPrimaryContainer,
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            entry.label,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            if (flagged) "Already on this tag"
+                                            else detailFor(entry.type, entry.payload),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (flagged) scheme.onSurface else scheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    if (flagged) {
+                                        // The settled already-on-this-tag
+                                        // marking: the song the tag already
+                                        // plays is offered, not addable.
+                                        Spacer(Modifier.width(8.dp))
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = scheme.onSurfaceVariant,
+                                        )
+                                    } else {
+                                        Spacer(Modifier.width(8.dp))
+                                        Checkbox(
+                                            checked = entry.id in checkedIds,
+                                            onCheckedChange = { onToggleChecked(entry.id) },
+                                            modifier = Modifier.testTag("add-song-check-${entry.label}"),
+                                        )
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -169,149 +225,6 @@ internal fun AddSongPickerDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
-}
-
-/**
- * One level of the add-song picker's content tree: the folder rows (each
- * toggling its nested rows' display - a chevron pointing right while
- * hidden, down while shown) and the song rows (tapping a row - or its
- * checkbox - toggles the song's check; a song the tag already plays is
- * flagged and stays non-addable) - each in the tree's [TreeRowFrame]
- * (the left-side connector guide lines shared with the content folder
- * pages' tree). The [remaining] counter drives the rail's last-row
- * spacing: the tree's last displayed row carries no bottom spacing, so no
- * rail dangles past the tree.
- */
-@Composable
-private fun PickerTreeRows(
-    level: FolderTreeLevel,
-    depth: Int,
-    path: List<String>,
-    checkedIds: Set<Long>,
-    collapsed: Set<List<String>>,
-    onToggleChecked: (Long) -> Unit,
-    onToggleCollapsed: (List<String>) -> Unit,
-    alreadyOnTagLabels: Set<String>,
-    remaining: IntArray,
-) {
-    val scheme = MaterialTheme.colorScheme
-    level.folders.forEach { node ->
-        // The row's show/hide key - its identifying path from the
-        // tree's root (the added folder's id at the top level, where
-        // labels can collide): the recursion passes it down as the
-        // children's path.
-        val nodeKey = node.collapseKey(path)
-        val isCollapsed = nodeKey in collapsed
-        val hasVisibleBranch = !isCollapsed &&
-            (node.children.folders.isNotEmpty() || node.children.songs.isNotEmpty())
-        val isLast = remaining[0] == 1
-        remaining[0]--
-        TreeRowFrame(depth = depth, hasVisibleBranch = hasVisibleBranch, isLast = isLast) {
-            SettingRow(
-                modifier = Modifier.clickable { onToggleCollapsed(nodeKey) },
-                leading = {
-                    IconChip(
-                        icon = Icons.Filled.Folder,
-                        background = scheme.tertiaryContainer,
-                        content = scheme.onTertiaryContainer,
-                    )
-                },
-                title = node.displayName,
-                trailing = {
-                    Icon(
-                        imageVector = if (isCollapsed) {
-                            Icons.Filled.KeyboardArrowRight
-                        } else {
-                            Icons.Filled.KeyboardArrowDown
-                        },
-                        contentDescription = if (isCollapsed) {
-                            "Expand ${node.displayName}"
-                        } else {
-                            "Collapse ${node.displayName}"
-                        },
-                        modifier = Modifier.size(20.dp),
-                        tint = scheme.onSurfaceVariant,
-                    )
-                },
-            )
-        }
-        if (!isCollapsed) {
-            PickerTreeRows(
-                level = node.children,
-                depth = depth + 1,
-                path = nodeKey,
-                checkedIds = checkedIds,
-                collapsed = collapsed,
-                onToggleChecked = onToggleChecked,
-                onToggleCollapsed = onToggleCollapsed,
-                alreadyOnTagLabels = alreadyOnTagLabels,
-                remaining = remaining,
-            )
-        }
-    }
-    level.songs.forEach { entry ->
-        val flagged = entry.label in alreadyOnTagLabels
-        val isLast = remaining[0] == 1
-        remaining[0]--
-        TreeRowFrame(depth = depth, hasVisibleBranch = false, isLast = isLast) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 56.dp)
-                    // Addable rows toggle their check; the flagged rows
-                    // (the tag already plays the song) are non-addable and
-                    // carry no click at all.
-                    .then(
-                        if (flagged) {
-                            Modifier
-                        } else {
-                            Modifier.clickable { onToggleChecked(entry.id) }
-                        },
-                    )
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconChip(
-                    icon = EntryPresentation.icon(EntryType.fromStorage(entry.type)),
-                    background = scheme.primaryContainer,
-                    content = scheme.onPrimaryContainer,
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        entry.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        if (flagged) "Already on this tag"
-                        else detailFor(entry.type, entry.payload),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (flagged) scheme.onSurface else scheme.onSurfaceVariant,
-                    )
-                }
-                if (flagged) {
-                    // The settled already-on-this-tag marking: the song the
-                    // tag already plays is offered, not addable.
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.Filled.Check,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = scheme.onSurfaceVariant,
-                    )
-                } else {
-                    Spacer(Modifier.width(8.dp))
-                    Checkbox(
-                        checked = entry.id in checkedIds,
-                        onCheckedChange = { onToggleChecked(entry.id) },
-                        modifier = Modifier.testTag("add-song-check-${entry.label}"),
-                    )
-                }
-            }
-        }
-    }
 }
 
 /**

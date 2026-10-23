@@ -11,11 +11,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.io.FileNotFoundException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -31,7 +29,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowLog
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The on-device read failure the folder-import fix targets, pinned against
@@ -84,38 +86,6 @@ class FolderTreeReadFixUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Opens the Content pane and returns its (activity-scoped) view model. */
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the operation to settle" }
-    }
-
     private fun eventsOf(viewModel: LumiViewModel): MutableList<String> {
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { e: String -> events += e } }
@@ -130,7 +100,8 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun aFolderOfMp3FilesImportsEverySongIncludingSubfolders() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         // The strict provider is registered by authority, so the production
@@ -139,7 +110,7 @@ class FolderTreeReadFixUiTest {
         ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = true))
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 3 songs from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 3 songs from the folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -177,13 +148,14 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun aFlatFolderOfMp3FilesImportsEverySong() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = false))
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 2 songs from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 2 songs from the folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(listOf("track 01.mp3", "track 02.mp3"), entries.map { it.label })
@@ -202,13 +174,14 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun aTreeUriWithAnOpenableSuffixImportsThroughTheCanonicalShape() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = true))
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI_OPENABLE))
-        idleUntil({ events.any { it == "Added 3 songs from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 3 songs from the folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(
@@ -243,13 +216,14 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun aSubfolderWhoseDocIdEndsInOpenableIsWalkedUncorrupted() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         ShadowContentResolver.registerProviderInternal("docs", OpenableSubfolderDocumentsProvider())
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 1 song from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 1 song from the folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(listOf("track 01.mp3"), entries.map { it.label })
@@ -267,17 +241,18 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun rescanOfAnUnchangedFolderGoesThroughTheSameGrammar() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         ShadowContentResolver.registerProviderInternal("docs", StrictDocumentsProvider(withSubfolder = true))
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Added 3 songs from the folder." } })
+        compose.idleUntil({ events.any { it == "Added 3 songs from the folder." } })
 
         val folder = dbAndGet { app().repository.observeFolders().first() }.single()
         viewModel.rescanFolder(folder)
-        idleUntil({ events.any { it == "Nothing new in that folder." } })
+        compose.idleUntil({ events.any { it == "Nothing new in that folder." } })
 
         val entries = dbAndGet { app().repository.observeEntries().first() }
         assertEquals(3, entries.size)
@@ -342,7 +317,8 @@ class FolderTreeReadFixUiTest {
      */
     @Test
     fun aFailedFolderReadIsAttributedInTheLog() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = eventsOf(viewModel)
 
         ShadowContentResolver.registerProviderInternal(
@@ -369,7 +345,7 @@ class FolderTreeReadFixUiTest {
         )
 
         viewModel.addFolderEntry(Uri.parse(TREE_URI))
-        idleUntil({ events.any { it == "Couldn't read that folder's songs." } })
+        compose.idleUntil({ events.any { it == "Couldn't read that folder's songs." } })
 
         // The per-node attribution names the failing folder uri AND carries
         // the exception (the top-level line names the tree uri too).

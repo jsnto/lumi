@@ -20,6 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import kotlin.math.abs
+import com.lumi.player.ui.testutil.openPane
 
 /**
  * Behavioral coverage for the play-mode item styling change:
@@ -52,19 +53,9 @@ class PlayModeItemUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun openPane(menuRow: String): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText(menuRow).performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     @Test
     fun playModeItemsRenderWithoutABorder() {
-        openPane("Play mode")
+        compose.openPane("Play mode")
 
         // Both items are laid out as before (title + detail inside the chip).
         compose.onNodeWithText("Continuous").assertExists()
@@ -87,7 +78,7 @@ class PlayModeItemUiTest {
 
     @Test
     fun addContentAndAddFolderButtonsSitOnTheirSectionTitleRows() {
-        val activity = openPane("Content")
+        val activity = compose.openPane("Content")
         val density = activity.resources.displayMetrics.density
         val screenRight = activity.resources.displayMetrics.widthPixels
 

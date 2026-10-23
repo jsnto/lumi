@@ -4,13 +4,12 @@ import android.app.Application
 import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.TagPositionEntity
 import com.lumi.player.data.fingerprintOf
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import com.lumi.player.player.PlayerService
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
@@ -33,6 +32,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.TimeUnit
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * Behavioral coverage for the always-listening NFC receive path on the main
@@ -72,72 +77,6 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update { PlayerUiState() }
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    private fun tagWithUid(uid: String): Tag {
-        // The stub SDK omits Tag's test hooks; the real framework (loaded by
-        // Robolectric at runtime) has the public six-arg constructor, so
-        // construct the synthetic tag reflectively.
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /**
-     * Delivers a tag to the resumed activity the way the NFC stack's
-     * foreground dispatch would: an intent carrying EXTRA_TAG to the
-     * activity itself, arriving as an onNewIntent.
-     */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
-    }
-
-    /**
-     * Idles the main looper until [cond] holds (pumping across real background
-     * hops like Room queries) or [timeoutMs] elapses.
-     */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-    }
-
     /** Consumes the next started-service intent, pumping until it arrives. */
     private fun nextServiceIntent(timeoutMs: Long = 5_000): Intent? {
         var intent: Intent? = null
@@ -175,7 +114,7 @@ class NfcAlwaysListeningUiTest {
     @Test
     fun mainPage_foregroundDispatchIsTheActiveReceivePath_whenNotRegistering() {
         setupDb()
-        startMainActivity()
+        compose.setupMainActivity()
         assertTrue(
             "foreground dispatch must be enabled on the idle main page",
             NfcTestState.foregroundDispatchEnabled,
@@ -187,14 +126,14 @@ class NfcAlwaysListeningUiTest {
     @Test
     fun mainPage_readOfRegisteredTag_startsPlayback() {
         setupDb()
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a tag read must start the player service", intent)
         assertEquals(PlayerService.ACTION_START, intent!!.action)
         assertEquals(UID_A, intent.getStringExtra(PlayerService.EXTRA_TAG_UID))
         @Suppress("DEPRECATION")
-        val entries = intent.getParcelableArrayListExtra<com.lumi.player.player.EntrySpec>(
+        val entries = intent.getParcelableArrayListExtra<com.lumi.player.core.EntrySpec>(
             PlayerService.EXTRA_ENTRIES,
         )
         assertTrue("the tag's linked entries must be queued", (entries?.size ?: 0) > 0)
@@ -203,12 +142,12 @@ class NfcAlwaysListeningUiTest {
     @Test
     fun mainPage_readOfDifferentRegisteredTag_switchesPlayback() {
         setupDb(tagA = true, tagB = true)
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val first = nextServiceIntent()
         assertEquals(PlayerService.ACTION_START, first!!.action)
         assertEquals(UID_A, first.getStringExtra(PlayerService.EXTRA_TAG_UID))
-        sendTag(controller, UID_B)
+        compose.sendTagWithUid(controller, UID_B)
         val second = nextServiceIntent()
         assertNotNull("a different registered tag must switch playback", second)
         assertEquals(PlayerService.ACTION_START, second!!.action)
@@ -220,8 +159,8 @@ class NfcAlwaysListeningUiTest {
         setupDb()
         // The tag's list is already playing but the user paused it.
         PlayerStateHolder.update { PlayerUiState().copy(status = PlaybackStatus.PAUSED, activeTagUid = UID_A) }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a re-read of the paused active tag must command the service", intent)
         assertEquals(
@@ -257,8 +196,8 @@ class NfcAlwaysListeningUiTest {
     fun mainPage_tagWithSavedPosition_startsServiceAtTheRememberedOffset() {
         setupDb()
         rememberPosition(UID_A, fingerprintOf(specsForUid(UID_A)))
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a tag read must start the player service", intent)
         assertEquals(PlayerService.ACTION_START, intent!!.action)
@@ -281,8 +220,8 @@ class NfcAlwaysListeningUiTest {
         // must be told to start fresh, not seek into the wrong place.
         setupDb()
         rememberPosition(UID_A, fingerprint = "stale-fingerprint")
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val intent = nextServiceIntent()
         assertNotNull("a tag read must start the player service", intent)
         assertEquals(PlayerService.ACTION_START, intent!!.action)
@@ -300,8 +239,8 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // in-range re-read of the active tag is
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // in-range re-read of the active tag is
         // ignored by the policy (no restart) but refreshes the presence
         // record; the tag is still physically in range.
         // The tag leaves range: reports stop. The 1-second presence poll
@@ -321,7 +260,7 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
         // Bringing the tag back must RESUME the paused list (reading a
         // paused active tag overrides the pause), not restart it.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val resume = nextServiceIntent(1_000)
         assertNotNull("a re-read of the removed active tag must resume playback", resume)
         assertEquals(PlayerService.ACTION_RESUME, resume!!.action)
@@ -333,14 +272,14 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         // A 7-second wait replaces the 15-second default (the
         // `nfc_reread_seconds` setting): the Room write is async, so pump the
         // main looper until the view model's flow settles on it.
         viewModel.setNfcRereadSeconds(7L)
-        idleUntil({ viewModel.nfcRereadSeconds.value == 7L })
-        sendTag(controller, UID_A)
+        compose.idleUntil({ viewModel.nfcRereadSeconds.value == 7L })
+        compose.sendTagWithUid(controller, UID_A)
         // Six seconds of absence is under the configured 7-second window:
         // no pause yet.
         ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
@@ -366,10 +305,10 @@ class NfcAlwaysListeningUiTest {
         // that never seeded the presence record, so the poll had nothing to
         // time out and proximity mode never paused.
         setupDb(mode = PlayMode.PROXIMITY)
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         // Nothing is playing yet; the tag's first delivery starts playback
         // and must seed the presence record.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -388,7 +327,7 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             it.copy(status = PlaybackStatus.PAUSED, activeTagUid = UID_A)
         }
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val resume = nextServiceIntent(1_000)
         assertNotNull("bringing the tag back must resume playback", resume)
         assertEquals(PlayerService.ACTION_RESUME, resume!!.action)
@@ -406,8 +345,8 @@ class NfcAlwaysListeningUiTest {
         // RESTARTED the queue from the top (the read took the StartPlayback
         // branch instead of the early-return / Resume).
         setupDb(mode = PlayMode.PROXIMITY)
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -435,7 +374,7 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update { it.copy(status = PlaybackStatus.PAUSED) }
         // Bringing the tag back must RESUME the paused list, not restart it:
         // the policy still owns the tag, so the read takes the Resume branch.
-        sendTag(controller, UID_A)
+        compose.sendTagWithUid(controller, UID_A)
         val resume = nextServiceIntent(1_000)
         assertNotNull("the re-hold must command the service", resume)
         assertEquals(
@@ -460,8 +399,8 @@ class NfcAlwaysListeningUiTest {
         // would land its first post-grace tick at +18s (not caught by the
         // second window), so this pins the 1s period.
         setupDb(mode = PlayMode.PROXIMITY)
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -498,8 +437,8 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // the tag's report while it is presented
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // the tag's report while it is presented
         // The tag is held still: no further reports arrive, but the tag is
         // still physically in range. Ten seconds elapse - far past the old
         // 2s timeout (which paused at ~3s) - and nothing may pause.
@@ -532,12 +471,12 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // presentation: seeds the record
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // presentation: seeds the record
         ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
-        sendTag(controller, UID_A) // the tag wobbles: re-reported, record refreshes
+        compose.sendTagWithUid(controller, UID_A) // the tag wobbles: re-reported, record refreshes
         ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
-        sendTag(controller, UID_A) // another re-report, still in range
+        compose.sendTagWithUid(controller, UID_A) // another re-report, still in range
         ShadowLooper.idleMainLooper(6_000, TimeUnit.MILLISECONDS)
         // 18s since the first report, but each 6s gap is inside the grace:
         // the tag never left range, so nothing may have paused.
@@ -560,13 +499,13 @@ class NfcAlwaysListeningUiTest {
         // the policy) and playback of B's list never paused - proximity
         // behaved like continuous.
         setupDb(mode = PlayMode.PROXIMITY, tagA = true, tagB = true)
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
         assertEquals(UID_A, start.getStringExtra(PlayerService.EXTRA_TAG_UID))
-        sendTag(controller, UID_B)
+        compose.sendTagWithUid(controller, UID_B)
         val switch = nextServiceIntent()
         assertNotNull("a different registered tag must switch playback", switch)
         assertEquals(PlayerService.ACTION_START, switch!!.action)
@@ -598,8 +537,8 @@ class NfcAlwaysListeningUiTest {
         // present stationary tag, already reported once, pauses after the
         // timeout ("no further reports" is the only removal signal).
         setupDb(mode = PlayMode.CONTINUOUS)
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val start = nextServiceIntent()
         assertNotNull("a fresh tag read must start the player service", start)
         assertEquals(PlayerService.ACTION_START, start!!.action)
@@ -609,7 +548,7 @@ class NfcAlwaysListeningUiTest {
         }
         val viewModel = viewModelOf(controller.get())
         viewModel.setPlayMode(PlayMode.PROXIMITY)
-        idleUntil({ viewModel.playMode.value == PlayMode.PROXIMITY })
+        compose.idleUntil({ viewModel.playMode.value == PlayMode.PROXIMITY })
         compose.waitForIdle()
         ShadowLooper.idleMainLooper()
         // A leaves range after its single report: the presence poll,
@@ -637,9 +576,9 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // seeds the presence record (A is active)
-        sendTag(controller, UID_B) // an unrelated read: must not touch the record
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // seeds the presence record (A is active)
+        compose.sendTagWithUid(controller, UID_B) // an unrelated read: must not touch the record
         // Both tags now leave range: no further reports arrive.
         ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
         val intent = nextServiceIntent(1_000)
@@ -662,8 +601,8 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // active-tag re-read refreshes the record
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // active-tag re-read refreshes the record
         // The service stops on its own (user pressed stop, the list ended):
         // the shared state settles to IDLE and the activity must tear the
         // presence poll down.
@@ -686,8 +625,8 @@ class NfcAlwaysListeningUiTest {
         PlayerStateHolder.update {
             PlayerUiState().copy(status = PlaybackStatus.PLAYING, activeTagUid = UID_A)
         }
-        val controller = startMainActivity()
-        sendTag(controller, UID_A) // in-range re-read of the active tag:
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A) // in-range re-read of the active tag:
         // presence refreshed, no restart command expected
         // The tag leaves range in continuous mode: nothing may stop playback.
         ShadowLooper.idleMainLooper(PRESENCE_TIMEOUT_MS_OVERSHOOT_MS, TimeUnit.MILLISECONDS)
@@ -705,7 +644,7 @@ class NfcAlwaysListeningUiTest {
         // No tag is registered: the presented tag is unknown to the app,
         // so the scan settles into the registration flow (capture).
         setupDb(tagA = false)
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         assertTrue("starts with foreground dispatch live", NfcTestState.foregroundDispatchEnabled)
 
@@ -716,8 +655,8 @@ class NfcAlwaysListeningUiTest {
         // foreground-dispatch intent exactly like a main-page read. The
         // scan's settle does a Room lookup before the capture, so wait for
         // the capture itself, not just the flag.
-        sendTag(controller, UID_A)
-        idleUntil({ viewModel.capturedUid.value == UID_A })
+        compose.sendTagWithUid(controller, UID_A)
+        compose.idleUntil({ viewModel.capturedUid.value == UID_A })
         compose.waitForIdle()
         assertFalse("a captured tag must end the scan", viewModel.scanActive.value)
         assertEquals(UID_A, viewModel.capturedUid.value)
@@ -730,7 +669,7 @@ class NfcAlwaysListeningUiTest {
     @Test
     fun nfcReceiveIsDisabledOnPause_andReenabledOnResume() {
         setupDb()
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         assertTrue("foreground dispatch is live while the main page is resumed", NfcTestState.foregroundDispatchEnabled)
         controller.pause()
         assertFalse("the receive path must be disabled while paused", NfcTestState.foregroundDispatchEnabled)
@@ -749,7 +688,7 @@ class NfcAlwaysListeningUiTest {
         setupDb()
         val tagIntent = Intent(Intent.ACTION_MAIN)
             .addCategory(Intent.CATEGORY_LAUNCHER)
-            .putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(UID_A))
+            .putExtra(NfcAdapter.EXTRA_TAG, syntheticTag(UID_A))
         val controller = Robolectric.buildActivity(MainActivity::class.java).create()
         controller.get().setIntent(tagIntent)
         controller.resume()
@@ -767,8 +706,8 @@ class NfcAlwaysListeningUiTest {
         // reopening the app must not re-deliver the stale tag (which would
         // resume a user pause that NFC reading alone should override).
         setupDb()
-        val controller = startMainActivity()
-        sendTag(controller, UID_A)
+        val controller = compose.setupMainActivity()
+        compose.sendTagWithUid(controller, UID_A)
         val first = nextServiceIntent()
         assertEquals(PlayerService.ACTION_START, first!!.action)
         controller.pause()

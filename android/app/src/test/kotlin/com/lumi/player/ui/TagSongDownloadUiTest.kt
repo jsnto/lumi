@@ -1,15 +1,11 @@
 package com.lumi.player.ui
 
-import android.content.Intent
-import android.nfc.NfcAdapter
-import android.nfc.Tag
 import android.net.Uri
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.SongDownloadResult
@@ -17,7 +13,6 @@ import com.lumi.player.nfc.LumiTagData
 import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,6 +25,17 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickTagRow
 
 /**
  * The tag page's per-song download (Robolectric, the full activity; the
@@ -65,44 +71,8 @@ class TagSongDownloadUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the condition to hold" }
-    }
-
-    private fun waitForText(text: String, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
-            Thread.sleep(20)
-        }
-        compose.onNodeWithText(text).assertExists()
-    }
-
     private fun tagLinks(tagId: Long): List<com.lumi.player.data.TagSongRow> =
         dbAndGet { app().repository.entriesForTag(tagId) }
-
-    private fun mainViewModel(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
 
     /**
      * A tag with three rows: one song IN the content (linked to a live
@@ -134,48 +104,11 @@ class TagSongDownloadUiTest {
         return tagId
     }
 
-    private fun tagWithUid(uid: String): Tag {
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /** Delivers a tag read to the resumed activity (the dispatch shape). */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
-    }
-
     private fun openTagPage(name: String): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText(name).performClick()
-        compose.waitForIdle()
+        val controller = compose.setupMainActivity()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow(name)
         return controller
     }
 
@@ -186,7 +119,7 @@ class TagSongDownloadUiTest {
         val tagId = seedTag()
         val controller = openTagPage("Porch")
         val activity = controller.get()
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
 
         // The card's payload carries a url for BOTH the in-content song
         // and the gone song (and none for the quiet one): the icon must
@@ -205,11 +138,11 @@ class TagSongDownloadUiTest {
         }
         // Drive the read the way the NFC stack's foreground dispatch does:
         // an EXTRA_TAG intent to the resumed activity.
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
 
-        waitForText("First song")
-        waitForText("Gone song")
+        compose.waitForText("First song")
+        compose.waitForText("Gone song")
         compose.waitForIdle()
 
         // The gone song (out of content + a valid url) offers the download.
@@ -230,8 +163,8 @@ class TagSongDownloadUiTest {
                 )
             )
         }
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == mapOf("Gone song" to "ftp://cdn.example.com/gone.mp3") })
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == mapOf("Gone song" to "ftp://cdn.example.com/gone.mp3") })
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Download Gone song").assertDoesNotExist()
     }
@@ -246,21 +179,21 @@ class TagSongDownloadUiTest {
         seedTag()
         val controller = openTagPage("Porch")
         val activity = controller.get()
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
         val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
 
         viewModel.songPayloadReader = { _ ->
             TagPayloadRead.Answered(LumiTagData("Porch", listOf("Gone song"), urls))
         }
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls })
-        waitForText("Gone song")
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls })
+        compose.waitForText("Gone song")
         compose.onNodeWithContentDescription("Download Gone song").assertExists()
 
         // The re-tap whose read could not connect: the map keeps the urls,
         // the icon survives.
         viewModel.songPayloadReader = { _ -> TagPayloadRead.Failed }
-        sendTag(controller, TAG_UID)
+        compose.sendTagWithUid(controller, TAG_UID)
         Thread.sleep(500)
         ShadowLooper.idleMainLooper()
         compose.waitForIdle()
@@ -269,8 +202,8 @@ class TagSongDownloadUiTest {
 
         // The card answers with no lumi record (wiped): the map clears.
         viewModel.songPayloadReader = { _ -> TagPayloadRead.Answered(null) }
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == true })
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == true })
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Download Gone song").assertDoesNotExist()
     }
@@ -282,7 +215,7 @@ class TagSongDownloadUiTest {
         val tagId = seedTag()
         val controller = openTagPage("Porch")
         val activity = controller.get()
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { events += it } }
 
@@ -309,9 +242,9 @@ class TagSongDownloadUiTest {
             onProgress(1f)
             SongDownloadResult.Success(Uri.parse("content://media/external/audio/media/1"))
         }
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
-        waitForText("Gone song")
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
+        compose.waitForText("Gone song")
         compose.waitForIdle()
 
         val goneLink = tagLinks(tagId).single { it.name == "Gone song" }.linkId
@@ -321,7 +254,7 @@ class TagSongDownloadUiTest {
         // While the download runs the row states the in-flight save into
         // the music folder's lumi subfolder... the view model tracks the
         // row's progress determinately while it runs.
-        idleUntil({
+        compose.idleUntil({
             viewModel.songDownloadStates.value[goneLink] is LumiViewModel.SongDownloadState.InFlight &&
                 try {
                     compose.onNodeWithText("downloading to Music/lumi...").assertExists()
@@ -333,7 +266,7 @@ class TagSongDownloadUiTest {
             ?.let { it.progress?.let { p -> assertTrue("determinate progress", p in 0f..1f) } }
         // The save finishes and the row's state settles.
         gate.complete(Unit)
-        idleUntil({ viewModel.songDownloadStates.value[goneLink] == null })
+        compose.idleUntil({ viewModel.songDownloadStates.value[goneLink] == null })
 
         // The finished download reports its event, and the row returns to
         // the idle download icon (the song is still out of content).
@@ -349,7 +282,7 @@ class TagSongDownloadUiTest {
         val tagId = seedTag()
         val controller = openTagPage("Porch")
         val activity = controller.get()
-        val viewModel = mainViewModel(activity)
+        val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch { viewModel.uiEvents.collect { events += it } }
 
@@ -371,9 +304,9 @@ class TagSongDownloadUiTest {
                 SongDownloadResult.Failure
             }
         }
-        sendTag(controller, TAG_UID)
-        idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
-        waitForText("Gone song")
+        compose.sendTagWithUid(controller, TAG_UID)
+        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID]?.isEmpty() == false })
+        compose.waitForText("Gone song")
         compose.waitForIdle()
 
         val goneLink = tagLinks(tagId).single { it.name == "Gone song" }.linkId
@@ -383,7 +316,7 @@ class TagSongDownloadUiTest {
         // download icon, and the failure event.
         compose.onNodeWithContentDescription("Download Gone song").performClick()
         compose.waitForIdle()
-        idleUntil({ viewModel.songDownloadStates.value[goneLink] is LumiViewModel.SongDownloadState.Failed })
+        compose.idleUntil({ viewModel.songDownloadStates.value[goneLink] is LumiViewModel.SongDownloadState.Failed })
         compose.onNodeWithText("download failed - tap the icon to try again").assertExists()
         compose.onNodeWithContentDescription("Retry downloading Gone song").assertExists()
         compose.onNodeWithContentDescription("Download Gone song").assertDoesNotExist()
@@ -397,7 +330,7 @@ class TagSongDownloadUiTest {
         succeedNext = true
         compose.onNodeWithContentDescription("Retry downloading Gone song").performClick()
         compose.waitForIdle()
-        idleUntil({ viewModel.songDownloadStates.value[goneLink] == null })
+        compose.idleUntil({ viewModel.songDownloadStates.value[goneLink] == null })
         assertTrue("the retry's save is reported", events.contains("Saved \"Gone song\" to Music/lumi."))
         // The row is back to the idle download icon.
         compose.onNodeWithContentDescription("Download Gone song").assertExists()

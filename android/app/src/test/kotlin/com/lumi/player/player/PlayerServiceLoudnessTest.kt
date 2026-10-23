@@ -1,5 +1,8 @@
 package com.lumi.player.player
 
+import com.lumi.player.core.EntrySpec
+import com.lumi.player.core.LoudnessProcessor
+
 import android.content.Intent
 import com.lumi.player.LumiApp
 import com.lumi.player.data.AudioLevelMode

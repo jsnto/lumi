@@ -6,11 +6,11 @@ import android.util.Log
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.LoudnessMeasurer
-import com.lumi.player.data.LoudnessResult
+import com.lumi.player.core.LoudnessResult
 import com.lumi.player.data.LoudnessStatus
 import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.fingerprintOf
-import com.lumi.player.player.EntrySpec
+import com.lumi.player.core.EntrySpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

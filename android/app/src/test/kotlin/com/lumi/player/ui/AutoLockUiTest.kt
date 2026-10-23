@@ -21,7 +21,6 @@ import com.lumi.player.data.SettingsEntity
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -37,6 +36,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.TimeUnit
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.openSettings
+import com.lumi.player.ui.testutil.openAdvancedPage
+import com.lumi.player.ui.testutil.clickMenuRow
 
 /**
  * The Advanced options page's "Auto-lock after idle" (and the Advanced
@@ -76,30 +80,6 @@ class AutoLockUiTest {
         // The shared player state is process-wide: every test starts from
         // "nothing is loaded" (the app just opened).
         PlayerStateHolder.update { PlayerUiState() }
-    }
-
-    private fun openSettings(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-    /** Opens the Advanced options page from the settings menu. */
-    private fun openAdvancedPage(activity: MainActivity) {
-        compose.onNodeWithText("Advanced options").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performClick()
-        compose.waitForIdle()
-    }
-
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
     }
 
     // onResume/onPause are protected on Activity, so drive the real
@@ -156,19 +136,11 @@ class AutoLockUiTest {
     private fun app(): LumiApp =
         ApplicationProvider.getApplicationContext<LumiApp>()
 
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
     // ---- the menu and the moved rows ----
 
     @Test
     fun theMenuListsAdvancedOptionsAndNotTheMovedRows() {
-        openSettings()
+        compose.openSettings()
 
         // The menu keeps the now-playing strip's home rows (play mode, NFC
         // tags, content), gains the Advanced options row (replacing the old
@@ -196,7 +168,7 @@ class AutoLockUiTest {
 
     @Test
     fun theAdvancedPageShowsTheMovedRowAndTheAutoLockLadder() {
-        openAdvancedPage(openSettings())
+        compose.openAdvancedPage()
 
         // The keep-screen-on row moved here from the menu, look and test
         // tag intact (unchecked by default).
@@ -232,7 +204,7 @@ class AutoLockUiTest {
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        openAdvancedPage(activity)
+        compose.clickMenuRow("Advanced options")
 
         // Off is selected by default (fresh store).
         compose.onNode(selectedLadderRowContaining("Off")).assertExists()
@@ -260,7 +232,7 @@ class AutoLockUiTest {
         )
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
-        openAdvancedPage(restarted.get())
+        compose.clickMenuRow("Advanced options")
         compose.onNode(selectedLadderRowContaining("After 5 minutes")).assertExists()
     }
 
@@ -273,8 +245,8 @@ class AutoLockUiTest {
                 SettingsEntity(SettingsEntity.AUTO_LOCK_MINUTES, "999"),
             )
         }
-        val activity = openSettings()
-        openAdvancedPage(activity)
+        val activity = compose.openSettings()
+        compose.clickMenuRow("Advanced options")
         assertEquals(
             "the garbage stored value must resolve to off",
             AutoLockDelay.OFF,
@@ -292,8 +264,8 @@ class AutoLockUiTest {
 
     @Test
     fun backFromTheAdvancedPageUnwindsToTheMenuAndOnlyThenToThePlayer() {
-        val activity = openSettings()
-        openAdvancedPage(activity)
+        val activity = compose.openSettings()
+        compose.clickMenuRow("Advanced options")
         compose.onNodeWithText("Keep screen on").assertExists()
 
         // The first back leaves the Advanced options page for the menu
@@ -312,7 +284,7 @@ class AutoLockUiTest {
 
     @Test
     fun backFromAppearanceUnwindsToTheMenuAndOnlyThenToThePlayer() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         // The appearance row is a top-level menu row (below the viewport on
         // the small screen): scroll it into view before clicking.
         compose.onNodeWithText("Appearance").performScrollTo()
@@ -340,7 +312,7 @@ class AutoLockUiTest {
 
     @Test
     fun theLockFiresAfterTheConfiguredIdleAndWinsOverKeepScreenOn() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         val vm = viewModelOf(activity)
         var lockCalls = 0
         vm.isDeviceAdminActive = { true }
@@ -420,7 +392,7 @@ class AutoLockUiTest {
 
     @Test
     fun aFiredLockDoesNotRefireWhileTheSameStretchLingers() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         val vm = viewModelOf(activity)
         var lockCalls = 0
         vm.isDeviceAdminActive = { true }
@@ -464,7 +436,7 @@ class AutoLockUiTest {
 
         // The cold launch survives the inline first emission: the app
         // composes and the settings menu is on screen.
-        val activity = openSettings()
+        val activity = compose.openSettings()
         compose.onNodeWithText("Play mode").assertIsDisplayed()
         val vm = viewModelOf(activity)
         var lockCalls = 0
@@ -513,7 +485,7 @@ class AutoLockUiTest {
 
     @Test
     fun aBackgroundedAppDoesNotLockAndTheHeldStretchFiresOnReturn() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         val vm = viewModelOf(activity)
         var lockCalls = 0
         vm.isDeviceAdminActive = { true }
@@ -564,7 +536,7 @@ class AutoLockUiTest {
 
     @Test
     fun anUngrantedAdminDoesNotLockAndTheSettingStillWorks() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         val vm = viewModelOf(activity)
         var lockCalls = 0
         vm.isDeviceAdminActive = { false }
@@ -600,7 +572,7 @@ class AutoLockUiTest {
         // The setting stays visible and prompts to enable the permission:
         // the Advanced options page shows the not-enabled state with its
         // action.
-        openAdvancedPage(activity)
+        compose.clickMenuRow("Advanced options")
         compose.onNodeWithText("Screen lock not enabled").assertExists()
         compose.onNodeWithText("Enable screen lock").assertExists()
         compose.onNodeWithText("Auto-lock after idle").assertExists()
@@ -608,11 +580,11 @@ class AutoLockUiTest {
 
     @Test
     fun theEnableFlowFeedsTheAdminStateBackAndFlipsThePage() {
-        val activity = openSettings()
+        val activity = compose.openSettings()
         val vm = viewModelOf(activity)
         vm.isDeviceAdminActive = { false }
 
-        openAdvancedPage(activity)
+        compose.clickMenuRow("Advanced options")
         compose.onNodeWithText("Screen lock not enabled").assertExists()
 
         // The enable action launches the platform's own consent screen:

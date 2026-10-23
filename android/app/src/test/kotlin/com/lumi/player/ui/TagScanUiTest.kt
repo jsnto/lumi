@@ -1,7 +1,5 @@
 package com.lumi.player.ui
 
-import android.content.Intent
-import android.nfc.NfcAdapter
 import android.nfc.Tag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertHasClickAction
@@ -10,7 +8,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -28,6 +25,15 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.syntheticTag
+import com.lumi.player.ui.testutil.sendTagWithUid
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
 
 /**
  * The NFC tags pane's "Scan NFC" button: the pane's single scan entry
@@ -63,20 +69,6 @@ class TagScanUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    private fun startMainActivity(): ActivityController<MainActivity> {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        return controller
-    }
-
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
     private fun seedTag(uid: String, name: String) {
         val thread = Thread { runBlocking { app().repository.addTag(uid, name) } }
         thread.start()
@@ -84,86 +76,16 @@ class TagScanUiTest {
         ShadowLooper.idleMainLooper()
     }
 
-    private fun tagWithUid(uid: String): Tag {
-        // The stub SDK omits Tag's test hooks; the real framework (loaded by
-        // Robolectric at runtime) has the public six-arg constructor, so
-        // construct the synthetic tag reflectively.
-        val nfcTagCls = Class.forName("android.nfc.INfcTag")
-        val ctor = Tag::class.java.getDeclaredConstructor(
-            ByteArray::class.java,
-            IntArray::class.java,
-            Array<android.os.Bundle>::class.java,
-            Int::class.javaPrimitiveType!!,
-            Long::class.javaPrimitiveType!!,
-            nfcTagCls,
-        )
-        ctor.isAccessible = true
-        val tagService = java.lang.reflect.Proxy.newProxyInstance(
-            nfcTagCls.classLoader,
-            arrayOf(nfcTagCls),
-        ) { _, _, _ -> null } as Any
-        return ctor.newInstance(
-            ByteArray(uid.length / 2) {
-                uid.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-            },
-            intArrayOf(),
-            arrayOfNulls<android.os.Bundle>(0),
-            0,
-            0L,
-            tagService,
-        ) as Tag
-    }
-
-    /**
-     * Delivers a tag to the resumed activity the way the NFC stack's
-     * foreground dispatch would: an intent carrying EXTRA_TAG to the
-     * activity itself, arriving as an onNewIntent.
-     */
-    private fun sendTag(controller: ActivityController<MainActivity>, uid: String) {
-        controller.newIntent(Intent(Intent.ACTION_MAIN).putExtra(NfcAdapter.EXTRA_TAG, tagWithUid(uid)))
-        compose.waitForIdle()
-    }
-
+    /** Opens the NFC tags pane (settings, the NFC tags row). */
     private fun openNfcTagsPane() {
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-    }
-
-    /** Idles the main looper + compose until [cond] holds or fails. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for the condition to hold" }
-    }
-
-    /** Waits until a node with [text] exists (pumping the looper across Room hops). */
-    private fun waitForText(text: String, timeoutMs: Long = 5_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var last: AssertionError? = null
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                compose.onNodeWithText(text).assertExists()
-                return
-            } catch (e: AssertionError) {
-                last = e
-                ShadowLooper.idleMainLooper()
-                compose.waitForIdle()
-                Thread.sleep(10)
-            }
-        }
-        throw last ?: AssertionError("timed out waiting for text '$text'")
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
     }
 
     @Test
     fun scanNfcButtonIsThePaneAction_notAListRow_andArmsTheScan() {
         seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
@@ -204,7 +126,7 @@ class TagScanUiTest {
     @Test
     fun scanDialogCancel_dismissesWithoutArmedScan() {
         seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
@@ -221,7 +143,7 @@ class TagScanUiTest {
     @Test
     fun scanOfRegisteredTag_opensTheTagProfilePage() {
         seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
@@ -232,9 +154,9 @@ class TagScanUiTest {
 
         // A registered tag is presented: the read arrives through the
         // foreground-dispatch path, exactly like a registration scan read.
-        sendTag(controller, REGISTERED_UID)
-        idleUntil({ !viewModel.scanActive.value })
-        waitForText("Tag details")
+        compose.sendTagWithUid(controller, REGISTERED_UID)
+        compose.idleUntil({ !viewModel.scanActive.value })
+        compose.waitForText("Tag details")
 
         // The scan dialog closed and the tag's PROFILE page opened (not an
         // edit dialog): the page shows the tag's details, its (empty)
@@ -253,7 +175,7 @@ class TagScanUiTest {
         // The edit dialog is NOT what a scan opens.
         compose.onNodeWithText("Edit tag").assertDoesNotExist()
         // The resolved target is consumed, so a later scan can re-trigger.
-        idleUntil({ viewModel.pendingTagProfile.value == null })
+        compose.idleUntil({ viewModel.pendingTagProfile.value == null })
         assertNull("the resolved tag must be consumed", viewModel.pendingTagProfile.value)
     }
 
@@ -262,7 +184,7 @@ class TagScanUiTest {
         // A different tag is registered: it must not be what the scan
         // resolves to (the scanned tag is unknown).
         seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
@@ -272,8 +194,8 @@ class TagScanUiTest {
 
         // An unknown tag is presented: the scan settles into the
         // registration flow (capture + naming dialog).
-        sendTag(controller, UNREGISTERED_UID)
-        idleUntil({ viewModel.capturedUid.value == UNREGISTERED_UID })
+        compose.sendTagWithUid(controller, UNREGISTERED_UID)
+        compose.idleUntil({ viewModel.capturedUid.value == UNREGISTERED_UID })
         compose.waitForIdle()
         assertFalse("a captured tag must end the scan", viewModel.scanActive.value)
         compose.onNodeWithText("Scan a tag").assertDoesNotExist()
@@ -283,30 +205,30 @@ class TagScanUiTest {
         // Saving registers the tag: the toast lands once the Room write
         // settles, the naming dialog closes, and the tag row joins the list.
         compose.onNodeWithText("Save").performClick()
-        idleUntil({ ShadowToast.getTextOfLatestToast() == "Tag added!" })
+        compose.idleUntil({ ShadowToast.getTextOfLatestToast() == "Tag added!" })
         compose.waitForIdle()
         compose.onNodeWithText("Tag captured").assertDoesNotExist()
-        waitForText(UNREGISTERED_UID)
+        compose.waitForText(UNREGISTERED_UID)
         compose.onNodeWithText("Porch").assertExists()
     }
 
     @Test
     fun scanSettlesOnTheFirstRead_secondReadIsAPlaybackRead() {
         seedTag(REGISTERED_UID, "Porch")
-        val controller = startMainActivity()
+        val controller = compose.setupMainActivity()
         val viewModel = viewModelOf(controller.get())
         openNfcTagsPane()
 
         compose.onNodeWithText("Scan NFC").performClick()
         compose.waitForIdle()
-        sendTag(controller, REGISTERED_UID)
-        idleUntil({ !viewModel.scanActive.value })
-        waitForText("Tag details")
+        compose.sendTagWithUid(controller, REGISTERED_UID)
+        compose.idleUntil({ !viewModel.scanActive.value })
+        compose.waitForText("Tag details")
 
         // The scan is over: a further read of the same tag is a normal
         // playback read (the tag has no songs, so it reports, not opens).
-        sendTag(controller, REGISTERED_UID)
-        idleUntil({ ShadowToast.getTextOfLatestToast() == "Nothing is linked to Porch yet." })
+        compose.sendTagWithUid(controller, REGISTERED_UID)
+        compose.idleUntil({ ShadowToast.getTextOfLatestToast() == "Nothing is linked to Porch yet." })
         assertEquals(
             "Nothing is linked to Porch yet.",
             ShadowToast.getTextOfLatestToast(),

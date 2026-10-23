@@ -16,6 +16,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The user-visible device-admin consent copy behind the Advanced options
@@ -48,13 +49,6 @@ class DeviceAdminCopyTest {
         markSetupCompleteForTests()
     }
 
-
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
-    }
 
     @Test
     fun theConsentIntentExplanationNamesTheAdvancedOptionsPage() {

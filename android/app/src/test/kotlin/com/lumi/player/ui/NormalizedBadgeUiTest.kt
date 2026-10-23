@@ -8,7 +8,6 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import androidx.lifecycle.viewModelScope
 import com.lumi.player.LumiApp
 import com.lumi.player.data.AudioLevelMode
@@ -16,7 +15,6 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.data.FolderChild
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -26,7 +24,12 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
+import com.lumi.player.ui.testutil.openTagPage
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The song lists badge the entries the app will actually play
@@ -60,49 +63,6 @@ class NormalizedBadgeUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 60_000, message: String = "the screen to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
-    private fun openContentPane(): LumiViewModel {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
-    }
-
-    private fun openTagPage(name: String): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText(name).performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     private fun storeSongs(vararg labels: String): List<Long> {
         return dbAndGet {
             labels.mapIndexed { index, label ->
@@ -126,13 +86,13 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun aMeasuredSongIsBadgedInTheContentPane() {
-        openContentPane()
+        compose.openContentPane()
         setAudioLevelMode(AudioLevelMode.NORMALIZE)
         val ids = storeSongs("alpha", "bravo")
         // The app measured alpha (it has a loudness reading); bravo was
         // never measured.
         recordLoudness(ids[0], lufs = -14.0)
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("alpha").isDisplayed() &&
                     compose.onNodeWithText("bravo").isDisplayed()
@@ -148,12 +108,12 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun aMeasuredSongIsNotBadgedWhileTheModeIsOff() {
-        openContentPane()
+        compose.openContentPane()
         val ids = storeSongs("alpha", "bravo")
         // The mode stays at its default (OFF - no gain is applied at
         // playback), so even the stored reading is not normalized.
         recordLoudness(ids[0], lufs = -14.0)
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("alpha").isDisplayed() &&
                     compose.onNodeWithText("bravo").isDisplayed()
@@ -166,10 +126,10 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun theAudioLevelModeTogglesTheBadgeLive() {
-        openContentPane()
+        compose.openContentPane()
         val ids = storeSongs("alpha", "bravo")
         recordLoudness(ids[0], lufs = -14.0)
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("alpha").isDisplayed() &&
                     compose.onNodeWithText("bravo").isDisplayed()
@@ -181,14 +141,14 @@ class NormalizedBadgeUiTest {
         assertEquals(0, badgeCount())
         // Turning the mode on badges the measured song live ...
         setAudioLevelMode(AudioLevelMode.NORMALIZE)
-        idleUntil(
+        compose.idleUntil(
             cond = { badgeCount() == 1 },
             message = "the badge to appear with the mode on",
         )
         compose.waitForIdle()
         // ... and turning it off again removes it.
         setAudioLevelMode(AudioLevelMode.OFF)
-        idleUntil(
+        compose.idleUntil(
             cond = { badgeCount() == 0 },
             message = "the badge to disappear with the mode off",
         )
@@ -198,7 +158,7 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun aSilentSongIsNotBadgedInTheContentPane() {
-        openContentPane()
+        compose.openContentPane()
         setAudioLevelMode(AudioLevelMode.NORMALIZE)
         val ids = storeSongs("silent", "loud")
         // silent's measurement settled with NO loudness reading (a silent
@@ -206,7 +166,7 @@ class NormalizedBadgeUiTest {
         // reading.
         recordLoudness(ids[0], lufs = null)
         recordLoudness(ids[1], lufs = -18.0)
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("silent").isDisplayed() &&
                     compose.onNodeWithText("loud").isDisplayed()
@@ -221,10 +181,10 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun noBadgesWithoutAnyMeasurements() {
-        openContentPane()
+        compose.openContentPane()
         setAudioLevelMode(AudioLevelMode.NORMALIZE)
         storeSongs("alpha", "bravo")
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("alpha").isDisplayed() &&
                     compose.onNodeWithText("bravo").isDisplayed()
@@ -246,8 +206,8 @@ class NormalizedBadgeUiTest {
         recordLoudness(songIds[0], lufs = -14.0)
         setAudioLevelMode(AudioLevelMode.NORMALIZE)
 
-        openTagPage("Bunny")
-        idleUntil(
+        compose.openTagPage("Bunny")
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("First song").isDisplayed() &&
                     compose.onNodeWithText("Second song").isDisplayed()
@@ -260,7 +220,8 @@ class NormalizedBadgeUiTest {
 
     @Test
     fun aMeasuredSongIsBadgedOnTheFolderPage() {
-        val viewModel = openContentPane()
+        val activity = compose.openContentPane()
+        val viewModel = viewModelOf(activity)
         val events = mutableListOf<String>()
         viewModel.viewModelScope.launch {
             viewModel.uiEvents.collect { e: String -> events += e }
@@ -274,7 +235,7 @@ class NormalizedBadgeUiTest {
             )
         }
         viewModel.addFolderEntry(Uri.parse(FOLDER_TREE_URI))
-        idleUntil(
+        compose.idleUntil(
             cond = { events.any { it == "Added 2 songs from the folder." } },
             message = "the folder add to settle",
         )
@@ -288,7 +249,7 @@ class NormalizedBadgeUiTest {
         // Open the folder's own page (the folder row is the pane's row).
         compose.onNodeWithText(FOLDER_TREE_URI).performScrollTo()
         compose.onNodeWithText(FOLDER_TREE_URI).performClick()
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithText("songA.mp3").isDisplayed() &&
                     compose.onNodeWithText("songB.mp3").isDisplayed()

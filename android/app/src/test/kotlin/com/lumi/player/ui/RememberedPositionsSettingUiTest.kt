@@ -25,6 +25,8 @@ import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.openAdvancedPage
 
 /**
  * Verifies the remembered-playback-positions advanced option (the Advanced
@@ -63,19 +65,6 @@ class RememberedPositionsSettingUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun openAdvancedPage(): MainActivity {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performScrollTo()
-        compose.waitForIdle()
-        compose.onNodeWithText("Advanced options").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     /**
      * Asserts the section renders and scrolls its row (the stepper's host)
      * into view. The section sits below the fold on the small test screen,
@@ -92,14 +81,6 @@ class RememberedPositionsSettingUiTest {
         compose.waitForIdle()
     }
 
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
-    }
-
     /** Waits for the asynchronous Room round trip to make the setting observable. */
     private fun awaitRememberedPositions(activity: MainActivity, expected: Int) {
         val deadline = System.currentTimeMillis() + 5_000
@@ -112,7 +93,7 @@ class RememberedPositionsSettingUiTest {
 
     @Test
     fun advancedPageShowsRememberedPositionsDefaultingToThree() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
         showSection(activity)
 
         // The stepper defaults to the hard-coded count (3) - today's
@@ -132,7 +113,7 @@ class RememberedPositionsSettingUiTest {
 
     @Test
     fun steppingUpPersistsTheCount() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
         showSection(activity)
 
         // Each step drives the view model, which persists to the database;
@@ -150,7 +131,7 @@ class RememberedPositionsSettingUiTest {
 
     @Test
     fun steppingDownPersistsTheCountAndClampsAtOne() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
         showSection(activity)
 
         // 3 -> 2 -> 1, then a step below the minimum: the settings writer
@@ -169,7 +150,7 @@ class RememberedPositionsSettingUiTest {
 
     @Test
     fun aTapIssuedWhileTheWriteIsInFlightIsNotAppliedAndTheNextStepStepsFromTheLandedValue() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
         showSection(activity)
 
         // Hold the write's in-flight window open: the write persists its
@@ -222,7 +203,7 @@ class RememberedPositionsSettingUiTest {
 
     @Test
     fun anOutOfRangePickIsClampedToTheSettingBound() {
-        val activity = openAdvancedPage()
+        val activity = compose.openAdvancedPage()
         showSection(activity)
 
         // A pick far above the setting's bound (20) is clamped to it -

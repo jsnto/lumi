@@ -8,13 +8,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagSongRow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -25,7 +23,10 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.setupMainActivity
 
 /**
  * The Content pane's "Add content" is the ONLY file-picker launch in the
@@ -55,31 +56,9 @@ class TagPickerDispatchUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
+    /** Builds the app's real [MainActivity] in the resumed (SETUP) state. */
     private fun openMainActivity(): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        return activity
-    }
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    /** Pumps the main looper until [cond] holds or fails. */
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the pick to land") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
+        return compose.setupMainActivity().get()
     }
 
     /** The current content count, read off the database. */
@@ -169,11 +148,11 @@ class TagPickerDispatchUiTest {
         // The entry must land as plain content (visible in the Content
         // pane) and must NOT be linked to the seeded tag - the pick was
         // for the content pane, not for a tag.
-        idleUntil({ entryCount() == 1 })
+        compose.idleUntil({ entryCount() == 1 })
         // The row renders through the Room round trip (the write's commit
         // precedes the list flow's re-emission on the main looper): pump
         // until the content pane has settled on it.
-        idleUntil(
+        compose.idleUntil(
             { compose.onAllNodesWithText("Untitled").fetchSemanticsNodes().isNotEmpty() },
             message = "the content pane's new row",
         )
@@ -206,7 +185,7 @@ class TagPickerDispatchUiTest {
         val field = MainActivity::class.java.getDeclaredField("viewModel")
         field.isAccessible = true
         val viewModel = field.get(activity) as LumiViewModel
-        idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
+        compose.idleUntil({ viewModel.effectiveSelectedTagId.value == tagId })
 
         val launchedBefore = launchedPickerKeys(activity)
         compose.onNodeWithContentDescription("Add song").performScrollTo()
@@ -230,7 +209,7 @@ class TagPickerDispatchUiTest {
         compose.waitForIdle()
         compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
-        idleUntil({ tagLinks(tagId).size == 2 })
+        compose.idleUntil({ tagLinks(tagId).size == 2 })
         val labels: List<String> = tagLinks(tagId).mapNotNull { it.entry?.label }
         assertEquals(
             "the checked song must be appended after the tag's existing song",

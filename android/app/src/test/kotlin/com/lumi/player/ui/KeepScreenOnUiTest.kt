@@ -13,6 +13,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * Verifies the keep-screen-on behavior on the main activity: the screen is
@@ -55,14 +56,6 @@ class KeepScreenOnUiTest {
         val m = MainActivity::class.java.getDeclaredMethod(method)
         m.isAccessible = true
         m.invoke(activity)
-    }
-
-    /** The activity's real [LumiViewModel], via reflection. */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java
-            .getDeclaredField("viewModel")
-            .also { it.isAccessible = true }
-        return field.get(activity) as LumiViewModel
     }
 
     /** Waits for the asynchronous Room round trip to make the setting observable. */

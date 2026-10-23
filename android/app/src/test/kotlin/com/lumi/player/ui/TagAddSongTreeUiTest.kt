@@ -12,13 +12,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagSongRow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,7 +28,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.waitForText
+import com.lumi.player.ui.testutil.app
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickTagRow
 
 /**
  * The tag detail page's add-song picker laid out as the content folder
@@ -76,43 +82,6 @@ class TagAddSongTreeUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    private fun app(): LumiApp = ApplicationProvider.getApplicationContext()
-
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 15_000, message: String = "the condition") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            compose.waitForIdle()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
-    private fun waitForText(text: String, timeoutMs: Long = 15_000) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var last: AssertionError? = null
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                compose.onNodeWithText(text).assertExists()
-                return
-            } catch (e: AssertionError) {
-                last = e
-                ShadowLooper.idleMainLooper()
-                compose.waitForIdle()
-                Thread.sleep(10)
-            }
-        }
-        throw last ?: AssertionError("timed out waiting for text '$text'")
-    }
-
     /**
      * Stores the content the tree tests drive against: two individual
      * songs, and one added folder ("Music") carrying a root song and a
@@ -137,16 +106,16 @@ class TagAddSongTreeUiTest {
     }
 
     /** Registers the tag and opens its details page. */
+    /**
+     * Registers the tag, opens its detail page (settings, NFC tags, the tag's
+     * row), and returns the activity controller.
+     */
     private fun openTagPage(): ActivityController<MainActivity> {
         dbAndGet { app().repository.addTag(TAG_UID, "Porch") }
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Porch").performClick()
-        compose.waitForIdle()
+        val controller = compose.setupMainActivity()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow("Porch")
         compose.onNodeWithText("Tag details").assertIsDisplayed()
         return controller
     }
@@ -165,7 +134,7 @@ class TagAddSongTreeUiTest {
         // The merged tree can lag a pending recomposition by a frame, and
         // a clipped row reports zero bounds until its layout settles:
         // wait for the row to be laid out in view before clicking it.
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot.height > 0f
@@ -177,13 +146,6 @@ class TagAddSongTreeUiTest {
         )
         compose.onNodeWithText(label).performClick()
         compose.waitForIdle()
-    }
-
-    /** The activity's view model (the same seam the other settings tests use). */
-    private fun mainViewModel(activity: MainActivity): LumiViewModel {
-        val field = MainActivity::class.java.getDeclaredField("viewModel")
-        field.isAccessible = true
-        return field.get(activity) as LumiViewModel
     }
 
     private fun openPicker() {
@@ -216,15 +178,15 @@ class TagAddSongTreeUiTest {
 
         // The top level: the individual songs (the non-folder rows) and
         // the added folder's row.
-        waitForText("Alpha")
-        waitForText("Beta")
-        waitForText("Music")
+        compose.waitForText("Alpha")
+        compose.waitForText("Beta")
+        compose.waitForText("Music")
         // The folder row carries the folder's own imported structure:
         // its subfolder row and the songs nested under it (plus the song
         // sitting directly at the folder's root).
-        waitForText("Album")
-        waitForText("Root song")
-        waitForText("Album song")
+        compose.waitForText("Album")
+        compose.waitForText("Root song")
+        compose.waitForText("Album song")
 
         // The tree's show/hide affordance: the folder rows carry a
         // collapse chevron (shown while expanded).
@@ -248,7 +210,7 @@ class TagAddSongTreeUiTest {
         storeTreeContent()
         openTagPage()
         openPicker()
-        waitForText("Music")
+        compose.waitForText("Music")
 
         // The folder's rows are shown by default (its root song and the
         // subfolder's nested row).
@@ -298,8 +260,8 @@ class TagAddSongTreeUiTest {
         }
         openTagPage()
         openPicker()
-        waitForText("Internal song")
-        waitForText("External song")
+        compose.waitForText("Internal song")
+        compose.waitForText("External song")
         assertEquals(
             "the two equal-label folders show two rows",
             2,
@@ -364,8 +326,8 @@ class TagAddSongTreeUiTest {
         }
         openTagPage()
         openPicker()
-        waitForText("Internal album song")
-        waitForText("External album song")
+        compose.waitForText("Internal album song")
+        compose.waitForText("External album song")
         assertEquals(
             "the two equal-label folders show two rows",
             2,
@@ -413,7 +375,7 @@ class TagAddSongTreeUiTest {
     private fun clickAllRow(label: String, index: Int) {
         compose.onAllNodesWithText(label)[index].performScrollTo()
         compose.waitForIdle()
-        idleUntil(
+        compose.idleUntil(
             {
                 try {
                     compose.onAllNodesWithText(label)[index]
@@ -433,7 +395,7 @@ class TagAddSongTreeUiTest {
         val ids = storeTreeContent()
         openTagPage()
         openPicker()
-        waitForText("Music")
+        compose.waitForText("Music")
 
         // Check the nested song FIRST, then the top-level song: the save
         // must commit them in the TREE'S render order (the folder's
@@ -452,7 +414,7 @@ class TagAddSongTreeUiTest {
         // The commit runs on the main looper through the view model (one
         // awaited write per song), so pump until both links have settled
         // in the database.
-        idleUntil(
+        compose.idleUntil(
             { tagLinks().size == 2 },
             message = "both checked songs to be linked",
         )
@@ -469,7 +431,7 @@ class TagAddSongTreeUiTest {
         storeTreeContent()
         openTagPage()
         openPicker()
-        waitForText("Music")
+        compose.waitForText("Music")
 
         // Check the nested song, collapse the folder (the row hides),
         // check the top-level song, and save: the hidden-but-checked row
@@ -489,7 +451,7 @@ class TagAddSongTreeUiTest {
         // The commit runs on the main looper through the view model (one
         // awaited write per song), so pump until both links have settled
         // in the database.
-        idleUntil(
+        compose.idleUntil(
             { tagLinks().size == 2 },
             message = "both checked songs to be linked",
         )
@@ -509,9 +471,9 @@ class TagAddSongTreeUiTest {
         dbAndGet { listOf(ids["alpha"]!!).forEach { app().repository.linkEntryToTag(tagId, it) } }
         // The page's own song list (the flag's source) must be selected
         // before the picker is opened.
-        idleUntil({ mainViewModel(controller.get()).effectiveSelectedTagId.value == tagId })
+        compose.idleUntil({ viewModelOf(controller.get()).effectiveSelectedTagId.value == tagId })
         openPicker()
-        waitForText("Music")
+        compose.waitForText("Music")
 
         // The flagged row carries its "Already on this tag" marking, and
         // it carries no checkbox (it is non-addable): the check can never
@@ -532,7 +494,7 @@ class TagAddSongTreeUiTest {
         compose.onNodeWithText("Add a song").assertDoesNotExist()
         // The commit runs on the main looper through the view model, so
         // pump until the checked link has settled in the database.
-        idleUntil(
+        compose.idleUntil(
             { tagLinks().mapNotNull { it.entry?.label } == listOf("Alpha", "Beta") },
             message = "the checked song to be linked after the flagged one",
         )
@@ -577,11 +539,11 @@ class TagAddSongTreeUiTest {
         // The re-import: a fresh content row with the same name.
         val reimportedId = dbAndGet { app().repository.addEntry(EntryType.AUDIO, "Gone song", "content://gone-again").id }
 
-        idleUntil({ mainViewModel(controller.get()).effectiveSelectedTagId.value == tagId })
+        compose.idleUntil({ viewModelOf(controller.get()).effectiveSelectedTagId.value == tagId })
 
         // The page's row resolves live to the re-imported entry: the
         // warning copy is gone, the row is playable again.
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("this song is no longer in the content list").assertDoesNotExist()
                 true
@@ -598,7 +560,7 @@ class TagAddSongTreeUiTest {
         // no checkbox, non-addable. (The label appears on the page behind
         // the dialog too, so the flag's own copy is the unique assertion.)
         openPicker()
-        idleUntil({
+        compose.idleUntil({
             try {
                 compose.onNodeWithText("Already on this tag").assertExists()
                 true
@@ -627,7 +589,7 @@ class TagAddSongTreeUiTest {
         val tagId = dbAndGet { app().repository.tagByUid(TAG_UID)!!.id }
         dbAndGet { listOf(ids["alpha"]!!).forEach { app().repository.linkEntryToTag(tagId, it) } }
         openPicker()
-        waitForText("Music")
+        compose.waitForText("Music")
 
         // Nothing is checked (the only content row is flagged): the Save
         // button carries the disabled semantic - a flagged row is not a
@@ -667,14 +629,10 @@ class TagAddSongTreeUiTest {
 
     /** Opens the tag page (a fresh activity, no tag songs yet) and the picker. */
     private fun openPickerAtFreshPage() {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("NFC tags").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Porch").performClick()
-        compose.waitForIdle()
+        compose.setupMainActivity()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow("Porch")
         openPicker()
     }
 }

@@ -10,7 +10,6 @@ import com.lumi.player.data.EntryType
 import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.PlayerUiState
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -21,7 +20,9 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.openContentPane
 
 /**
  * A song title that is too long to fit auto-scrolls (marquee) instead of
@@ -66,33 +67,6 @@ class MarqueeUiTest {
     private fun app(): LumiApp =
         androidx.test.core.app.ApplicationProvider.getApplicationContext()
 
-    /** Runs a suspend block on the app's database and returns its result. */
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 5_000, message: String = "the screen to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        check(cond()) { "timed out waiting for $message" }
-    }
-
-    private fun openContentPane(): MainActivity {
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Content").performClick()
-        compose.waitForIdle()
-        return activity
-    }
-
     private fun storeSongs(vararg labels: String) {
         dbAndGet {
             labels.forEachIndexed { index, label ->
@@ -103,13 +77,13 @@ class MarqueeUiTest {
 
     @Test
     fun aLongSongTitleScrollsInTheContentPaneRow() {
-        openContentPane()
+        compose.openContentPane()
         storeSongs("short song", LONG_TITLE)
         // The long title's row flips into the scrolling state once its
         // first layout measures it: the scrolling marquee carries the
         // FULL title as the row's content description (merged up from the
         // marquee's own box).
-        idleUntil(
+        compose.idleUntil(
             cond = {
                 compose.onNodeWithContentDescription(LONG_TITLE).isDisplayed() &&
                     compose.onNodeWithText("short song").isDisplayed()
@@ -128,9 +102,9 @@ class MarqueeUiTest {
 
     @Test
     fun aFittingSongTitleStaysStaticInTheContentPaneRow() {
-        openContentPane()
+        compose.openContentPane()
         storeSongs("short song")
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onNodeWithText("short song").isDisplayed() },
             message = "the content row to settle",
         )
@@ -157,7 +131,7 @@ class MarqueeUiTest {
         // The strip's title flips into the scrolling state once its first
         // layout measures it: the scrolling marquee carries the FULL label
         // as its own content description.
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onNodeWithContentDescription(LONG_TITLE).isDisplayed() },
             message = "the strip's title to flip into the scrolling marquee",
         )
@@ -220,7 +194,7 @@ class MarqueeUiTest {
         }
         Robolectric.buildActivity(MainActivity::class.java).setup()
         compose.waitForIdle()
-        idleUntil(
+        compose.idleUntil(
             cond = { compose.onNodeWithContentDescription(LONG_TITLE).isDisplayed() },
             message = "the title to flip into the scrolling marquee",
         )

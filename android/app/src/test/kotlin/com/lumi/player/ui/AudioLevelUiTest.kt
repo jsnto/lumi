@@ -9,9 +9,8 @@ import androidx.compose.ui.test.performScrollTo
 import com.lumi.player.LumiApp
 import com.lumi.player.data.AudioLevelMode
 import com.lumi.player.data.EntryType
-import com.lumi.player.data.LoudnessResult
+import com.lumi.player.core.LoudnessResult
 import com.lumi.player.data.LoudnessStatus
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -23,7 +22,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowLooper
+import com.lumi.player.ui.testutil.idleUntil
+import com.lumi.player.ui.testutil.dbAndGet
+import com.lumi.player.ui.testutil.viewModelOf
 
 /**
  * The "Audio level" settings pane (the Advanced options page's row): the
@@ -61,14 +62,6 @@ class AudioLevelUiTest {
         NfcTestState.radioEnabled = true
     }
 
-    /** The app's view model (the real construction, the test seam
-     *  reachable through it). */
-    private fun viewModelOf(activity: MainActivity): LumiViewModel {
-        return MainActivity::class.java.getDeclaredField("viewModel").apply {
-            isAccessible = true
-        }.get(activity) as LumiViewModel
-    }
-
     /** Opens the audio level sub-screen (player -> settings menu -> the
      *  "Advanced options" row -> the "Audio level" row - the setting's
      *  home since the reorganization). The activity is left up - see the
@@ -103,22 +96,6 @@ class AudioLevelUiTest {
         compose.waitForIdle()
     }
 
-    private fun <T> dbAndGet(block: suspend () -> T): T {
-        var result: T? = null
-        Thread { result = runBlocking { block() } }.also { it.start() }.apply { join() }
-        @Suppress("UNCHECK_CAST")
-        return result as T
-    }
-
-    private fun idleUntil(cond: () -> Boolean, timeoutMs: Long = 30_000, message: String = "the operation to settle") {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!cond() && System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(10)
-        }
-        assertTrue("timed out waiting for $message", cond())
-    }
-
     @Test
     fun thePaneOffersTheModesTheTargetsAndTheNormalizeAction() {
         val (activity, viewModel) = openAudioLevel()
@@ -141,7 +118,7 @@ class AudioLevelUiTest {
         compose.onNodeWithText("Normalize now").assertExists()
 
         // The default state is Off at the default target.
-        idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.OFF })
+        compose.idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.OFF })
         assertEquals(-16.0, viewModel.audioLevelTargetLufs.value, 0.0001)
         compose.waitForIdle()
     }
@@ -156,7 +133,7 @@ class AudioLevelUiTest {
         compose.onNodeWithText("Normalize").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Normalize").performClick()
-        idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.NORMALIZE })
+        compose.idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.NORMALIZE })
         compose.waitForIdle()
 
         // The persisted state survives a restart (a fresh activity over the
@@ -167,7 +144,7 @@ class AudioLevelUiTest {
         compose.waitForIdle()
         openAdvancedPage()
         val vm2 = viewModelOf(restarted)
-        idleUntil({ vm2.audioLevelMode.value == AudioLevelMode.NORMALIZE })
+        compose.idleUntil({ vm2.audioLevelMode.value == AudioLevelMode.NORMALIZE })
         compose.waitForIdle()
         compose.onNodeWithText("Normalize to -16 LUFS").assertExists()
         restarted.onBackPressedDispatcher.onBackPressed()
@@ -181,7 +158,7 @@ class AudioLevelUiTest {
         compose.onNodeWithText("-18 LUFS").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("-18 LUFS").performClick()
-        idleUntil({ viewModel.audioLevelTargetLufs.value == -18.0 })
+        compose.idleUntil({ viewModel.audioLevelTargetLufs.value == -18.0 })
         compose.waitForIdle()
         assertEquals(-18.0, viewModel.audioLevelTargetLufs.value, 0.0001)
 
@@ -190,11 +167,11 @@ class AudioLevelUiTest {
         compose.onNodeWithText("Normalize").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Normalize").performClick()
-        idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.NORMALIZE })
+        compose.idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.NORMALIZE })
         compose.onNodeWithText("Off").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Off").performClick()
-        idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.OFF })
+        compose.idleUntil({ viewModel.audioLevelMode.value == AudioLevelMode.OFF })
         assertEquals("-18 is the stored target still", -18.0, viewModel.audioLevelTargetLufs.value, 0.0001)
         compose.waitForIdle()
     }
@@ -213,7 +190,7 @@ class AudioLevelUiTest {
             calls.incrementAndGet()
             LoudnessResult(-16.0, -1.0)
         }
-        idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(0, 2) })
+        compose.idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(0, 2) })
         compose.waitForIdle()
         compose.onNodeWithText("0 of 2 songs measured").assertExists()
 
@@ -224,8 +201,8 @@ class AudioLevelUiTest {
         compose.onNodeWithText("Normalize now").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Normalize now").performClick()
-        idleUntil({ calls.get() == 2 && !viewModel.normalizing.value })
-        idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(2, 2) })
+        compose.idleUntil({ calls.get() == 2 && !viewModel.normalizing.value })
+        compose.idleUntil({ viewModel.loudnessStatus.value == LoudnessStatus(2, 2) })
         compose.waitForIdle()
         compose.onNodeWithText("2 of 2 songs measured").assertExists()
         compose.waitForIdle()
