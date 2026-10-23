@@ -162,7 +162,8 @@ the video/URL actions later does not require reworking storage.
   pauses only once the active tag has gone unreported for that long; tags
   with a connectable read session (Mifare Ultralight, NfcA, or IsoDep)
   additionally get a continuous-read fast path that confirms removal in
-  ~0.4 s (see `MainActivity`, `MifarePresencePoller`, `GenericPresencePoller`)
+  ~0.4 s (see `PresenceFallbackEngine`, `MifarePresencePoller`,
+  `GenericPresencePoller`)
 - iOS: Swift (SwiftPM) — a pure `LumiCore` layer (the ported logic: the NDEF
   payload codec, the play-mode policy, the position memory, the content
   sort, the folder walk, the loudness meter and gain math, the JSON store)
