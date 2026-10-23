@@ -70,7 +70,7 @@ import com.lumi.player.player.PlayerUiState
 internal fun FolderDetailPane(
     viewModel: LumiViewModel,
     folder: FolderEntity,
-    songs: LumiViewModel.FolderSongsState?,
+    songs: FolderContentManager.FolderSongsState?,
     normalized: Set<Long>,
     sortDirection: ContentSortDirection,
     playState: PlayerUiState,
