@@ -35,7 +35,7 @@ COPY ios/ ./ios/
 # (the app target is excluded) and the entrypoint's own build sets it.
 RUN swift build --package-path ios -c release
 
-# The entrypoint (ios/scripts/build-ipa-docker.sh runs the container and
+# The entrypoint (scripts/build-ipa-docker.sh runs the container and
 # copies /out/lumi-ios.ipa out): verify the mounted SDK, build the arm64
 # release for the iOS platform WITH the app target (LUMI_BUILD_APP=1 -
 # exported here, in the entrypoint's shell, so the build-time sanity step

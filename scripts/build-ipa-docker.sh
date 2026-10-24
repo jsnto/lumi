@@ -2,7 +2,7 @@
 # Build the lumi iOS app's .ipa inside Docker - no Xcode, no macOS, no
 # Swift toolchain on the host (only a Docker daemon + the iOS Swift SDK).
 #
-#   Usage:     ./ios/scripts/build-ipa-docker.sh   (from the repo root)
+#   Usage:     ./scripts/build-ipa-docker.sh   (from the repo root)
 #   Output:    dist/lumi-ios.ipa
 #   Overrides: LUMI_DOCKER_IMAGE=<image>   (default lumi-ipa-builder:1)
 #              LUMI_IOS_SDK_DIR=<dir>      (default ios/sdk - the iOS
@@ -16,9 +16,9 @@
 # when the iOS Swift SDK is missing - it is the one input this image
 # cannot fetch or generate (the iOS platform files are Apple's).
 set -euo pipefail
-# The script lives in <repo root>/ios/scripts/; build from the repo root
+# The script lives in <repo root>/scripts/; build from the repo root
 # (the Docker context), with the Dockerfile referenced under ios/.
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 
 IMAGE="${LUMI_DOCKER_IMAGE:-lumi-ipa-builder:1}"
 SDK_DIR="${LUMI_IOS_SDK_DIR:-ios/sdk}"

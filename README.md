@@ -244,7 +244,7 @@ be produced on a Mac; see the ios/ README for the walkthrough). With the
 SDK in place (default `ios/sdk`):
 
 ```sh
-./ios/scripts/build-ipa-docker.sh   # -> dist/lumi-ios.ipa
+./scripts/build-ipa-docker.sh   # -> dist/lumi-ios.ipa
 ```
 
 Overrides: `LUMI_IOS_SDK_DIR=<dir>` (default `ios/sdk`),
