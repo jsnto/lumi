@@ -152,8 +152,10 @@ ios/
   packaging/generate_icons.py  the icon generator (renders every size
                            from the icon's own 108-grid vector spec)
   Dockerfile               the IPA builder (pinned swift:6.4.0-jammy)
-  scripts/build-ipa-docker.sh  the build script (-> dist/lumi-ios.ipa)
 ```
+
+The IPA build script lives at the repo root with the other build scripts:
+`scripts/build-ipa-docker.sh` (-> dist/lumi-ios.ipa).
 
 `LumiCore` is deliberately pure (no AVFoundation, no CoreNFC, no
 SwiftUI): it compiles and its tests run on a plain Linux/macOS Swift
@@ -190,7 +192,7 @@ Apple's). On a Mac:
 Then, from the repo root:
 
 ```sh
-./ios/scripts/build-ipa-docker.sh   # -> dist/lumi-ios.ipa
+./scripts/build-ipa-docker.sh   # -> dist/lumi-ios.ipa
 ```
 
 Overrides: `LUMI_IOS_SDK_DIR=<dir>` (default `ios/sdk`),
