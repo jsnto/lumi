@@ -461,10 +461,10 @@ class RegistrationPrefillUiTest {
     }
 
     @Test
-    fun registrationScan_readsTheCardOnce_andTheUrlsComeFromThatRead() {
+    fun registrationScan_readsTheCardOnce_andNoSecondReadRunsAlongsideIt() {
         // The scan's one NDEF read per presentation: the capture's own
-        // read publishes the prefill AND the card's per-song urls - no
-        // second read races it for the tag's single connection slot.
+        // read is the presentation's only NDEF session - no separate
+        // payload read races it for the tag's single connection slot.
         val viewModel = viewModelOf(compose.openSettings())
         val inspects = AtomicInteger(0)
         viewModel.tagInspector = { _, _ ->
@@ -474,15 +474,14 @@ class RegistrationPrefillUiTest {
                     LumiTagData(
                         "Porch",
                         listOf("Gone song"),
-                        mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
                     ),
                 ),
                 false,
             )
         }
-        var urlReads = 0
+        var payloadReads = 0
         viewModel.songPayloadReader = { _ ->
-            urlReads++
+            payloadReads++
             TagPayloadRead.Answered(null)
         }
 
@@ -493,50 +492,8 @@ class RegistrationPrefillUiTest {
 
         compose.idleUntil({ viewModel.capturedTagData.value != null }, message = "the capture's prefill")
         assertEquals("the prefill comes from the capture's own read", "Porch", viewModel.capturedTagData.value?.name)
-        assertEquals(
-            "the card's urls publish from that SAME read",
-            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
-            viewModel.tagSongUrls.value[UID],
-        )
         assertEquals("the presentation's one NDEF read is the capture's", 1, inspects.get())
-        assertEquals("no separate url read runs alongside the capture", 0, urlReads)
-    }
-
-    @Test
-    fun registrationScan_aFailedCaptureReadKeepsTheLastKnownUrls() {
-        // A card whose urls a plain read already published, then a
-        // re-scan whose capture read could not connect (the read's
-        // outcome is UNKNOWN - never "no record"): the last known urls
-        // stay, and the prefill still falls back to the memory as before.
-        val viewModel = viewModelOf(compose.openSettings())
-        viewModel.songPayloadReader = { _ ->
-            TagPayloadRead.Answered(
-                LumiTagData(
-                    "Porch",
-                    listOf("Gone song"),
-                    mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
-                ),
-            )
-        }
-        // The plain read (no scan armed) publishes the card's urls.
-        viewModel.onTagDetected(UID, syntheticTag(UID))
-        compose.idleUntil({ viewModel.tagSongUrls.value[UID]?.isEmpty() == false }, message = "the urls from the plain read")
-
-        // The re-scan: the capture's read fails (it could not connect).
-        val inspects = AtomicInteger(0)
-        viewModel.tagInspector = { _, _ ->
-            inspects.incrementAndGet()
-            TagInspect(TagPayloadRead.Failed, false)
-        }
-        viewModel.startTagScan()
-        viewModel.onTagDetected(UID, syntheticTag(UID))
-        compose.idleUntil({ inspects.get() == 1 }, message = "the capture's read")
-        pumpMain(500)
-        assertEquals(
-            "a failed read keeps the last known urls",
-            mapOf("Gone song" to "https://cdn.example.com/gone.mp3"),
-            viewModel.tagSongUrls.value[UID],
-        )
+        assertEquals("no separate payload read runs alongside the capture", 0, payloadReads)
     }
 
     companion object {

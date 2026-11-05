@@ -23,24 +23,17 @@ import java.nio.charset.StandardCharsets
  * Legacy payloads written before the song list was part of the record carry
  * no "songs" field; they decode with an empty list.
  *
- * Per-song download URLs are the card side's "secret option": a song entry
- * MAY be a `{"name": ..., "url": ...}` object instead of a plain name, the
- * url pointing at a downloadable copy of the song. The decoder is LENIENT
- * (see [LumiTagNdef.fromJson]): legacy plain-name entries decode exactly as
- * before, a url is kept only when it is a non-blank string, and an entry
- * without a usable name is skipped. The app NEVER writes a url
- * ([LumiTagNdef.toJson] writes plain names only), so its own write path
- * cannot propagate or forge them.
+ * The decoder is LENIENT about the card side's entry shapes (see
+ * [LumiTagNdef.fromJson]): a song entry is a plain name (the legacy shape),
+ * and a card-side tool MAY write a `{"name": ..., "url": ...}` object
+ * instead - the decoder takes the entry's name and ignores its url field
+ * (the per-song download option was removed from the app, so a card that
+ * still carries the field decodes name-for-name). An entry without a usable
+ * name is skipped. [LumiTagNdef.toJson] writes plain names only.
  */
 data class LumiTagData(
     val name: String,
     val songs: List<String> = emptyList(),
-    /**
-     * Optional per-song download URLs, keyed by the song's (clamped) display
-     * name - the card side's "secret option", read from the card by the app
-     * and never written by it. Empty for legacy cards.
-     */
-    val songUrls: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -120,9 +113,8 @@ object LumiTagNdef {
         // The play mode is unrelated to tags: the card carries the tag's
         // name and song list only. Cards written before the mode left the
         // format keep their legacy "mode" field - [fromJson] ignores it.
-        // The per-song download urls are the card side's secret option and
-        // are NEVER written: the written payload stays plain names, so the
-        // app's write path cannot propagate or forge them.
+        // The written entries are plain names only (a card-side tool's
+        // object entries decode to the same names; nothing else is written).
         val songs = org.json.JSONArray()
         data.songs.forEach { songs.put(it.take(MAX_SONG_NAME_LENGTH)) }
         json.put("songs", songs)
@@ -138,11 +130,9 @@ object LumiTagNdef {
         // tags, so a card with or without the field decodes identically -
         // name + songs only.
         if (!obj.has("name")) null else {
-            val (songs, songUrls) = parseSongEntries(obj.optJSONArray("songs"))
             LumiTagData(
                 name = obj.getString("name").take(MAX_NAME_LENGTH),
-                songs = songs,
-                songUrls = songUrls,
+                songs = parseSongNames(obj.optJSONArray("songs")),
             )
         }
     } catch (e: Exception) {
@@ -150,53 +140,30 @@ object LumiTagNdef {
     }
 
     /**
-     * The lenient parse of the payload's song entries. A plain-string
-     * entry is the legacy shape (name only, no url) and decodes exactly
-     * as before; a JSON-object entry carries the song's name AND an
-     * optional download url - the url is kept only when it is a non-blank
-     * string (a missing or malformed url means "no url for that song",
-     * nothing else changes), and an entry without a usable name is
-     * skipped. Any other entry shape (number, boolean, array) is skipped.
-     * Names are clamped to [MAX_SONG_NAME_LENGTH] the same way a legacy
-     * name is, so the decoded names stay in the same space the restore
-     * path resolves against.
+     * The lenient parse of the payload's song names. A plain-string entry
+     * is the legacy shape and decodes exactly as before; a JSON-object
+     * entry is the card side's shape - the decoder takes its name and
+     * ignores the url field a card-side tool may carry alongside it (the
+     * per-song download option was removed from the app; a card that still
+     * carries the field decodes name-for-name). An entry without a usable
+     * name is skipped. Any other entry shape (number, boolean, array) is
+     * skipped. Names are clamped to [MAX_SONG_NAME_LENGTH] the same way a
+     * legacy name is, so the decoded names stay in the same space the
+     * restore path resolves against.
      */
-    private fun parseSongEntries(arr: org.json.JSONArray?): Pair<List<String>, Map<String, String>> {
-        if (arr == null) return emptyList<String>() to emptyMap()
+    private fun parseSongNames(arr: org.json.JSONArray?): List<String> {
+        if (arr == null) return emptyList()
         val names = mutableListOf<String>()
-        val urls = mutableMapOf<String, String>()
         for (i in 0 until arr.length()) {
-            val entry = arr.get(i)
-            val name = when (entry) {
+            val name = when (val entry = arr.get(i)) {
                 is String -> entry.take(MAX_SONG_NAME_LENGTH)
                 is JSONObject -> entry.optString("name").take(MAX_SONG_NAME_LENGTH)
                 else -> continue
             }
             if (name.isBlank()) continue
             names += name
-            if (entry is JSONObject) {
-                val url = entry.opt("url")
-                if (url is String && url.isNotBlank()) {
-                    urls[name] = url.trim()
-                }
-            }
         }
-        return names to urls
-    }
-
-    /**
-     * The url [urls] (the card payload's clamped-name → url map) holds for
-     * [songName]: an exact name match first, then - for a stored name
-     * longer than the payload's 50-char clamp - the exact clamped form of
-     * it. A short name is exact-only: it is never a clamp product, so a
-     * prefix hit would surface a different song's url.
-     */
-    fun songUrlFor(urls: Map<String, String>, songName: String): String? {
-        urls[songName]?.let { return it }
-        if (songName.length > MAX_SONG_NAME_LENGTH) {
-            return urls[songName.take(MAX_SONG_NAME_LENGTH)]
-        }
-        return null
+        return names
     }
 
     fun toNdefMessage(data: LumiTagData): NdefMessage =

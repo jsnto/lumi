@@ -24,13 +24,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.ModeEdit
@@ -60,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.EntryType
-import com.lumi.player.data.SongDownload
 import com.lumi.player.data.TagSongRow
 import com.lumi.player.data.TagSyncState
 import com.lumi.player.nfc.LumiTagData
@@ -124,12 +121,6 @@ internal fun TagDetailPane(
     // the details section below): observed through the flow, so the page
     // re-composes when a read publishes the tag's details.
     val tagDetails by viewModel.tagCardDetails.collectAsState()
-    // The per-song download urls the tag's last presented card carried (the
-    // card side's "secret option": read by the app, never written by it) -
-    // per uid, so this page shows only this tag's urls - and the rows'
-    // download states (the per-song progress / failed state of a download).
-    val songUrls by viewModel.tagSongUrls.collectAsState()
-    val downloadStates by viewModel.songDownloadStates.collectAsState()
     Scaffold(topBar = { PaneTopAppBar(tag.name.ifEmpty { "Tag" }, onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -208,9 +199,6 @@ internal fun TagDetailPane(
                         onReordered = { viewModel.reorderTagSongs(tag, it) },
                         onRemoveSong = onRemoveSong,
                         normalized = normalized,
-                        songUrls = songUrls[tag.uid] ?: emptyMap(),
-                        downloadStates = downloadStates,
-                        onDownloadSong = { row, url -> viewModel.downloadTagSong(row.linkId, row.name, url) },
                     )
                 }
             }
@@ -494,9 +482,6 @@ private fun ReorderableSongList(
     onReordered: (List<TagSongRow>) -> Unit,
     onRemoveSong: (TagSongRow) -> Unit,
     normalized: Set<Long>,
-    songUrls: Map<String, String>,
-    downloadStates: Map<Long, LumiViewModel.SongDownloadState>,
-    onDownloadSong: (TagSongRow, String) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     // The observed list, mirrored into state: the drag's pointer closure
@@ -604,16 +589,6 @@ private fun ReorderableSongList(
             // marker.
             val songName = row.name.ifBlank { "Song not found" }
             val isDragging = row.linkId == draggedId
-            // The song's download url from the tag's last presented card
-            // (the card side's "secret option"): offered only for a row
-            // whose song is NOT in the content (the app's name-based song
-            // identity) and whose url is present and a valid song download
-            // url - any miss shows no affordance (see [SongDownload.shouldShowDownloadIcon]).
-            val downloadUrl = if (entry == null) {
-                LumiTagNdef.songUrlFor(songUrls, row.name)
-            } else null
-            val downloadable = downloadUrl != null && SongDownload.shouldShowDownloadIcon(downloadUrl, false)
-            val downloadState = downloadStates[row.linkId]
             SettingRow(
                 leading = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -638,11 +613,10 @@ private fun ReorderableSongList(
                 // The row's own name (see [songName]): never a guessed
                 // placeholder for a row that remembers its song.
                 title = songName,
-                detail = when {
-                    entry != null -> detailFor(entry.type, entry.payload)
-                    downloadState is LumiViewModel.SongDownloadState.InFlight -> "downloading to Music/lumi..."
-                    downloadState is LumiViewModel.SongDownloadState.Failed -> "download failed - tap the icon to try again"
-                    else -> "this song is no longer in the content list"
+                detail = if (entry != null) {
+                    detailFor(entry.type, entry.payload)
+                } else {
+                    "this song is no longer in the content list"
                 },
                 modifier = Modifier
                     .graphicsLayer {
@@ -657,62 +631,6 @@ private fun ReorderableSongList(
                     },
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // The download icon: the card's url for this song
-                        // (the "secret option" the app reads but never
-                        // writes) downloads the song into the public music
-                        // folder's lumi subfolder - offered only when the
-                        // url is present, valid, and the song is not in
-                        // the content. While a download is in flight the
-                        // row's trailing carries its progress bar (the
-                        // bar is determinate once the size is known)
-                        // and the icon no longer re-arms; a failed
-                        // download flips the icon to the retry.
-                        if (downloadable) {
-                            val url = downloadUrl!! // `downloadable` implies a url
-                            when (downloadState) {
-                                is LumiViewModel.SongDownloadState.InFlight -> {
-                                    // The row's download progress bar: determinate once the
-                                    // total size is known, indeterminate while it is not
-                                    // (the mirror's LinearProgressIndicator has separate
-                                    // determinate/indeterminate overloads, not a nullable
-                                    // progress parameter).
-                                    if (downloadState.progress != null) {
-                                        LinearProgressIndicator(
-                                            progress = downloadState.progress,
-                                            modifier = Modifier
-                                                .width(56.dp)
-                                                .padding(end = 8.dp),
-                                        )
-                                    } else {
-                                        LinearProgressIndicator(
-                                            modifier = Modifier
-                                                .width(56.dp)
-                                                .padding(end = 8.dp),
-                                        )
-                                    }
-                                    IconChip(
-                                        icon = Icons.Filled.Download,
-                                        background = scheme.surfaceContainerHigh,
-                                        content = scheme.onSurfaceVariant,
-                                        size = 36.dp,
-                                        iconSize = 18.dp,
-                                    )
-                                }
-
-                                is LumiViewModel.SongDownloadState.Failed -> SoftIconButton(
-                                    icon = Icons.Filled.Warning,
-                                    contentDescription = "Retry downloading $songName",
-                                    onClick = { onDownloadSong(row, url) },
-                                )
-
-                                else -> SoftIconButton(
-                                    icon = Icons.Filled.Download,
-                                    contentDescription = "Download $songName",
-                                    onClick = { onDownloadSong(row, url) },
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                        }
                         // The per-song removal (the content pane's row-level
                         // delete language): the tag's link to this one song
                         // goes; the song stays in the content list (for a

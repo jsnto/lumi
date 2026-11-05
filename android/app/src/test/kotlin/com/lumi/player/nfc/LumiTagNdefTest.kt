@@ -113,42 +113,41 @@ class LumiTagNdefTest {
         assertNull(LumiTagNdef.fromJson("[]"))
     }
 
-    // ---- per-song download urls (the card side's "secret option") ----
+    // ---- the card side's object entries (a name plus an ignored url field) ----
 
     @Test
-    fun json_legacyPlainNameEntries_decodeWithNoUrls() {
-        // A legacy card (plain-name song entries) decodes EXACTLY as before:
-        // the same name + songs, and no urls - the lenient parse must not
-        // change the legacy shape's outcome.
+    fun json_legacyPlainNameEntries_decodeUntouched() {
+        // A legacy card (plain-name song entries) decodes EXACTLY as
+        // before - the lenient parse must not change the legacy shape's
+        // outcome.
         val decoded = LumiTagNdef.fromJson("""{"name":"T","songs":["A song","B song"]}""")
         assertEquals(LumiTagData("T", listOf("A song", "B song")), decoded)
     }
 
     @Test
-    fun json_objectSongEntries_decodeNameAndUrl() {
-        // The "secret option": a song entry that is an object carries the
-        // name AND the download url. The names decode in the same order the
-        // legacy entries do (name-based identity), and each url lands on
-        // its own (clamped) name.
-        val decoded = LumiTagNdef.fromJson(
+    fun json_objectSongEntries_decodeTheNamesAndIgnoreTheUrlField() {
+        // A card-side tool may write a song entry as an object carrying a
+        // name AND a download url (the "secret option" the app no longer
+        // offers): the names decode in the same order the legacy entries
+        // do (name-based identity), and the url field is ignored - a card
+        // that still carries it decodes name-for-name, identical to the
+        // same payload with plain-name entries.
+        val withUrls = LumiTagNdef.fromJson(
             """{"name":"T","songs":["A song",{"name":"B song","url":"https://cdn.example/b.mp3"},{"name":"C song","url":"https://cdn.example/c.flac"}]}""",
         )
-        assertEquals(listOf("A song", "B song", "C song"), decoded?.songs)
+        assertEquals(listOf("A song", "B song", "C song"), withUrls?.songs)
         assertEquals(
-            mapOf(
-                "B song" to "https://cdn.example/b.mp3",
-                "C song" to "https://cdn.example/c.flac",
-            ),
-            decoded?.songUrls,
+            "the object entries decode identically to plain-name entries",
+            LumiTagNdef.fromJson("""{"name":"T","songs":["A song","B song","C song"]}"""),
+            withUrls,
         )
     }
 
     @Test
     fun json_objectEntriesWithMissingOrMalformedUrls_decodeNameOnly() {
-        // A missing or malformed url means NO url for that song - and
-        // NOTHING ELSE CHANGES: the name still decodes (a non-string url -
-        // a number, an object, a null - is not a url), and a blank url is
-        // the same as a missing one.
+        // The url field is ignored in ANY shape: a missing url, a
+        // non-string url (a number, an object, a null), or a blank url -
+        // nothing changes, the name still decodes.
         val decoded = LumiTagNdef.fromJson(
             """{"name":"T","songs":[{"name":"No url"},{"name":"Number url","url":123},{"name":"Object url","url":{"a":1}},{"name":"Null url","url":null},{"name":"Blank url","url":"   "}]}""",
         )
@@ -156,47 +155,38 @@ class LumiTagNdefTest {
             listOf("No url", "Number url", "Object url", "Null url", "Blank url"),
             decoded?.songs,
         )
-        assertEquals(emptyMap<String, String>(), decoded?.songUrls)
     }
 
     @Test
     fun json_objectEntriesWithoutAUsableName_areSkipped() {
         // An entry without a usable name is not a song (the app's identity
-        // is name-based): it is skipped - its url cannot surface on any
-        // row - while the remaining entries decode untouched.
+        // is name-based): it is skipped - its url field cannot surface
+        // anywhere - while the remaining entries decode untouched.
         val decoded = LumiTagNdef.fromJson(
             """{"name":"T","songs":["Kept song",{"url":"https://cdn.example/nameless.mp3"},{"name":"   "},7,{"name":"Other kept"}]}""",
         )
         assertEquals(listOf("Kept song", "Other kept"), decoded?.songs)
-        assertEquals(emptyMap<String, String>(), decoded?.songUrls)
     }
 
     @Test
     fun json_objectEntryNamesAreClampedToThePerSongLimit() {
-        // The object entry's name is clamped exactly like a legacy name, so
-        // the url is keyed in the same clamped space the restore path
+        // The object entry's name is clamped exactly like a legacy name,
+        // so the decoded names stay in the same space the restore path
         // resolves against.
         val long = "n".repeat(80)
         val payload = """{"name":"T","songs":[{"name":"${long}","url":"https://cdn.example/long.mp3"}]}"""
         val decoded = LumiTagNdef.fromJson(payload)
         assertEquals(listOf("n".repeat(50)), decoded?.songs)
-        assertEquals(mapOf("n".repeat(50) to "https://cdn.example/long.mp3"), decoded?.songUrls)
     }
 
     @Test
-    fun json_theWrittenPayloadCarriesNoUrlEntries() {
-        // The app NEVER writes a url: a payload that decodes WITH urls
-        // writes back as plain names only - no url key anywhere, and a
-        // re-decode of the written payload carries no urls (the app's write
-        // path cannot propagate or forge the card side's secret option).
-        val withUrls = LumiTagData(
-            name = "T",
-            songs = listOf("A song", "B song"),
-            songUrls = mapOf("A song" to "https://cdn.example/a.mp3"),
-        )
-        val written = LumiTagNdef.toJson(withUrls)
-        val obj = org.json.JSONObject(written)
-        val songs = obj.getJSONArray("songs")
+    fun json_theWrittenPayloadCarriesPlainNameEntries() {
+        // The app writes plain names only: every written song entry is a
+        // plain name string (no object entries, no url key anywhere), and
+        // a re-decode of the written payload round-trips to the data.
+        val data = LumiTagData(name = "T", songs = listOf("A song", "B song"))
+        val written = LumiTagNdef.toJson(data)
+        val songs = org.json.JSONObject(written).getJSONArray("songs")
         for (i in 0 until songs.length()) {
             assertEquals(
                 "every written song entry is a plain name string",
@@ -205,23 +195,7 @@ class LumiTagNdefTest {
             )
         }
         assertFalse("the written payload carries no url key anywhere", written.contains("\"url\""))
-        val redecoded = LumiTagNdef.fromJson(written)
-        assertEquals(withUrls.copy(songUrls = emptyMap()), redecoded)
-    }
-
-    @Test
-    fun songUrlFor_resolvesExactNamesAndOnlyTheClampedFormOfLongerOnes() {
-        // The card's urls are keyed by the CLAMPED name: an exact stored
-        // name matches directly, a stored name longer than the clamp
-        // resolves through its exact 50-char clamped form, and a short name
-        // is exact-only (it is never a clamp product, so a prefix hit would
-        // surface a different song's url).
-        val urls = mapOf("n".repeat(50) to "https://cdn.example/long.mp3", "Short" to "https://cdn.example/short.mp3")
-        assertEquals("https://cdn.example/short.mp3", LumiTagNdef.songUrlFor(urls, "Short"))
-        assertEquals("https://cdn.example/long.mp3", LumiTagNdef.songUrlFor(urls, "n".repeat(80) + "-tail"))
-        assertNull("a short name never resolves to a clamped key", LumiTagNdef.songUrlFor(urls, "S"))
-        assertNull("a long name with no clamped key has no url", LumiTagNdef.songUrlFor(urls, "m".repeat(80)))
-        assertNull("no urls at all means no url", LumiTagNdef.songUrlFor(emptyMap(), "Short"))
+        assertEquals(data, LumiTagNdef.fromJson(written))
     }
 
     // ---- NDEF record ----

@@ -5,8 +5,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -18,6 +20,8 @@ import com.lumi.player.LumiApp
 import com.lumi.player.data.EntryEntity
 import com.lumi.player.data.EntryType
 import com.lumi.player.data.TagSongRow
+import com.lumi.player.nfc.LumiTagData
+import com.lumi.player.nfc.TagPayloadRead
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
@@ -37,7 +41,13 @@ import com.lumi.player.ui.testutil.waitForText
 import com.lumi.player.ui.testutil.app
 import com.lumi.player.ui.testutil.dbAndGet
 import com.lumi.player.ui.testutil.viewModelOf
+import com.lumi.player.ui.testutil.sendTag
+import com.lumi.player.ui.testutil.setupMainActivity
+import com.lumi.player.ui.testutil.clickSettings
+import com.lumi.player.ui.testutil.clickMenuRow
+import com.lumi.player.ui.testutil.clickTagRow
 import com.lumi.player.ui.testutil.openTagPage
+import com.lumi.player.ui.testutil.syntheticTag
 
 /**
  * Behavioral coverage for the per-tag page: tapping a tag row in the NFC
@@ -1237,6 +1247,55 @@ class TagDetailPageUiTest {
             listOf(second.id, first.id, third.id),
             tagLinks(tagId).map { it.entryId },
         )
+    }
+
+    // ---------- the card side's song download url: no download affordance ----------
+
+    @Test
+    fun aCardWhoseSongCarriesADownloadUrlShowsTheRowWithNoDownloadUi() {
+        // The card side's "secret option" (a song entry carrying a
+        // download url) no longer offers a download: a song that
+        // resolves to no content renders its snapshot-name row with no
+        // download affordance, and the plain read that presents the
+        // card runs no payload read at all.
+        // The tag's stored uid is the colon-less hex the app derives from
+        // a presented tag's id bytes (the delivered synthetic tag carries
+        // the same bytes, so the read resolves to THIS tag's row).
+        val tagId = dbAndGet { app().repository.addTag("04CAFE0000", "Porch")?.id ?: 0L }
+        dbAndGet { app().repository.insertLinkByName(tagId, "Gone song", null); true }
+
+        val controller = compose.setupMainActivity()
+        compose.clickSettings()
+        compose.clickMenuRow("NFC tags")
+        compose.clickTagRow("Porch")
+        compose.onNodeWithText("Tag details").assertIsDisplayed()
+        val viewModel = viewModelOf(controller.get())
+        compose.waitForText("Gone song")
+
+        // The row renders (the missing song's wording + the per-song
+        // remove affordance - the layout as is, sans the affordance).
+        compose.onNodeWithText("this song is no longer in the content list").assertExists()
+        compose.onNodeWithContentDescription("Remove Gone song from the tag").assertExists()
+
+        // Present the card the way the foreground dispatch delivers it:
+        // the plain read runs no payload read...
+        var payloadReads = 0
+        viewModel.songPayloadReader = { _ ->
+            payloadReads++
+            TagPayloadRead.Answered(LumiTagData("Porch", listOf("Gone song")))
+        }
+        compose.sendTag(controller, syntheticTag("04CAFE0000"))
+        compose.waitForIdle()
+        pumpMainLooperSettled()
+        assertEquals("the plain read runs no payload read", 0, payloadReads)
+
+        // ...and the row surfaces no download affordance: no download
+        // icon, no retry icon, no download wording in the row's detail.
+        compose.onAllNodesWithContentDescription("Download Gone song").assertCountEquals(0)
+        compose.onAllNodesWithContentDescription("Retry downloading Gone song").assertCountEquals(0)
+        compose.onNodeWithText("downloading to Music/lumi...").assertDoesNotExist()
+        compose.onNodeWithText("download failed - tap the icon to try again").assertDoesNotExist()
+        compose.onNodeWithText("Gone song").assertExists()
     }
 
     /** The tag's song rows in the given entry-id order (the drag reorder's input). */
