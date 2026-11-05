@@ -26,8 +26,6 @@ import com.lumi.player.data.LumiRepository
 import com.lumi.player.data.LumiThemeMode
 import com.lumi.player.data.PlayMode
 import com.lumi.player.data.PositionRestore
-import com.lumi.player.data.SongDownloadResult
-import com.lumi.player.data.SongDownloader
 import com.lumi.player.data.SongMetadata
 import com.lumi.player.data.TagEntity
 import com.lumi.player.data.TagSongRow
@@ -126,7 +124,7 @@ class LumiViewModel(
 
     // ---- NFC tag session (delegated to [nfcCoordinator]) ----
 
-    /** The NFC tag session behind this surface (the scan arms, the settle of an armed scan, the registration capture + save, the per-uid card details and download urls, the phone's NFC usability - see [NfcTagCoordinator]). */
+    /** The NFC tag session behind this surface (the scan arms, the settle of an armed scan, the registration capture + save, the per-uid card details, the phone's NFC usability - see [NfcTagCoordinator]). */
     private val nfcCoordinator = NfcTagCoordinator(this, ::event)
 
     val scanActive: StateFlow<Boolean> get() = nfcCoordinator.scanActive
@@ -135,7 +133,6 @@ class LumiViewModel(
     val cardWriteTarget: StateFlow<TagEntity?> get() = nfcCoordinator.cardWriteTarget
     val cardCompareTarget: StateFlow<TagEntity?> get() = nfcCoordinator.cardCompareTarget
     val tagCardDetails: StateFlow<Map<String, TagCardDetails>> get() = nfcCoordinator.tagCardDetails
-    val tagSongUrls: StateFlow<Map<String, Map<String, String>>> get() = nfcCoordinator.tagSongUrls
     val nfcMissing: StateFlow<Boolean> get() = nfcCoordinator.nfcMissing
     val nfcDisabled: StateFlow<Boolean> get() = nfcCoordinator.nfcDisabled
     val capturedUid: StateFlow<String?> get() = nfcCoordinator.capturedUid
@@ -146,20 +143,6 @@ class LumiViewModel(
     fun setNfcUsability(missing: Boolean, disabled: Boolean) {
         nfcCoordinator.setNfcUsability(missing, disabled)
     }
-
-    // ---- song downloads (the tag page's download icon, Music/lumi) ----
-
-    /** The download state of one tag song row (keyed by the row's link id - the row's stable identity; no entry means idle). */
-    sealed interface SongDownloadState {
-        /** Downloading: [progress] is the 0..1 fraction, or null while the total size is unknown. */
-        data class InFlight(val progress: Float?) : SongDownloadState
-
-        /** The download failed (retryable): the row's download action retries. */
-        data object Failed : SongDownloadState
-    }
-
-    private val _songDownloadStates = MutableStateFlow<Map<Long, SongDownloadState>>(emptyMap())
-    val songDownloadStates: StateFlow<Map<Long, SongDownloadState>> = _songDownloadStates.asStateFlow()
 
     // ---- transient UI events (toasts/snackbars) ----
 
@@ -230,9 +213,6 @@ class LumiViewModel(
     fun onTagDetected(uid: String, tag: Tag? = null) {
         if (tag != null) nfcCoordinator.inspectTagDetails(uid, tag)
         if (nfcCoordinator.settleIfScanning(uid, tag)) return
-        // The plain read publishes the card's per-song download urls (a
-        // read that could not connect keeps the last known ones).
-        if (tag != null) nfcCoordinator.readTagSongUrls(uid, tag)
         val paused = PlayerStateHolder.state.value.status == PlaybackStatus.PAUSED
         if (policy.activeTagUid == uid && !paused) return
         viewModelScope.launch {
@@ -610,46 +590,10 @@ class LumiViewModel(
         get() = nfcCoordinator.tagInspector
         set(value) { nfcCoordinator.tagInspector = value }
 
-    /** Test seam: the card's lumi payload read for the per-song download urls (an answered read is the card's payload). */
+    /** Test seam: the card's lumi payload read (the compare scan's read; an answered read is the card's payload). */
     internal var songPayloadReader: suspend (Tag?) -> TagPayloadRead
         get() = nfcCoordinator.songPayloadReader
         set(value) { nfcCoordinator.songPayloadReader = value }
-
-    /** Test seam: the song download (the Music/lumi MediaStore write), replaced in unit tests. */
-    internal var songDownloader: suspend (
-        songName: String,
-        url: String,
-        onProgress: (Float?) -> Unit,
-    ) -> SongDownloadResult = { name, url, onProgress ->
-        SongDownloader(context.contentResolver).download(name, url, onProgress)
-    }
-
-    /**
-     * Downloads the song a tag row points at ([url] is the card's url for
-     * [songName]; the page has already checked the download-icon
-     * predicate) into the public music folder's lumi subfolder. A download
-     * already in flight for the row is ignored (no double start); a
-     * failure lands in the row's retryable failed state.
-     */
-    fun downloadTagSong(linkId: Long, songName: String, url: String) {
-        if (_songDownloadStates.value[linkId] is SongDownloadState.InFlight) return
-        _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.InFlight(null))
-        viewModelScope.launch {
-            when (val result = songDownloader(songName, url) { progress ->
-                _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.InFlight(progress))
-            }) {
-                is SongDownloadResult.Success -> {
-                    _songDownloadStates.value = _songDownloadStates.value - linkId
-                    event("Saved \"$songName\" to Music/lumi.")
-                }
-
-                is SongDownloadResult.Failure -> {
-                    _songDownloadStates.value = _songDownloadStates.value + (linkId to SongDownloadState.Failed)
-                    event("Couldn't download \"$songName\" - tap to try again.")
-                }
-            }
-        }
-    }
 
     fun discardCaptured() = nfcCoordinator.discardCaptured()
 

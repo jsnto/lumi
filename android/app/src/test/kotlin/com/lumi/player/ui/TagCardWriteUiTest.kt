@@ -774,33 +774,23 @@ class TagCardWriteUiTest {
     }
 
     @Test
-    fun theCardWriteScanMakesNoUrlRead_theWriteIsTheOnlyNdefClient() {
+    fun theCardWriteScanMakesNoPayloadRead_theWriteIsTheOnlyNdefClient() {
         // The write path's one NDEF connection per presentation: no payload
         // read runs alongside the armed write (a read holding the tag's
         // single connection slot would make the write's own connect fail
-        // and surface a spurious write failure). A card whose urls a plain
-        // read published LOSES them when a write lands - the card now
-        // carries the app's url-less payload, so the urls it carried
-        // before the write are gone.
+        // and surface a spurious write failure).
         val controller = controllerWithOpenTagPage()
         val viewModel = viewModelOf(controller.get())
 
-        // A plain read (no scan armed) publishes the card's urls...
-        val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
-        viewModel.songPayloadReader = { _ ->
-            TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
-        }
-        compose.sendTag(controller, forgeTag(TAG_UID))
-        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
-
-        // ...and the card-write scan: its read must not run at all.
+        // Arm the card-write scan: the presentation's payload read must
+        // not run at all while the write is armed.
         compose.onNodeWithText("Write to NFC tag").performScrollTo()
         compose.onNodeWithText("Write to NFC tag").performClick()
         compose.waitForIdle()
 
-        var urlReads = 0
+        var payloadReads = 0
         viewModel.songPayloadReader = { _ ->
-            urlReads++
+            payloadReads++
             TagPayloadRead.Failed
         }
         var writes = 0
@@ -820,51 +810,7 @@ class TagCardWriteUiTest {
         ShadowLooper.idleMainLooper()
         compose.waitForIdle()
         assertEquals("the write ran", 1, writes)
-        assertEquals("no url read ran alongside the write", 0, urlReads)
-        assertEquals(
-            "a landed write clears the published urls (the card now carries the app's url-less payload)",
-            emptyMap<String, String>(),
-            viewModel.tagSongUrls.value[TAG_UID],
-        )
-    }
-
-    @Test
-    fun aRefusedWriteKeepsThePublishedUrls_theCardWasNotRewritten() {
-        // The urls map reflects what the card carries: only a write that
-        // LANDS clears it. A gate refusal never rewrites the card, so the
-        // last known urls stay.
-        val controller = controllerWithOpenTagPage()
-        val viewModel = viewModelOf(controller.get())
-
-        val urls = mapOf("Gone song" to "https://cdn.example.com/gone.mp3")
-        viewModel.songPayloadReader = { _ ->
-            TagPayloadRead.Answered(LumiTagData("Porch", emptyList(), urls))
-        }
-        compose.sendTag(controller, forgeTag(TAG_UID))
-        compose.idleUntil({ viewModel.tagSongUrls.value[TAG_UID] == urls }, message = "the urls from the plain read")
-
-        compose.onNodeWithText("Write to NFC tag").performScrollTo()
-        compose.onNodeWithText("Write to NFC tag").performClick()
-        compose.waitForIdle()
-
-        var writes = 0
-        viewModel.tagWriter = { _, _ ->
-            writes++
-            true
-        }
-        // A read-only card: the gate refuses before any physical write.
-        compose.sendTag(controller, forgeTag(TAG_UID, writable = false))
-
-        compose.idleUntil(
-            { ShadowToast.getTextOfLatestToast() == "That tag is read-only - nothing was written." },
-            message = "the read-only report",
-        )
-        assertEquals("nothing was written to the read-only card", 0, writes)
-        assertEquals(
-            "a refused write keeps the published urls (the card was not rewritten)",
-            urls,
-            viewModel.tagSongUrls.value[TAG_UID],
-        )
+        assertEquals("no payload read ran alongside the write", 0, payloadReads)
     }
 
     // ---- the phone's own NFC gating (a card write needs the phone's radio) ----
