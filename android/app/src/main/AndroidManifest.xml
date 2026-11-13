@@ -69,6 +69,23 @@
                 android:resource="@xml/update_provider_paths" />
         </provider>
 
+        <!-- The screen-off receiver: the device locking (the screen going
+             dark starts the lock sequence) pauses the playing song at that
+             moment through the service's own ACTION_PAUSE. ACTION_SCREEN_OFF
+             is exempt from the implicit-broadcast restrictions. The receiver
+             is exported (the pre-31 default for a filter-carrying receiver)
+             so the system's SCREEN_OFF delivery reaches it; the spoof guard
+             is the app-side PowerManager.isInteractive() verification (recent
+             platform builds also protect the action from non-system senders,
+             but the receiver must not rely on that). -->
+        <receiver
+            android:name=".device.ScreenOffReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SCREEN_OFF" />
+            </intent-filter>
+        </receiver>
+
         <!-- The "Auto-lock after idle" setting's device admin: a normal app
              cannot lock the screen (DEVICE_POWER is signature|privileged),
              so the platform's consent + activation screen runs against this

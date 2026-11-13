@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -146,6 +147,18 @@ class PlayerService : Service(), Player.Listener {
         startIndex: Int,
         startSeekMs: Long,
     ) {
+        // No playback begins on a locked device: refuse a new-queue start
+        // while the screen is off and leave any paused session exactly
+        // as-is (the screen-off's pause already owns it). A start
+        // dispatched in the milliseconds before isInteractive flips is
+        // caught by the receiver's delayed recheck pause (a bounded
+        // sliver, accepted by design). A fresh shell has no session to
+        // keep, so it self-stops like every other empty-queue command.
+        if (!screenIsInteractive()) {
+            Log.i(TAG, "ACTION_START refused: the screen is off")
+            if (queue.isEmpty()) stopPlayback()
+            return
+        }
         queue = entries
         position = if (entries.isEmpty()) 0 else startIndex.coerceIn(0, entries.lastIndex)
         pendingSeekMs = startSeekMs
@@ -165,6 +178,10 @@ class PlayerService : Service(), Player.Listener {
                 player = it
             }
     }
+
+    /** The PowerManager's reading of whether the screen is on. */
+    private fun screenIsInteractive(): Boolean =
+        (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
 
     /**
      * Applies the audio level's per-track level to the processor before the
