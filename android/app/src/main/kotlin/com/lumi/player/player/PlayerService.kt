@@ -147,17 +147,18 @@ class PlayerService : Service(), Player.Listener {
         startIndex: Int,
         startSeekMs: Long,
     ) {
-        // A pause that reached the service with no session to pause armed
-        // the pending pause: a start that lands while the screen is still
-        // off must not begin playback on the locked device. The flag stays
-        // armed through a suppressed start and is cleared by the first
-        // start that finds the screen back on.
-        if (pendingScreenOffPause && !screenIsInteractive()) {
-            Log.i(TAG, "ACTION_START suppressed: a pause is pending and the screen is off")
-            stopPlayback()
+        // No playback begins on a locked device: refuse a new-queue start
+        // while the screen is off and leave any paused session exactly
+        // as-is (the screen-off's pause already owns it). A start
+        // dispatched in the milliseconds before isInteractive flips is
+        // caught by the receiver's delayed recheck pause (a bounded
+        // sliver, accepted by design). A fresh shell has no session to
+        // keep, so it self-stops like every other empty-queue command.
+        if (!screenIsInteractive()) {
+            Log.i(TAG, "ACTION_START refused: the screen is off")
+            if (queue.isEmpty()) stopPlayback()
             return
         }
-        pendingScreenOffPause = false
         queue = entries
         position = if (entries.isEmpty()) 0 else startIndex.coerceIn(0, entries.lastIndex)
         pendingSeekMs = startSeekMs
@@ -271,13 +272,7 @@ class PlayerService : Service(), Player.Listener {
      * presence poll can issue it on every confirmed tag loss.
      */
     private fun pausePlayback() {
-        if (queue.isEmpty()) {
-            // A pause with no session to pause: arm the pending pause so a
-            // start that was in flight when the screen went dark cannot
-            // begin playback on the locked device (checked in [startQueue]).
-            pendingScreenOffPause = true
-            return stopPlayback()
-        }
+        if (queue.isEmpty()) return stopPlayback()
         val p = player ?: return
         wantsPlay = false
         if (p.playWhenReady) {
@@ -504,18 +499,5 @@ class PlayerService : Service(), Player.Listener {
         const val EXTRA_START_ENTRY_INDEX = "com.lumi.player.extra.START_ENTRY_INDEX"
         /** Offset in ms to seek to within that entry. */
         const val EXTRA_START_POSITION_MS = "com.lumi.player.extra.START_POSITION_MS"
-
-        /**
-         * Armed when a pause reaches the service with no session to pause
-         * (the empty-queue stop branch - the screen-off's or a tag loss's):
-         * a start dispatched in flight when the screen went dark must not
-         * begin playback on the locked device. Process-wide, not per
-         * instance: the empty-queue stop ends the instance that armed the
-         * flag before the suppressed start is processed. Cleared lazily by
-         * the first start that finds the screen back on (a suppressed
-         * start leaves it armed, so a second start while the screen is off
-         * is suppressed too).
-         */
-        var pendingScreenOffPause: Boolean = false
     }
 }
