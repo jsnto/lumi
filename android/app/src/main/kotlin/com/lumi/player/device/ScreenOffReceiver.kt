@@ -7,7 +7,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
+import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.ScreenOffPolicy
 import com.lumi.player.player.ScreenOffVerdict
 
@@ -40,7 +42,13 @@ import com.lumi.player.player.ScreenOffVerdict
  * existing pause machinery, the same path the presence poll uses for a tag
  * leaving range. It pauses without ending the session (a re-read of the
  * active tag resumes the paused list) and is idempotent, so it is safe on
- * every state, including an empty queue (the service stops itself there).
+ * every service state, including an empty queue (the service stops itself
+ * there). When the shared state holds no session (IDLE - the initial value
+ * and the exact value a stop writes), the service start is skipped at both
+ * call sites: there is nothing to pause, and a startService from a
+ * backgrounded process that holds no foreground service would throw - the
+ * delayed recheck in particular runs outside the implicit-broadcast start
+ * window.
  * There is deliberately NO resume on SCREEN_ON: the user resumes explicitly.
  */
 class ScreenOffReceiver : BroadcastReceiver() {
@@ -107,8 +115,19 @@ class ScreenOffReceiver : BroadcastReceiver() {
             pendingRecheck = null
         }
 
-        /** The existing pause machinery: the service's own ACTION_PAUSE intent. */
+        /**
+         * The existing pause machinery: the service's own ACTION_PAUSE
+         * intent. Skipped when the shared state holds no session (IDLE):
+         * there is nothing to pause, and starting the service from a
+         * backgrounded process without a running foreground service would
+         * throw (the recheck's call site in particular runs outside the
+         * implicit-broadcast start window).
+         */
         private fun pauseThroughService(context: Context) {
+            if (PlayerStateHolder.state.value.status == PlaybackStatus.IDLE) {
+                Log.i(TAG, "no active session - nothing to pause")
+                return
+            }
             context.startService(
                 Intent(context, PlayerService::class.java).setAction(PlayerService.ACTION_PAUSE),
             )

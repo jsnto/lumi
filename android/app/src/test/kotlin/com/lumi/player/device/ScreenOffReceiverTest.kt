@@ -6,7 +6,9 @@ import android.os.Looper
 import android.os.PowerManager
 import androidx.test.core.app.ApplicationProvider
 import com.lumi.player.LumiApp
+import com.lumi.player.player.PlaybackStatus
 import com.lumi.player.player.PlayerService
+import com.lumi.player.player.PlayerStateHolder
 import com.lumi.player.player.ScreenOffPolicy
 import java.time.Duration
 import org.junit.Assert.assertEquals
@@ -23,7 +25,10 @@ import org.robolectric.annotation.Config
  * through the service's own ACTION_PAUSE (the existing pause machinery -
  * the started-service intent the app would deliver), a report that is still
  * interactive after the delayed recheck never touches the service (the
- * spoof guard), and the recheck itself survives the receiver instance.
+ * spoof guard), and the recheck itself survives the receiver instance. A
+ * screen-off with no active session (the shared state IDLE) starts nothing
+ * at all - no background service start with nothing to pause, on the
+ * direct delivery AND the delayed recheck (the reachable crash path).
  *
  * The PowerManager.isInteractive() reading is faked through its shadow, the
  * recheck's delay is advanced with the paused main looper, and the service
@@ -44,6 +49,9 @@ class ScreenOffReceiverTest {
         shadowOf(context).clearStartedServices()
         // The screen is on unless a test says otherwise.
         shadowOf(pm).setIsInteractive(true)
+        // A session is active unless a test says otherwise: the pause starts
+        // the service only when there is a session to pause.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.PLAYING) }
     }
 
     private fun screenOff() = Intent(Intent.ACTION_SCREEN_OFF)
@@ -99,6 +107,44 @@ class ScreenOffReceiverTest {
         idlePastTheRecheck()
         assertNull("a spoofed SCREEN_OFF must not start the service",
             shadowOf(context).nextStartedService)
+    }
+
+    @Test
+    fun aGenuineScreenOffWithNoActiveSessionStartsNothing() {
+        // The user stopped the song (the shared state is IDLE - the service
+        // is gone) and left the app backgrounded: locking the phone must
+        // not startService the service - there is nothing to pause, and a
+        // backgrounded process without a foreground service may not start
+        // one.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.IDLE) }
+        shadowOf(pm).setIsInteractive(false)
+
+        receiver.onReceive(context, screenOff())
+
+        assertNull(
+            "no session means no service start",
+            shadowOf(context).nextStartedService,
+        )
+    }
+
+    @Test
+    fun aRecheckWithNoActiveSessionStartsNothing() {
+        // The reachable crash path: the recheck runs outside the
+        // implicit-broadcast start window, so with no session (IDLE) it
+        // must not start the service either.
+        PlayerStateHolder.update { it.copy(status = PlaybackStatus.IDLE) }
+
+        receiver.onReceive(context, screenOff())
+        assertNull(
+            "an interactive first reading must not pause immediately",
+            shadowOf(context).nextStartedService,
+        )
+        shadowOf(pm).setIsInteractive(false)
+        idlePastTheRecheck()
+        assertNull(
+            "a recheck with no session must not start the service",
+            shadowOf(context).nextStartedService,
+        )
     }
 
     @Test
