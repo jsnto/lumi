@@ -54,6 +54,7 @@ internal enum class SettingsPane {
     FolderDetail,
     EntryDetail,
     Appearance,
+    Update,
 }
 
 /**
@@ -158,6 +159,11 @@ internal fun SettingsScreen(
     // folder pages' song rows, and the tag pages' song rows badge the
     // entries in this set.
     val normalizedEntryIds by viewModel.normalizedEntryIds.collectAsState(emptySet())
+
+    // The app's self-update state (the "Update" area: the check result,
+    // the download, the install readiness) + the download's progress.
+    val updateState by viewModel.updateState.collectAsState(UpdateState.Idle)
+    val updateProgress by viewModel.updateProgress.collectAsState(0f)
 
     var deleteTag by remember { mutableStateOf<TagEntity?>(null) }
     var deleteEntry by remember { mutableStateOf<EntryEntity?>(null) }
@@ -294,6 +300,8 @@ internal fun SettingsScreen(
             onContent = { pane = SettingsPane.Content },
             onAppearance = { pane = SettingsPane.Appearance },
             onAdvanced = { pane = SettingsPane.Advanced },
+            onUpdate = { pane = SettingsPane.Update },
+            updateState = updateState,
             onBack = onBack,
         )
         SettingsPane.Advanced -> AdvancedPane(
@@ -330,6 +338,12 @@ internal fun SettingsScreen(
         SettingsPane.Appearance -> AppearancePane(
             viewModel = viewModel,
             themeMode = themeMode,
+            onBack = { pane = SettingsPane.Menu },
+        )
+        SettingsPane.Update -> UpdatePane(
+            viewModel = viewModel,
+            state = updateState,
+            progress = updateProgress,
             onBack = { pane = SettingsPane.Menu },
         )
         SettingsPane.Tags -> TagsPane(

@@ -1,5 +1,6 @@
 package com.lumi.player.ui
 
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -102,6 +103,9 @@ class LumiViewModel(
 
     /** The tag's song links (see [TagLinkManager]). */
     private val tagLinkManager = TagLinkManager(repository, ::event, viewModelScope)
+
+    /** The app's self-update (the GitHub releases check, the APK download, the install - see [UpdateManager]). */
+    private val updateManager = UpdateManager(context, viewModelScope, onEvent = ::event)
 
     /** Tag read/lost decisions for the active mode. */
     @Volatile
@@ -375,6 +379,26 @@ class LumiViewModel(
     /** How many minutes of idle count before the auto-lock (off by default). */
     val autoLockDelay: StateFlow<AutoLockDelay> get() = settings.autoLockDelay
     fun setAutoLockDelay(delay: AutoLockDelay) = settings.setAutoLockDelay(delay)
+
+    // ---- self-update (all delegated to [updateManager]) ----
+
+    /** The "Update" area's lifecycle (the check result, the download, the install readiness - see [UpdateState]). */
+    val updateState: StateFlow<UpdateState> get() = updateManager.state
+
+    /** The download's progress (0..1), live while [updateState] is [UpdateState.Downloading]. */
+    val updateProgress: StateFlow<Float> get() = updateManager.progress
+
+    /** Checks the releases page for a newer build (the pane's "Check for latest version" action). */
+    fun checkForUpdate() = updateManager.checkForLatest()
+
+    /** Downloads the newest release's APK (the pane's "Update to latest" action; enabled only while a newer release is available). */
+    fun updateToLatest() = updateManager.updateToLatest()
+
+    /** Installs the downloaded APK (the pane's "Install now" action; gated on the "install unknown apps" permission, which the engine opens for the user when it is missing). */
+    fun requestInstall(activity: Activity) = updateManager.requestInstall(activity)
+
+    /** The activity's onResume (the return from the install settings, or any resume): the engine re-checks the permission and offers the retry path. */
+    fun onUpdateActivityResumed(activity: Activity) = updateManager.onActivityResumed(activity)
 
     /**
      * The auto-lock engine (the idle timer driven from the shared player

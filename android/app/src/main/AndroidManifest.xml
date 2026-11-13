@@ -8,6 +8,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- The settings "Update" area checks the public GitHub releases page
+         for a newer build (the app is sideloaded - there is no store). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The settings "Update" area installs the downloaded release APK
+         through the platform's own installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- NFC is the whole point of the app, but the app still opens without it. -->
     <uses-feature
@@ -48,6 +54,20 @@
             android:name=".player.PlayerService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Exposes the settings "Update" area's downloaded release APK to
+             the platform's installer (the FileProvider uri the install
+             intent carries; the paths file names the app's internal
+             updates/ folder the download lands in). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.update.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_provider_paths" />
+        </provider>
 
         <!-- The "Auto-lock after idle" setting's device admin: a normal app
              cannot lock the screen (DEVICE_POWER is signature|privileged),
