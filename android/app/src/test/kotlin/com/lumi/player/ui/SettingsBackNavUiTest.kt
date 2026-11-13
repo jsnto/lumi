@@ -78,9 +78,9 @@ class SettingsBackNavUiTest {
         // On the short screen the menu list overflows: scroll it down until
         // the footer (and thus the bottom rows) is visible and the leading
         // row has scrolled out of view.
-        compose.onNodeWithText("lumi v0.2.0").performScrollTo()
+        compose.onNodeWithText("lumi v0.3.0").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithText("lumi v0.2.0").assertIsDisplayed()
+        compose.onNodeWithText("lumi v0.3.0").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertIsNotDisplayed()
 
         // Leave the menu for the content sub-screen... (the individual
