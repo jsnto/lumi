@@ -292,6 +292,12 @@ class MainActivity : ComponentActivity() {
         refreshNfcState()
         // A tag tapped while the app was starting arrives with the resume.
         handleNfcIntent(intent)
+        // The settings "Update" area's install-settings return (the "install
+        // unknown apps" permission may have been granted, or still be off):
+        // the engine re-checks and launches the kept install or offers the
+        // retry path. A no-op on every other resume (the engine's own flag
+        // only arms after it sent the user to the settings screen).
+        viewModel.onUpdateActivityResumed(this)
     }
 
     override fun onPause() {

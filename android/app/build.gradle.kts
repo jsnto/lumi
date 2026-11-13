@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.parcelize)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
 
@@ -14,8 +15,8 @@ android {
         applicationId = "com.lumi.player"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -88,6 +89,11 @@ dependencies {
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.kotlinx.coroutines.android)
+    // The settings "Update" area's release check + APK download (the
+    // GitHub releases API fetch, the streamed download with progress,
+    // and the latest-release JSON parse - see ui/UpdateManager.kt).
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

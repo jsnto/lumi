@@ -78,9 +78,9 @@ class SettingsBackNavUiTest {
         // On the short screen the menu list overflows: scroll it down until
         // the footer (and thus the bottom rows) is visible and the leading
         // row has scrolled out of view.
-        compose.onNodeWithText("lumi v0.1.0").performScrollTo()
+        compose.onNodeWithText("lumi v0.2.0").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithText("lumi v0.1.0").assertIsDisplayed()
+        compose.onNodeWithText("lumi v0.2.0").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertIsNotDisplayed()
 
         // Leave the menu for the content sub-screen... (the individual
@@ -97,11 +97,12 @@ class SettingsBackNavUiTest {
         // The menu is back at the exact scroll position: the bottom rows are
         // still where they were and the leading row is still scrolled out of
         // view - the list was not reset to the top. The Advanced options row
-        // (the menu's last row - the keep-screen-on row moved into the
-        // Advanced options page) is the position anchor: it is comfortably
-        // visible at the restored position and fully clipped at the top,
-        // while the very bottom (footer) sits within a few dp of the viewport
-        // edge on the small test screen, where its visibility is a marginal
+        // (one above the menu's last row, the Update row - the keep-screen-on
+        // row moved into the Advanced options page) is the position anchor: it
+        // is comfortably visible at the restored position and fully clipped at
+        // the top, while the very bottom (footer) sits within a few dp of the
+        // viewport edge on the small test screen, where its visibility is a
+        // marginal
         // assertion.
         compose.onNodeWithText("Advanced options").assertIsDisplayed()
         compose.onNodeWithText("Play mode").assertIsNotDisplayed()

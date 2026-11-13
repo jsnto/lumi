@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +66,8 @@ internal fun SettingsMenuPane(
     onContent: () -> Unit,
     onAppearance: () -> Unit,
     onAdvanced: () -> Unit,
+    onUpdate: () -> Unit,
+    updateState: UpdateState,
     onBack: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -148,6 +151,18 @@ internal fun SettingsMenuPane(
                 subtitle = "Display, audio level, and screen lock",
                 onClick = onAdvanced,
             )
+            // The app's self-update (the app is sideloaded - there is no
+            // store): check the public GitHub releases for a newer build
+            // and install the newest release's APK. The subtitle tracks the
+            // live update state (the pane shows the full state + actions).
+            MenuRow(
+                icon = Icons.Filled.SystemUpdate,
+                chipBackground = scheme.primaryContainer,
+                chipContent = scheme.onPrimaryContainer,
+                title = "Update",
+                subtitle = updateState.subtitle(),
+                onClick = onUpdate,
+            )
             Text(
                 text = "lumi v${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
@@ -156,6 +171,21 @@ internal fun SettingsMenuPane(
         }
     }
 }
+
+/**
+ * The settings "Update" menu row's subtitle: a live one-liner for the
+ * current [UpdateState] (the pane shows the full state + the actions).
+ */
+private fun UpdateState.subtitle(): String =
+    when (this) {
+        UpdateState.Idle -> "Check for a newer version"
+        UpdateState.Checking -> "Checking…"
+        is UpdateState.UpToDate -> "Up to date (v$latestVersion)"
+        is UpdateState.UpdateAvailable -> "Update available: v$latestVersion"
+        is UpdateState.Downloading -> "Downloading v$latestVersion…"
+        is UpdateState.ReadyToInstall -> "v$latestVersion ready to install"
+        is UpdateState.Error -> "Check for updates"
+    }
 
 /**
  * The now-playing strip (D-06): a one-line context reminder at the top of
