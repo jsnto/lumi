@@ -102,7 +102,7 @@ class UpdateManager(
                 _state.value = if (releaseIsNewer(release.tagName, current)) {
                     UpdateState.UpdateAvailable(current, latest, release)
                 } else {
-                    UpdateState.UpToDate(current, latest)
+                    UpdateState.UpToDate(current, current)
                 }
             } catch (e: CancellationException) {
                 throw e

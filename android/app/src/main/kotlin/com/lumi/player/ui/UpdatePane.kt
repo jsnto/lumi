@@ -179,7 +179,7 @@ private fun UpdateStatus(state: UpdateState, progress: Float) {
             style = MaterialTheme.typography.bodyMedium,
         )
         is UpdateState.UpToDate -> Text(
-            "You're up to date (current version v${state.latestVersion}).",
+            "You're up to date (current version v${state.currentVersion}).",
             style = MaterialTheme.typography.bodyMedium,
         )
         is UpdateState.UpdateAvailable -> Text(

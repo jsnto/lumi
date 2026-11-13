@@ -180,7 +180,7 @@ private fun UpdateState.subtitle(): String =
     when (this) {
         UpdateState.Idle -> "Check for a newer version"
         UpdateState.Checking -> "Checking…"
-        is UpdateState.UpToDate -> "Up to date (v$latestVersion)"
+        is UpdateState.UpToDate -> "Up to date (v$currentVersion)"
         is UpdateState.UpdateAvailable -> "Update available: v$latestVersion"
         is UpdateState.Downloading -> "Downloading v$latestVersion…"
         is UpdateState.ReadyToInstall -> "v$latestVersion ready to install"
