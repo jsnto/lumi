@@ -46,22 +46,50 @@ if [ ! -f "$KEYSTORE_DIR/$KEYSTORE_NAME" ] || [ ! -f "$KEYSTORE_DIR/$PW_FILE_NAM
   echo "       'Release signing'. Point LUMI_KEYSTORE_DIR at it." >&2
   exit 1
 fi
+# Absolutize a path without resolving symlinks, collapsing "." and ".."
+# components textually (the Docker build context is walked exactly this way:
+# the tree as spelled, with its symlinks followed).
+lexical_path() {
+  local p="$1" part out stack=()
+  [[ "$p" != /* ]] && p="$PWD/$p"
+  local IFS='/'
+  set -f
+  for part in $p; do
+    case "$part" in
+      '' | .) ;;
+      ..) if (( ${#stack[@]} )); then unset "stack[$(( ${#stack[@]} - 1 ))]"; fi ;;
+      *) stack+=("$part") ;;
+    esac
+  done
+  set +f
+  out=$(IFS='/'; printf '%s' "${stack[*]}")
+  printf '/%s\n' "$out"
+}
+
+KEYSTORE_GIVEN="$KEYSTORE_DIR"
+KEYSTORE_LEXICAL="$(lexical_path "$KEYSTORE_DIR")"
 # Make the keystore path absolute and physical (docker mounts need host
 # paths; the physical form also resolves symlinks for the check below).
 KEYSTORE_DIR="$(cd "$KEYSTORE_DIR" && pwd -P)"
 # The image build below copies the whole checkout into the image (the repo
-# root is its Docker context): keystore material kept inside the checkout -
-# directly or through a symlink into it - would end up in the persisted
-# image layers, so it must live outside.
+# root is its Docker context): the keystore must not live inside the checkout,
+# and the reference to it must not run through the checkout either (a symlink
+# inside the tree pointing at the keystore) - in either case the image layers
+# would persist the key material or a link to it.
 REPO_ROOT="$(pwd -P)"
-case "$KEYSTORE_DIR" in
-  "$REPO_ROOT"|"$REPO_ROOT"/*)
-    echo "error: the keystore directory $KEYSTORE_DIR is inside the repo checkout." >&2
-    echo "       The Docker build copies the checkout into the image, so the key material would be baked into the persisted image layers." >&2
-    echo "       Keep it outside the checkout and point LUMI_KEYSTORE_DIR at the directory that holds it." >&2
-    exit 1
-    ;;
+inside_checkout=0
+case "$KEYSTORE_LEXICAL" in
+  "$PWD" | "$PWD"/* | "$REPO_ROOT" | "$REPO_ROOT"/*) inside_checkout=1 ;;
 esac
+case "$KEYSTORE_DIR" in
+  "$REPO_ROOT" | "$REPO_ROOT"/*) inside_checkout=1 ;;
+esac
+if [ "$inside_checkout" = 1 ]; then
+  echo "error: the keystore directory $KEYSTORE_GIVEN is inside the repo checkout, or is referenced through a path inside it." >&2
+  echo "       The Docker image is built from the checkout, so the key material (or a link to it) would be persisted in the image layers." >&2
+  echo "       Keep it outside the checkout and point LUMI_KEYSTORE_DIR at the directory that holds it." >&2
+  exit 1
+fi
 KEYSTORE_PASSWORD="$(cat "$KEYSTORE_DIR/$PW_FILE_NAME")"
 
 mkdir -p "$OUT_DIR"
