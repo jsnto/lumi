@@ -94,13 +94,13 @@ class UpdatePaneUiTest {
 
         // The pane renders the running build and the unchecked state.
         compose.waitForText("Current version")
-        compose.onNodeWithText("lumi v0.3.0").assertExists()
+        compose.onNodeWithText("lumi v0.3.1").assertExists()
         compose.waitForText("Check the releases page to see if a newer version is out.")
 
         // The check fetches the (stand-in) releases page and settles to an
-        // available update: the published v0.4.0 against the running 0.3.0.
+        // available update: the published v0.4.0 against the running 0.3.1.
         compose.onNodeWithText("Check for latest version").performClick()
-        compose.waitForText("Update available: v0.4.0 (you have v0.3.0).")
+        compose.waitForText("Update available: v0.4.0 (you have v0.3.1).")
         compose.onNodeWithText("Update to latest").assertHasClickAction()
 
         // The download streams the asset (the throttled transfer keeps the
@@ -160,7 +160,7 @@ class UpdatePaneUiTest {
 
     // ------------------------------------------------------------------
     // The running build is AHEAD of the published release (the fix's case:
-    // the only published release is v0.1.0 while this build is 0.3.0): the
+    // the only published release is v0.1.0 while this build is 0.3.1): the
     // check settles UpToDate and the copy names the RUNNING version - the
     // release's version is never mislabeled as the current one.
     // ------------------------------------------------------------------
@@ -177,9 +177,9 @@ class UpdatePaneUiTest {
         val activity = openUpdatePane(api, events)
         compose.onNodeWithText("Check for latest version").performClick()
 
-        // The published v0.1.0 is older than the running 0.3.0: UpToDate,
+        // The published v0.1.0 is older than the running 0.3.1: UpToDate,
         // and the copy prints the RUNNING version (not the release's).
-        compose.waitForText("You're up to date (current version v0.3.0).")
+        compose.waitForText("You're up to date (current version v0.3.1).")
         // No update to take: the download and install actions stay disabled
         // (the mirror marks a disabled button with the Disabled semantics
         // property - it keeps the OnClick action on the node).
@@ -189,7 +189,7 @@ class UpdatePaneUiTest {
         // The menu row's live subtitle says the same once back on the menu.
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitForIdle()
-        compose.waitForText("Up to date (v0.3.0)")
+        compose.waitForText("Up to date (v0.3.1)")
         api.stop()
     }
 
@@ -228,7 +228,7 @@ class UpdatePaneUiTest {
 
         val activity = openUpdatePane(api, events)
         compose.onNodeWithText("Check for latest version").performClick()
-        compose.waitForText("Update available: v0.4.0 (you have v0.3.0).")
+        compose.waitForText("Update available: v0.4.0 (you have v0.3.1).")
         compose.onNodeWithText("Update to latest").performClick()
         compose.waitForText("That release has no APK to install.")
         api.stop()
