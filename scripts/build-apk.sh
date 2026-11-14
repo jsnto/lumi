@@ -46,8 +46,22 @@ if [ ! -f "$KEYSTORE_DIR/$KEYSTORE_NAME" ] || [ ! -f "$KEYSTORE_DIR/$PW_FILE_NAM
   echo "       'Release signing'. Point LUMI_KEYSTORE_DIR at it." >&2
   exit 1
 fi
-# Make the keystore path absolute (docker mounts need host paths).
-KEYSTORE_DIR="$(cd "$KEYSTORE_DIR" && pwd)"
+# Make the keystore path absolute and physical (docker mounts need host
+# paths; the physical form also resolves symlinks for the check below).
+KEYSTORE_DIR="$(cd "$KEYSTORE_DIR" && pwd -P)"
+# The image build below copies the whole checkout into the image (the repo
+# root is its Docker context): keystore material kept inside the checkout -
+# directly or through a symlink into it - would end up in the persisted
+# image layers, so it must live outside.
+REPO_ROOT="$(pwd -P)"
+case "$KEYSTORE_DIR" in
+  "$REPO_ROOT"|"$REPO_ROOT"/*)
+    echo "error: the keystore directory $KEYSTORE_DIR is inside the repo checkout." >&2
+    echo "       The Docker build copies the checkout into the image, so the key material would be baked into the persisted image layers." >&2
+    echo "       Keep it outside the checkout and point LUMI_KEYSTORE_DIR at the directory that holds it." >&2
+    exit 1
+    ;;
+esac
 KEYSTORE_PASSWORD="$(cat "$KEYSTORE_DIR/$PW_FILE_NAME")"
 
 mkdir -p "$OUT_DIR"

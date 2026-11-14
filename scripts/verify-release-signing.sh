@@ -46,7 +46,7 @@ fi
 
 # The APK's signer #1 certificate (apksigner prints lowercase, unseparated hex).
 APK_SHA256="$("$APSIGNER" verify --print-certs "$APK" \
-  | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1)"
+  | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1)" || true
 if [ -z "$APK_SHA256" ]; then
   echo "error: could not read the APK's signer certificate (unsigned or malformed APK?): $APK" >&2
   exit 1
@@ -57,7 +57,7 @@ fi
 KEYSTORE_SHA256="$(keytool -list -keystore "$KEYSTORE" -alias "$ALIAS" \
   -storepass "$LUMI_RELEASE_KEYSTORE_PASSWORD" 2>/dev/null \
   | sed -n 's/^.*Certificate fingerprint (SHA-256): //p' | head -n1 \
-  | tr -d ' \t\r\n:' | tr 'A-F' 'a-f')"
+  | tr -d ' \t\r\n:' | tr 'A-F' 'a-f')" || true
 if [ -z "$KEYSTORE_SHA256" ]; then
   echo "error: could not read the keystore's certificate (alias '$ALIAS'?). Check the keystore and password." >&2
   exit 1
