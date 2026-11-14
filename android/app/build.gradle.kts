@@ -7,6 +7,21 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Stable release signing, keyed by the environment (never by a checked-in file):
+// the release keystore lives outside the repo and is mounted into the build by
+// scripts/build-apk.sh, which exports LUMI_RELEASE_KEYSTORE (the keystore path),
+// LUMI_RELEASE_KEYSTORE_PASSWORD, LUMI_RELEASE_KEY_ALIAS and LUMI_RELEASE_KEY_PASSWORD.
+// With no key in the environment a release build is refused up front - a release
+// APK is never signed ad hoc (that per-build debug identity is exactly what broke
+// in-app updates and raised Play Protect false alarms).
+val releaseSign = mapOf(
+    "LUMI_RELEASE_KEYSTORE" to providers.environmentVariable("LUMI_RELEASE_KEYSTORE").orNull.orEmpty(),
+    "LUMI_RELEASE_KEYSTORE_PASSWORD" to providers.environmentVariable("LUMI_RELEASE_KEYSTORE_PASSWORD").orNull.orEmpty(),
+    "LUMI_RELEASE_KEY_ALIAS" to providers.environmentVariable("LUMI_RELEASE_KEY_ALIAS").orNull.orEmpty(),
+    "LUMI_RELEASE_KEY_PASSWORD" to providers.environmentVariable("LUMI_RELEASE_KEY_PASSWORD").orNull.orEmpty(),
+)
+val hasReleaseSign = releaseSign.values.all { it.isNotEmpty() }
+
 android {
     namespace = "com.lumi.player"
     compileSdk = 35
@@ -15,8 +30,21 @@ android {
         applicationId = "com.lumi.player"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.3.1"
+    }
+
+    // The stable release signing config must exist before the release build type
+    // wires itself to it (the build type's block runs immediately).
+    if (hasReleaseSign) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseSign.getValue("LUMI_RELEASE_KEYSTORE"))
+                storePassword = releaseSign.getValue("LUMI_RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = releaseSign.getValue("LUMI_RELEASE_KEY_ALIAS")
+                keyPassword = releaseSign.getValue("LUMI_RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -26,6 +54,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Stable release signing: the release build signs ONLY with the one
+            // permanent release keystore, whose material reaches the build through
+            // the environment (the releaseSign block above, set by the Dockerfile /
+            // scripts/build-apk.sh which mount the keystore). Every published APK
+            // therefore carries the same developer identity, so an in-app update
+            // between releases passes the platform's signature check.
+            if (hasReleaseSign) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -55,6 +92,23 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+}
+
+// Refuse a release build when the stable key is not in the environment (above):
+// fail where the request is made, with the reason, instead of signing ad hoc.
+// The check runs at configuration time over the requested task names (the Docker
+// release build requests exactly assembleRelease); aggregate tasks (build,
+// assemble) are a dev-only host path - an unsigned release APK cannot be
+// installed anyway, and the Docker build's certificate verification is the
+// backstop there.
+if (!hasReleaseSign && gradle.startParameter.taskNames.any { it.substringAfterLast(':') == "assembleRelease" }) {
+    throw GradleException(
+        "assembleRelease is refused: no stable release signing key in the environment. " +
+            "Release builds sign with the one permanent release keystore (kept outside the " +
+            "repo - see README.md, 'Release signing'); scripts/build-apk.sh mounts it and " +
+            "exports LUMI_RELEASE_KEYSTORE / LUMI_RELEASE_KEYSTORE_PASSWORD / " +
+            "LUMI_RELEASE_KEY_ALIAS / LUMI_RELEASE_KEY_PASSWORD.",
+    )
 }
 
 // Robolectric NATIVE-graphics Compose tests accumulate render/native state across

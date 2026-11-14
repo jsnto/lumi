@@ -216,17 +216,57 @@ or `ANDROID_HOME`.
 
 The repo ships an `android/Dockerfile` with a pinned toolchain (JDK 17, Android
 platform 35, build-tools 35.0.0; Gradle 8.13 via the wrapper) and a wrapper
-script. All it needs on the host is a Docker daemon:
+script. All it needs on the host is a Docker daemon (plus the stable release
+keystore — see [Release signing](#release-signing)):
 
 ```sh
-./scripts/build-apk.sh   # -> android/dist/lumi-app-debug.apk
+./scripts/build-apk.sh   # -> android/dist/lumi-app-release.apk
 ```
 
-Overrides: `LUMI_DOCKER_IMAGE=<image>` (default `lumi-apk-builder:1`),
-`OUT_DIR=<dir>` (default `android/dist`). The first run downloads the Android SDK
-(~500 MB) into the image and the Gradle distribution via the wrapper;
-subsequent builds reuse the named `lumi-gradle-cache` volume for a fast
-incremental build. The host needs no Android SDK or JDK at all.
+The script builds the **release** APK and signs it with the stable release
+key; the build verifies the produced APK carries the keystore's certificate
+before reporting done. Overrides: `LUMI_DOCKER_IMAGE=<image>` (default
+`lumi-apk-builder:1`), `OUT_DIR=<dir>` (default `android/dist`),
+`LUMI_KEYSTORE_DIR=<dir>` (default `/home/jasonto/dev/firstmate/keystores/lumi`
+— the keystore's home on the release host; see below). The first run downloads
+the Android SDK (~500 MB) into the image and the Gradle distribution via the
+wrapper; subsequent builds reuse the named `lumi-gradle-cache` volume for a
+fast incremental build. The host needs no Android SDK or JDK at all.
+
+### Release signing
+
+Every release APK is signed with **one permanent release keystore per app** —
+the same key on every build, so each release is recognized as the same app,
+in-app updates pass the platform's signature check, and Play Protect no longer
+sees a new unknown developer with every release. (Before this, the Docker
+build produced debug-signed APKs whose throwaway debug keystore was
+regenerated inside each fresh build container — a different signing identity
+per build, which is what broke in-app updates and raised the false
+"harmful app" alarms.)
+
+The key material is kept **outside the repository** — never committed, never
+copied into the tree. On the release host it lives at
+`/home/jasonto/dev/firstmate/keystores/lumi/` (`lumi-release.p12`, a PKCS12
+keystore, + `lumi-release.p12.pw`, its password; the alias is `lumi-release`).
+Point `LUMI_KEYSTORE_DIR` at a different directory to build elsewhere.
+
+How the build consumes it: `scripts/build-apk.sh` mounts the directory
+read-only at `/keys` inside the build container and exports the signing
+environment (`LUMI_RELEASE_KEYSTORE`, `LUMI_RELEASE_KEYSTORE_PASSWORD`,
+`LUMI_RELEASE_KEY_ALIAS`, `LUMI_RELEASE_KEY_PASSWORD`). The Gradle release
+build type signs only when that environment is present — with no key,
+`assembleRelease` is refused rather than signed ad hoc. After the build,
+`scripts/verify-release-signing.sh` checks the APK's signer certificate
+against the keystore's certificate and fails the build on any mismatch.
+
+**One-time device cutover:** devices running an earlier, debug-signed lumi
+install **cannot update in place** across the signature change — Android
+refuses an in-place update that changes the signing key. Those devices need a
+one-time uninstall of the old install (which wipes the app's data on the
+device — registered tags, song lists, settings — while music files on the
+phone are untouched) followed by a clean install of the first
+stable-signed build (v0.3.1). From that point on, the in-app Update area
+updates between releases quietly, with no warning.
 
 ### Building the iOS app with Docker (no Xcode on the host)
 

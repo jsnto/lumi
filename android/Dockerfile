@@ -1,5 +1,6 @@
-# Builds the lumi debug APK with a pinned toolchain - no Android SDK or JDK
-# needed on the host, only a Docker daemon.
+# Builds the signed lumi release APK with a pinned toolchain - no Android SDK or
+# JDK needed on the host, only a Docker daemon (plus the stable release keystore,
+# mounted at /keys by scripts/build-apk.sh; see README.md, 'Release signing').
 #
 #   FROM eclipse-temurin:17-jammy        -> OpenJDK 17 (AGP 8.7.3 requirement)
 #   sdkmanager: platform-tools,
@@ -9,9 +10,14 @@
 
 FROM eclipse-temurin:17-jammy
 
-ENV ANDROID_HOME=/opt/android-sdk \
+# JDK: temurin installs the Java runtime at /opt/java/openjdk and sets
+# JAVA_HOME, but its PATH entry for the JDK bin dir is replaced by the ENV
+# below - list it explicitly so every tool in the container (gradle, keytool,
+# apksigner) finds java on PATH.
+ENV JAVA_HOME=/opt/java/openjdk \
+    ANDROID_HOME=/opt/android-sdk \
     GRADLE_USER_HOME=/home/gradle/.gradle \
-    PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/java/openjdk/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends wget unzip ca-certificates \
@@ -33,6 +39,8 @@ WORKDIR /src
 # .dockerignore; AGP resolves the SDK from ANDROID_HOME instead.
 COPY . /src
 
-# Entrypoint: run the Gradle build. The wrapper script (scripts/build-apk.sh)
-# starts the container, waits for the build, then copies the APK out.
-CMD ["bash", "-c", "cd android && ./gradlew assembleDebug --no-daemon --stacktrace"]
+# Entrypoint: run the Gradle release build, then verify the APK carries the
+# stable release keystore's certificate (the key material is mounted at /keys
+# and LUMI_RELEASE_KEYSTORE / LUMI_RELEASE_KEYSTORE_PASSWORD / LUMI_RELEASE_KEY_ALIAS
+# / LUMI_RELEASE_KEY_PASSWORD are set by scripts/build-apk.sh).
+CMD ["bash", "-c", "cd android && ./gradlew assembleRelease --no-daemon --stacktrace && /src/scripts/verify-release-signing.sh /src/android/app/build/outputs/apk/release/app-release.apk \"$LUMI_RELEASE_KEYSTORE\""]
