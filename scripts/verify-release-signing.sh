@@ -10,9 +10,9 @@
 #
 #   Requires: LUMI_RELEASE_KEYSTORE_PASSWORD (the keystore password) and,
 #             optionally, LUMI_RELEASE_KEY_ALIAS (default "lumi-release").
-#             apksigner + keytool: on PATH, or under ANDROID_BUILD_TOOLS_DIR
-#             (defaults to /opt/android-sdk/build-tools/35.0.0 inside the
-#             Docker image).
+#             keytool: on PATH (the JDK's). apksigner: on PATH, or under
+#             ANDROID_BUILD_TOOLS_DIR (defaults to
+#             /opt/android-sdk/build-tools/35.0.0 inside the Docker image).
 set -euo pipefail
 
 APK="${1:?usage: verify-release-signing.sh <apk> <keystore>}"
