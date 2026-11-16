@@ -7,7 +7,9 @@
 #   Overrides: LUMI_DOCKER_IMAGE=<image>   (default lumi-apk-builder:1)
 #              OUT_DIR=<dir>               (default android/dist)
 #              LUMI_KEYSTORE_DIR=<dir>     (default /home/jasonto/dev/firstmate/keystores/lumi -
-#                                           the stable release keystore; see README.md,
+#                                           this host's stable release keystore now lives at
+#                                           /home/jasonto/dev/firstmate-keystores/lumi, so builds
+#                                           here pass LUMI_KEYSTORE_DIR=<that dir>; see README.md,
 #                                           'Release signing')
 #
 # Every release APK is signed with the one permanent release keystore: the
